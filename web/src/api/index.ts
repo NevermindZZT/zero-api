@@ -1,0 +1,72 @@
+import axios from 'axios'
+
+const api = axios.create({
+  baseURL: '/api',
+  timeout: 30000,
+})
+
+// 请求拦截器：自动添加 token
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+// 响应拦截器：处理 401
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      window.location.href = '/login'
+    }
+    const msg = err.response?.data?.error || err.message
+    console.error('[API Error]', msg)
+    return Promise.reject(err)
+  }
+)
+
+export default api
+
+// ===== Channel API =====
+export const channelApi = {
+  list: () => api.get('/channels'),
+  get: (id: number) => api.get(`/channels/${id}`),
+  create: (data: any) => api.post('/channels', data),
+  update: (id: number, data: any) => api.put(`/channels/${id}`, data),
+  delete: (id: number) => api.delete(`/channels/${id}`),
+  test: (id: number) => api.post(`/channels/${id}/test`),
+  syncModels: (id: number) => api.post(`/channels/${id}/sync`),
+}
+
+// ===== Model API =====
+export const modelApi = {
+  list: (channelId?: number) =>
+    api.get('/models', { params: { channel_id: channelId || undefined } }),
+  get: (id: number) => api.get(`/models/${id}`),
+  update: (id: number, data: any) => api.put(`/models/${id}`, data),
+  delete: (id: number) => api.delete(`/models/${id}`),
+  toggle: (id: number) => api.post(`/models/${id}/toggle`),
+  batch: (action: string, ids: number[]) => api.post('/models/batch', { action, ids }),
+}
+
+// ===== Usage API =====
+export const usageApi = {
+  overview: (apiKeyId?: number) => api.get('/stats/overview', { params: { api_key_id: apiKeyId || undefined } }),
+  daily: (start?: string, end?: string, apiKeyId?: number) =>
+    api.get('/stats/daily', { params: { start, end, api_key_id: apiKeyId || undefined } }),
+  records: (apiKeyId?: number) => api.get('/usage/records', { params: { api_key_id: apiKeyId || undefined } }),
+}
+
+// ===== Proxy Config API =====
+export const proxyApi = {
+  getConfig: () => api.get('/proxy/config'),
+  updateConfig: (data: any) => api.put('/proxy/config', data),
+  downloadCert: (format?: string) => api.get('/proxy/cert/download', {
+    params: { format: format || 'pem' },
+    responseType: 'blob',
+  }),
+}

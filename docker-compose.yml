@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  zero-api:
+    build: .
+    container_name: zero-api
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # API 服务
+      - "8520:8520"   # 代理服务
+    volumes:
+      - ./data:/app/data
+      - ./certs:/app/certs
+      - ./configs:/app/configs:ro
+    environment:
+      - TZ=Asia/Shanghai
+      # 可用环境变量覆盖配置
+      # - ZERO_API_CONFIG=/app/configs/config.yaml
+      # - ZERO_API_LOG_LEVEL=debug

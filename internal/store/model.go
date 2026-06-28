@@ -1,0 +1,186 @@
+package store
+
+import "time"
+
+// Model 模型
+type Model struct {
+	ID              int64     `json:"id"`
+	ChannelID       int64     `json:"channel_id"`
+	ModelID         string    `json:"model_id"`
+	DisplayName     string    `json:"display_name"`
+	ContextWindow   int       `json:"context_window"`
+	MaxOutputTokens int       `json:"max_output_tokens"`
+	SupportsVision  bool      `json:"supports_vision"`
+	SupportsThinking bool     `json:"supports_thinking"`
+	SupportsTools   bool      `json:"supports_tools"`
+	PricingInput      float64   `json:"pricing_input"`        // $/1M tokens（输入）
+	PricingOutput     float64   `json:"pricing_output"`       // $/1M tokens（输出）
+	PricingCacheRead  float64   `json:"pricing_cache_read"`   // $/1M tokens（缓存读取）
+	PricingCacheWrite float64   `json:"pricing_cache_write"`  // $/1M tokens（缓存写入）
+	Status            string    `json:"status"` // active, inactive
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+
+	// 关联字段（查询时填充）
+	ChannelName string `json:"channel_name,omitempty"`
+	ChannelType string `json:"channel_type,omitempty"`
+}
+
+type ModelRepo struct {
+	db *DB
+}
+
+func NewModelRepo(db *DB) *ModelRepo {
+	return &ModelRepo{db: db}
+}
+
+func (r *ModelRepo) List(channelID int64) ([]Model, error) {
+	var rows interface{ Scan(...interface{}) error; Close() error; Next() bool; Err() error }
+	var err error
+
+	if channelID > 0 {
+		rows, err = r.db.Query(
+			`SELECT m.id, m.channel_id, m.model_id, m.display_name,
+			        m.context_window, m.max_output_tokens,
+			        m.supports_vision, m.supports_thinking, m.supports_tools,
+		        m.pricing_input, m.pricing_output, m.pricing_cache_read, m.pricing_cache_write,
+		        m.status, m.created_at, m.updated_at,
+		        COALESCE(c.name, ''), COALESCE(c.type, '')
+			 FROM models m LEFT JOIN channels c ON m.channel_id = c.id
+			 WHERE m.channel_id = ? ORDER BY m.id`, channelID)
+	} else {
+		rows, err = r.db.Query(
+			`SELECT m.id, m.channel_id, m.model_id, m.display_name,
+		        m.context_window, m.max_output_tokens,
+		        m.supports_vision, m.supports_thinking, m.supports_tools,
+		        m.pricing_input, m.pricing_output, m.pricing_cache_read, m.pricing_cache_write,
+		        m.status, m.created_at, m.updated_at,
+		        COALESCE(c.name, ''), COALESCE(c.type, '')
+			 FROM models m LEFT JOIN channels c ON m.channel_id = c.id
+			 ORDER BY m.id`)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var models []Model
+	for rows.Next() {
+		var m Model
+		if err := rows.Scan(&m.ID, &m.ChannelID, &m.ModelID, &m.DisplayName,
+			&m.ContextWindow, &m.MaxOutputTokens,
+			&m.SupportsVision, &m.SupportsThinking, &m.SupportsTools,
+			&m.PricingInput, &m.PricingOutput, &m.PricingCacheRead, &m.PricingCacheWrite,
+			&m.Status, &m.CreatedAt, &m.UpdatedAt,
+			&m.ChannelName, &m.ChannelType); err != nil {
+			return nil, err
+		}
+		models = append(models, m)
+	}
+	return models, nil
+}
+
+func (r *ModelRepo) GetByID(id int64) (*Model, error) {
+	m := &Model{}
+	err := r.db.QueryRow(
+		`SELECT m.id, m.channel_id, m.model_id, m.display_name,
+		        m.context_window, m.max_output_tokens,
+		        m.supports_vision, m.supports_thinking, m.supports_tools,
+		        m.pricing_input, m.pricing_output, m.pricing_cache_read, m.pricing_cache_write,
+		        m.status, m.created_at, m.updated_at,
+		        COALESCE(c.name, ''), COALESCE(c.type, '')
+		 FROM models m LEFT JOIN channels c ON m.channel_id = c.id
+		 WHERE m.id = ?`, id,
+	).Scan(&m.ID, &m.ChannelID, &m.ModelID, &m.DisplayName,
+		&m.ContextWindow, &m.MaxOutputTokens,
+		&m.SupportsVision, &m.SupportsThinking, &m.SupportsTools,
+		&m.PricingInput, &m.PricingOutput, &m.PricingCacheRead, &m.PricingCacheWrite,
+		&m.Status, &m.CreatedAt, &m.UpdatedAt,
+		&m.ChannelName, &m.ChannelType)
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (r *ModelRepo) Upsert(m *Model) (int64, error) {
+	// INSERT 时设置完整元信息，ON CONFLICT 仅更新 display_name（如原值等于 model_id 说明未手动修改过）
+	// 其他字段（context_window / pricing / supports_*）保护手动编辑不被同步覆盖
+	// 如需刷新元信息，请删除模型后重新同步
+	result, err := r.db.Exec(
+		`INSERT INTO models (channel_id, model_id, display_name, context_window, max_output_tokens,
+		                     supports_vision, supports_thinking, supports_tools,
+		                     pricing_input, pricing_output, pricing_cache_read, pricing_cache_write, status)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(channel_id, model_id) DO UPDATE SET
+		   display_name = CASE WHEN display_name = model_id THEN ? ELSE display_name END,
+		   updated_at = CURRENT_TIMESTAMP`,
+		m.ChannelID, m.ModelID, m.DisplayName, m.ContextWindow, m.MaxOutputTokens,
+		m.SupportsVision, m.SupportsThinking, m.SupportsTools,
+		m.PricingInput, m.PricingOutput, m.PricingCacheRead, m.PricingCacheWrite, m.Status,
+		m.DisplayName,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+func (r *ModelRepo) Update(m *Model) error {
+	_, err := r.db.Exec(
+		`UPDATE models SET display_name=?, context_window=?, max_output_tokens=?,
+		 supports_vision=?, supports_thinking=?, supports_tools=?,
+		 pricing_input=?, pricing_output=?, pricing_cache_read=?, pricing_cache_write=?,
+		 status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		m.DisplayName, m.ContextWindow, m.MaxOutputTokens,
+		m.SupportsVision, m.SupportsThinking, m.SupportsTools,
+		m.PricingInput, m.PricingOutput, m.PricingCacheRead, m.PricingCacheWrite,
+		m.Status, m.ID,
+	)
+	return err
+}
+
+func (r *ModelRepo) Delete(id int64) error {
+	_, err := r.db.Exec(`DELETE FROM models WHERE id = ?`, id)
+	return err
+}
+
+// BatchSetStatus 批量设置模型状态
+func (r *ModelRepo) BatchSetStatus(ids []int64, status string) error {
+	for _, id := range ids {
+		if _, err := r.db.Exec(`UPDATE models SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, status, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// BatchDelete 批量删除模型
+func (r *ModelRepo) BatchDelete(ids []int64) error {
+	for _, id := range ids {
+		if _, err := r.db.Exec(`DELETE FROM models WHERE id = ?`, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// FindByChannelAndModelID 根据渠道ID和模型ID查找
+func (r *ModelRepo) FindByChannelAndModelID(channelID int64, modelID string) (*Model, error) {
+	m := &Model{}
+	err := r.db.QueryRow(
+		`SELECT id, channel_id, model_id, display_name, context_window, max_output_tokens,
+		        supports_vision, supports_thinking, supports_tools,
+		        pricing_input, pricing_output, pricing_cache_read, pricing_cache_write,
+		        status, created_at, updated_at
+		 FROM models WHERE channel_id = ? AND model_id = ?`, channelID, modelID,
+	).Scan(&m.ID, &m.ChannelID, &m.ModelID, &m.DisplayName,
+		&m.ContextWindow, &m.MaxOutputTokens,
+		&m.SupportsVision, &m.SupportsThinking, &m.SupportsTools,
+		&m.PricingInput, &m.PricingOutput, &m.PricingCacheRead, &m.PricingCacheWrite,
+		&m.Status, &m.CreatedAt, &m.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
+}

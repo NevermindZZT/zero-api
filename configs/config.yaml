@@ -1,0 +1,28 @@
+# zero-api 配置文件
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+proxy:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8520
+  # 直接拦截的域名列表（MITM 解密）
+  intercept_domains:
+    - "api.openai.com"
+    - "api.anthropic.com"
+    - "openrouter.ai"
+    - "generativelanguage.googleapis.com"
+  # 智能拦截域名（仅拦截 LLM 推理请求）
+  smart_intercept_domains: []
+
+database:
+  path: "data/zero-api.db"
+
+auth:
+  enabled: true
+  username: "admin"
+  password: "admin123"
+  secret: "change-me-to-a-random-string"
+
+log_level: "info"
