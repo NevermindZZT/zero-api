@@ -13,6 +13,7 @@ import {
   RefreshSharp,
 } from '@vicons/ionicons5'
 import { usageApi } from '@/api'
+import { formatDateTime } from '@/utils/format'
 import * as echarts from 'echarts'
 
 const loading = ref(true)
@@ -34,7 +35,7 @@ const recordColumns = [
   { title: '缓存命中', key: 'cache_hit_tokens' },
   { title: '总 Tokens', key: 'total_tokens' },
   { title: '费用 ($)', key: 'cost', render: (r: any) => r.cost?.toFixed(6) },
-  { title: '时间', key: 'created_at' },
+  { title: '时间', key: 'created_at', render: (r: any) => formatDateTime(r.created_at) },
 ]
 
 const statCards = [

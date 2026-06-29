@@ -116,7 +116,9 @@ func (d *DB) migrate() error {
 	// 迁移：添加 cache_hit_tokens 列（如果不存在）
 	d.Exec(`ALTER TABLE usage_records ADD COLUMN cache_hit_tokens INTEGER DEFAULT 0`)
 	// 迁移：添加 api_key_id 列（如果不存在）
-	d.Exec(`ALTER TABLE usage_records ADD COLUMN api_key_id INTEGER DEFAULT 0`)
+	d.Exec(`ALTER TABLE usage_records ADD COLUMN api_key_id INTEGER DEFAULT NULL`)
+	// 迁移：清理旧记录的 api_key_id=0（迁移默认值遗留下的无效数据，0 不对应任何有效密钥）
+	d.Exec(`UPDATE usage_records SET api_key_id = NULL WHERE api_key_id = 0`)
 	// 迁移：添加缓存读取/写入价格列（如果不存在）
 	d.Exec(`ALTER TABLE models ADD COLUMN pricing_cache_read REAL DEFAULT 0`)
 	d.Exec(`ALTER TABLE models ADD COLUMN pricing_cache_write REAL DEFAULT 0`)

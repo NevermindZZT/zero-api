@@ -6,6 +6,7 @@ import {
 import { TrendingUpSharp, RefreshSharp, KeySharp } from '@vicons/ionicons5'
 import { usageApi } from '@/api'
 import api from '@/api'
+import { formatDateTime } from '@/utils/format'
 
 const loading = ref(true)
 const refreshing = ref(false)
@@ -34,13 +35,14 @@ const dailyColumns = [
 
 const recordColumns = [
   { title: '模型', key: 'request_model' },
+  { title: 'API Key', key: 'api_key_name', render: (r: any) => r.api_key_name || '-' },
   { title: '输入', key: 'prompt_tokens' },
   { title: '输出', key: 'completion_tokens' },
   { title: '缓存命中', key: 'cache_hit_tokens', render: (r: any) => r.cache_hit_tokens?.toLocaleString() || '-' },
   { title: '总 Tokens', key: 'total_tokens' },
   { title: '延迟 (ms)', key: 'latency_ms' },
   { title: '费用 ($)', key: 'cost', render: (r: any) => r.cost?.toFixed(6) },
-  { title: '时间', key: 'created_at' },
+  { title: '时间', key: 'created_at', render: (r: any) => formatDateTime(r.created_at) },
 ]
 
 onMounted(async () => {

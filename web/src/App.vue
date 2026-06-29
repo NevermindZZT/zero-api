@@ -89,6 +89,9 @@ body {
   overflow-y: auto;
   overflow-x: hidden;
   background: var(--bg-primary);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 /* Custom scrollbar */
@@ -109,6 +112,10 @@ body {
   max-width: 1400px;
   margin: 0 auto;
   padding: 24px 32px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 /* Page transition */

@@ -48,7 +48,7 @@ const menuOptions = [
   },
 ]
 
-const appVersion = 'v1.0.0'
+const appVersion = 'v1.0.1'
 const projectUrl = 'https://github.com/NevermindZZT/zero-api'
 
 const activeKey = ref(route.path)
@@ -156,5 +156,24 @@ function handleUpdate(key: string) {
   background: linear-gradient(135deg, #667eea, #764ba2);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+}
+
+/* 侧边栏收起时图标居中 - Naive UI NMenu 使用 grid 布局
+   (grid-template-columns: auto 1fr auto = icon + content + arrow)，
+   收起时 content 和 arrow 仅为 opacity:0 但仍占网格空间，
+   同时非顶层菜单项有 inline padding-left 缩进导致图标偏移。 */
+:deep(.n-menu--collapsed .n-menu-item-content) {
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  grid-template-columns: 1fr !important;
+  grid-template-areas: "icon" !important;
+}
+:deep(.n-menu--collapsed .n-menu-item-content .n-menu-item-content-header),
+:deep(.n-menu--collapsed .n-menu-item-content .n-menu-item-content__arrow) {
+  display: none;
+}
+:deep(.n-menu--collapsed .n-menu-item-content .n-menu-item-content__icon) {
+  margin-right: 0 !important;
+  justify-self: center;
 }
 </style>

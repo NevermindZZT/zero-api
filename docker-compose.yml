@@ -1,8 +1,6 @@
-version: "3.8"
-
 services:
   zero-api:
-    build: .
+    image: nevermindzzt/zero-api:latest
     container_name: zero-api
     restart: unless-stopped
     ports:
@@ -14,6 +12,3 @@ services:
       - ./configs:/app/configs:ro
     environment:
       - TZ=Asia/Shanghai
-      # 可用环境变量覆盖配置
-      # - ZERO_API_CONFIG=/app/configs/config.yaml
-      # - ZERO_API_LOG_LEVEL=debug

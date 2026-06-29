@@ -7,6 +7,8 @@ import {
 } from 'naive-ui'
 import { KeySharp } from '@vicons/ionicons5'
 import api from '@/api'
+import { copyToClipboard } from '@/utils/clipboard'
+import { formatDateTime } from '@/utils/format'
 
 const message = useMessage()
 const loading = ref(true)
@@ -36,7 +38,7 @@ const columns = [
         r.enabled ? '启用' : '禁用'
       ),
   },
-  { title: '创建时间', key: 'created_at' },
+  { title: '创建时间', key: 'created_at', render: (r: any) => formatDateTime(r.created_at) },
   {
     title: '操作',
     key: 'actions',
@@ -111,8 +113,12 @@ async function deleteKey(id: number) {
 }
 
 function copyKey(key: string) {
-  navigator.clipboard.writeText(key).then(() => {
-    message.success('已复制到剪贴板')
+  copyToClipboard(key).then((ok) => {
+    if (ok) {
+      message.success('已复制到剪贴板')
+    } else {
+      message.error('复制失败，请手动复制')
+    }
   })
 }
 </script>

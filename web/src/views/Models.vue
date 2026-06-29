@@ -173,8 +173,8 @@ async function batchAction(action: string) {
 </script>
 
 <template>
-  <NSpin :show="loading">
-    <NSpace vertical size="large">
+  <NSpin :show="loading" style="display:flex;flex-direction:column;flex:1;min-height:0">
+    <div style="display:flex;flex-direction:column;flex:1;min-height:0;gap:16px;padding-bottom:16px">
       <div class="page-header">
         <div>
           <h2 style="margin:0">
@@ -205,12 +205,11 @@ async function batchAction(action: string) {
         </NSpace>
       </div>
 
-      <NCard>
+      <NCard style="flex:1;min-height:0">
         <NDataTable
           :columns="columns"
           :data="models"
           :bordered="false"
-          :max-height="600"
           :row-key="(row: any) => row.id"
           v-model:checked-row-keys="checkedRowKeys"
           :scroll-x="1200"
@@ -263,7 +262,7 @@ async function batchAction(action: string) {
           </NSpace>
         </template>
       </NModal>
-    </NSpace>
+    </div>
   </NSpin>
 </template>
 

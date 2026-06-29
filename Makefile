@@ -17,13 +17,17 @@ dev:
 
 # Docker
 docker-build:
-	docker compose build
+	docker compose -f docker-compose.yml -f docker-compose.build.yml build
 
 docker-run:
 	docker compose up -d
 
 docker-stop:
 	docker compose down
+
+docker-update:
+	docker compose pull
+	docker compose up -d
 
 # 测试
 test:

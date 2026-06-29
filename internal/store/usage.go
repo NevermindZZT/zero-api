@@ -8,6 +8,7 @@ type UsageRecord struct {
 	ChannelID        *int64    `json:"channel_id,omitempty"`
 	ModelID          *int64    `json:"model_id,omitempty"`
 	APIKeyID         *int64    `json:"api_key_id,omitempty"`
+	APIKeyName       string    `json:"api_key_name,omitempty"`
 	RequestModel     string    `json:"request_model"`
 	PromptTokens     int       `json:"prompt_tokens"`
 	CompletionTokens int       `json:"completion_tokens"`
@@ -66,30 +67,35 @@ func (r *UsageRepo) Insert(u *UsageRecord) (int64, error) {
 // GetOverview 获取总览统计
 func (r *UsageRepo) GetOverview(apiKeyID ...string) (*OverviewStats, error) {
 	stats := &OverviewStats{}
+	args := []interface{}{}
 	where := ""
 	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
-		where = " WHERE api_key_id = " + apiKeyID[0]
+		where = " WHERE api_key_id = ?"
+		args = append(args, apiKeyID[0])
 	}
 
-	err := r.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost), 0), COALESCE(SUM(cache_hit_tokens), 0) FROM usage_records`+where).Scan(
+	err := r.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost), 0), COALESCE(SUM(cache_hit_tokens), 0) FROM usage_records`+where, args...).Scan(
 		&stats.TotalRequests, &stats.TotalTokens, &stats.TotalCost, &stats.TotalCacheHits,
 	)
-	if stats.TotalTokens > 0 {
-		stats.CacheHitRate = float64(stats.TotalCacheHits) / float64(stats.TotalTokens) * 100
-	}
 	if err != nil {
 		return nil, err
+	}
+	if stats.TotalTokens > 0 {
+		stats.CacheHitRate = float64(stats.TotalCacheHits) / float64(stats.TotalTokens) * 100
 	}
 
 	r.db.QueryRow(`SELECT COUNT(*) FROM channels WHERE status = 'active'`).Scan(&stats.ActiveChannels)
 	r.db.QueryRow(`SELECT COUNT(*) FROM models WHERE status = 'active'`).Scan(&stats.ActiveModels)
 
-	wd := ""
-	if where != "" {
-		wd = " AND api_key_id = " + apiKeyID[0]
+	todayArgs := []interface{}{}
+	todayWhere := ""
+	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
+		todayWhere = " AND api_key_id = ?"
+		todayArgs = append(todayArgs, apiKeyID[0])
 	}
 	r.db.QueryRow(
-		`SELECT COALESCE(COUNT(*), 0), COALESCE(SUM(total_tokens), 0) FROM usage_records WHERE date(created_at) = date('now')`+wd,
+		`SELECT COALESCE(COUNT(*), 0), COALESCE(SUM(total_tokens), 0) FROM usage_records WHERE date(created_at) = date('now')`+todayWhere,
+		todayArgs...,
 	).Scan(&stats.TodayRequests, &stats.TodayTokens)
 
 	return stats, nil
@@ -131,27 +137,39 @@ func (r *UsageRepo) GetDailyStats(start, end string, apiKeyID ...string) ([]Dail
 
 // GetRecentRecords 获取最近使用记录
 func (r *UsageRepo) GetRecentRecords(limit int, apiKeyID ...string) ([]UsageRecord, error) {
+	args := []interface{}{}
 	where := ""
 	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
-		where = " WHERE api_key_id = " + apiKeyID[0]
+		where = " WHERE api_key_id = ?"
+		args = append(args, apiKeyID[0])
 	}
+	args = append(args, limit)
 	rows, err := r.db.Query(
-		`SELECT id, channel_id, model_id, api_key_id, request_model, prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens, latency_ms, cost, created_at
-		 FROM usage_records`+where+` ORDER BY created_at DESC LIMIT ?`, limit,
+		`SELECT u.id, u.channel_id, u.model_id, u.api_key_id, u.request_model,
+		        u.prompt_tokens, u.completion_tokens, u.cache_hit_tokens, u.total_tokens,
+		        u.latency_ms, u.cost, u.created_at,
+		        COALESCE(ak.name, '') AS api_key_name
+		 FROM usage_records u
+		 LEFT JOIN api_keys ak ON u.api_key_id = ak.id`+where+` ORDER BY u.created_at DESC LIMIT ?`, args...,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
+	// 检查是否有迭代错误
 	var records []UsageRecord
 	for rows.Next() {
 		var u UsageRecord
 		if err := rows.Scan(&u.ID, &u.ChannelID, &u.ModelID, &u.APIKeyID, &u.RequestModel,
-			&u.PromptTokens, &u.CompletionTokens, &u.CacheHitTokens, &u.TotalTokens, &u.LatencyMs, &u.Cost, &u.CreatedAt); err != nil {
+			&u.PromptTokens, &u.CompletionTokens, &u.CacheHitTokens, &u.TotalTokens,
+			&u.LatencyMs, &u.Cost, &u.CreatedAt, &u.APIKeyName); err != nil {
 			return nil, err
 		}
 		records = append(records, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return records, nil
 }
