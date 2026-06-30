@@ -61,6 +61,7 @@ func main() {
 	syncH := handler.NewSyncHandler(syncer)
 	authH := handler.NewAuthHandler(cfg.Auth.Username, cfg.Auth.Password, cfg.Auth.Secret)
 	apiKeyH := handler.NewAPIKeyHandler(svc.APIKey)
+	dbH := handler.NewDatabaseHandler(db, cfg.Database.Path)
 
 	// --- API 路由 ---
 	gin.SetMode(gin.ReleaseMode)
@@ -104,6 +105,10 @@ func main() {
 		api.POST("/api-keys", apiKeyH.Create)
 		api.POST("/api-keys/:id/toggle", apiKeyH.Toggle)
 		api.DELETE("/api-keys/:id", apiKeyH.Delete)
+
+		// 数据库管理
+		api.GET("/database/backup", dbH.Backup)
+		api.POST("/database/restore", dbH.Restore)
 	}
 
 	// OpenAI 兼容 API

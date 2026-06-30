@@ -12,6 +12,7 @@ import {
   TrendingUpSharp,
   FlashSharp,
   RocketSharp,
+  ServerSharp,
 } from '@vicons/ionicons5'
 
 const route = useRoute()
@@ -48,11 +49,12 @@ const menuOptions = [
     children: [
       { label: '代理设置', key: '/proxy', icon: renderIcon(ShieldCheckmarkSharp) },
       { label: '出站代理', key: '/forward-proxy', icon: renderIcon(RocketSharp) },
+      { label: '数据库管理', key: '/database', icon: renderIcon(ServerSharp) },
     ],
   },
 ]
 
-const appVersion = 'v1.0.4'
+const appVersion = 'v1.0.5'
 const projectUrl = 'https://github.com/NevermindZZT/zero-api'
 
 const activeKey = ref(route.path)

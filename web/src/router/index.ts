@@ -40,6 +40,12 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/database',
+      name: 'database',
+      component: () => import('@/views/Database.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/usage',
       name: 'usage',
       component: () => import('@/views/Usage.vue'),
