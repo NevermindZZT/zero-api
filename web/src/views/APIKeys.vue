@@ -150,14 +150,14 @@ function copyKey(key: string) {
         </div>
       </NCard>
 
-      <NCard>
+      <NCard style="width:100%">
         <template #header>
           <div style="display:flex;justify-content:space-between;align-items:center">
             <span>密钥列表</span>
             <NButton type="primary" size="small" @click="openCreate">新建密钥</NButton>
           </div>
         </template>
-        <NDataTable :columns="columns" :data="keys" :bordered="false" />
+        <NDataTable :columns="columns" :data="keys" :bordered="false" :scroll-x="700" />
       </NCard>
 
       <!-- Create Modal -->

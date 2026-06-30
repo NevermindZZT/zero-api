@@ -201,45 +201,90 @@ func (pa *ProxyAdapter) HandleLLMRequest(method, path string, headers map[string
 		return 401, nil, nil, fmt.Errorf("API Key 验证失败: %w", err)
 	}
 
-	// 查找本地模型（用目标模型名）
+	// 查找所有启用的匹配模型（列表已按 c.priority 排序）
 	allModels, err := pa.modelRepo.List(0)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("查询模型失败: %w", err)
 	}
 
-	var matchedModel *store.Model
-	for _, m := range allModels {
+	var candidates []*store.Model
+	for i, m := range allModels {
 		if m.ModelID == targetModel && m.Status == "active" {
-			matchedModel = &m
-			break
+			candidates = append(candidates, &allModels[i])
 		}
 	}
-	if matchedModel == nil {
-		// 尝试用原始模型名查找
-		for _, m := range allModels {
+	// 如果目标模型名没找到，尝试用原始模型名
+	if len(candidates) == 0 && targetModel != originalModel {
+		for i, m := range allModels {
 			if m.ModelID == originalModel && m.Status == "active" {
-				matchedModel = &m
-				break
+				candidates = append(candidates, &allModels[i])
 			}
 		}
 	}
-	if matchedModel == nil {
-		// 尝试 fallback 到任一活跃模型
-		for _, m := range allModels {
+	// 实在找不到，fallback 到任一活跃模型
+	if len(candidates) == 0 {
+		for i, m := range allModels {
 			if m.Status == "active" {
-				matchedModel = &m
+				candidates = append(candidates, &allModels[i])
 				break
 			}
 		}
 	}
-	if matchedModel == nil {
+	if len(candidates) == 0 {
 		return 404, nil, nil, fmt.Errorf("模型 %s 未找到或未启用", originalModel)
 	}
 
-	// 获取渠道
-	ch, err := pa.channelRepo.GetByID(matchedModel.ChannelID)
+	// 按优先级依次尝试，失败时自动切换到下一渠道
+	var lastErr error
+	for _, matchedModel := range candidates {
+		ch, err := pa.channelRepo.GetByID(matchedModel.ChannelID)
+		if err != nil {
+			lastErr = fmt.Errorf("渠道 %d 获取失败: %w", matchedModel.ChannelID, err)
+			continue
+		}
+		if ch.Status != "active" {
+			continue
+		}
+
+		statusCode, respHeaders, respBody, err := pa.tryForwardModel(headers, body, originalModel, matchedModel, ch, apiKeyID)
+		if err == nil {
+			return statusCode, respHeaders, respBody, nil
+		}
+		lastErr = err
+		log.Printf("[代理] 模型 %s 渠道 %s 失败，尝试下一渠道: %v", originalModel, ch.Name, err)
+	}
+
+	return 502, nil, nil, fmt.Errorf("所有渠道均失败: %v", lastErr)
+}
+
+// resolveAndValidateAPIKey 从请求头中提取并验证 API Key
+// 返回 apiKeyID，如果验证失败则返回 error
+func (pa *ProxyAdapter) resolveAndValidateAPIKey(headers map[string]string) (*int64, error) {
+	auth, ok := headers["authorization"]
+	if !ok || auth == "" {
+		return nil, fmt.Errorf("缺少 Authorization 头，请提供有效的 API Key")
+	}
+
+	parts := strings.SplitN(auth, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return nil, fmt.Errorf("Authorization 格式错误，需 Bearer <api-key>")
+	}
+
+	k, err := pa.apiKeyRepo.GetByKey(parts[1])
 	if err != nil {
-		return 0, nil, nil, fmt.Errorf("获取渠道信息失败: %w", err)
+		return nil, fmt.Errorf("无效的 API Key：密钥不存在或已被禁用")
+	}
+
+	return &k.ID, nil
+}
+
+// tryForwardModel 尝试将请求转发到指定渠道，成功返回响应，失败返回 error
+func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, originalModel string, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64) (int, map[string]string, []byte, error) {
+	// 检查模型映射
+	mapping, hasMapping := pa.modelMappings[originalModel]
+	targetModel := originalModel
+	if hasMapping && mapping.TargetModel != "" {
+		targetModel = mapping.TargetModel
 	}
 
 	// 选择适配器
@@ -251,10 +296,9 @@ func (pa *ProxyAdapter) HandleLLMRequest(method, path string, headers map[string
 		return 0, nil, nil, fmt.Errorf("请求格式转换失败: %w", err)
 	}
 
-	// ★ 参数注入：修改请求体中的 model 字段 + 注入 thinking/reasoning_effort
+	// 参数注入
 	modifiedBody, err := pa.injectParams(convertedBody, targetModel, mapping)
 	if err != nil {
-		log.Printf("[代理] 参数注入失败: %v，使用原始请求体", err)
 		modifiedBody = convertedBody
 	}
 
@@ -310,12 +354,11 @@ func (pa *ProxyAdapter) HandleLLMRequest(method, path string, headers map[string
 		convertedResp = respBytes
 	}
 
-	// ★ 重写响应中的模型名（targetModel → originalModel）
+	// 重写响应中的模型名
 	if hasMapping && originalModel != targetModel {
 		rewritten := pa.rewriteResponseModel(convertedResp, targetModel, originalModel)
 		if rewritten != nil {
 			convertedResp = rewritten
-			log.Printf("[代理] 响应模型名已重写: %s → %s", targetModel, originalModel)
 		}
 	}
 
@@ -323,7 +366,7 @@ func (pa *ProxyAdapter) HandleLLMRequest(method, path string, headers map[string
 	go pa.recordUsage(body, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
 
 	// 构建响应头
-	respHeaders = make(map[string]string)
+	respHeaders := make(map[string]string)
 	for k := range resp.Header {
 		v := resp.Header.Get(k)
 		if strings.ToLower(k) == "transfer-encoding" {
@@ -332,7 +375,7 @@ func (pa *ProxyAdapter) HandleLLMRequest(method, path string, headers map[string
 		respHeaders[k] = v
 	}
 
-	// ★ 添加上下文窗口头（帮助客户端确定正确的上下文大小）
+	// 添加上下文窗口头
 	if hasMapping && mapping.ContextWindow > 0 {
 		cw := fmt.Sprintf("%d", mapping.ContextWindow)
 		respHeaders["x-llm-context-window"] = cw
@@ -341,27 +384,6 @@ func (pa *ProxyAdapter) HandleLLMRequest(method, path string, headers map[string
 	}
 
 	return resp.StatusCode, respHeaders, convertedResp, nil
-}
-
-// resolveAndValidateAPIKey 从请求头中提取并验证 API Key
-// 返回 apiKeyID，如果验证失败则返回 error
-func (pa *ProxyAdapter) resolveAndValidateAPIKey(headers map[string]string) (*int64, error) {
-	auth, ok := headers["authorization"]
-	if !ok || auth == "" {
-		return nil, fmt.Errorf("缺少 Authorization 头，请提供有效的 API Key")
-	}
-
-	parts := strings.SplitN(auth, " ", 2)
-	if len(parts) != 2 || parts[0] != "Bearer" {
-		return nil, fmt.Errorf("Authorization 格式错误，需 Bearer <api-key>")
-	}
-
-	k, err := pa.apiKeyRepo.GetByKey(parts[1])
-	if err != nil {
-		return nil, fmt.Errorf("无效的 API Key：密钥不存在或已被禁用")
-	}
-
-	return &k.ID, nil
 }
 
 // injectParams 注入模型映射参数（model 替换 + thinking/reasoning_effort）

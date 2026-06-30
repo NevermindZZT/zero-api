@@ -130,6 +130,8 @@ func (d *DB) migrate() error {
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN proxy_password TEXT DEFAULT ''`)
 	// 迁移：添加 user_modified 字段到 models 表
 	d.Exec(`ALTER TABLE models ADD COLUMN user_modified INTEGER DEFAULT 0`)
+	// 迁移：添加 priority 字段到 channels 表（0=最高优先级，越大优先级越低）
+	d.Exec(`ALTER TABLE channels ADD COLUMN priority INTEGER DEFAULT 99`)
 
 	for _, q := range queries {
 		if _, err := d.Exec(q); err != nil {

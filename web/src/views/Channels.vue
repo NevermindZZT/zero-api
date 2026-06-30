@@ -2,7 +2,7 @@
 import { h, onMounted, ref } from 'vue'
 import {
   NButton, NCard, NDataTable, NModal, NForm, NFormItem,
-  NInput, NSelect, NSpace, NTag, NPopconfirm, NMessageProvider,
+  NInput, NInputNumber, NSelect, NSpace, NTag, NPopconfirm, NMessageProvider,
   useMessage, NSpin, NIcon,
 } from 'naive-ui'
 import { GlobeSharp } from '@vicons/ionicons5'
@@ -14,7 +14,7 @@ const channels = ref<any[]>([])
 const showModal = ref(false)
 const editing = ref<any>(null)
 const syncingId = ref<number | null>(null)
-const form = ref({ name: '', type: 'openai', base_url: '', api_key: '', status: 'active' })
+const form = ref({ name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99 })
 
 const channelTypes = [
   { label: 'OpenAI 兼容', value: 'openai' },
@@ -35,6 +35,7 @@ const columns = [
     },
   },
   { title: 'Base URL', key: 'base_url', ellipsis: true },
+  { title: '优先级', key: 'priority', width: 90, sorter: 'default' as const, defaultSortOrder: 'ascend' as const },
   {
     title: '状态',
     key: 'status',
@@ -84,7 +85,7 @@ async function loadChannels() {
 
 function openCreate() {
   editing.value = null
-  form.value = { name: '', type: 'openai', base_url: '', api_key: '', status: 'active' }
+  form.value = { name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99 }
   showModal.value = true
 }
 
@@ -167,6 +168,9 @@ async function syncModels(id: number) {
               show-password-on="click"
               placeholder="可选，留空则使用请求中的 Authorization"
             />
+          </NFormItem>
+          <NFormItem label="优先级" label-description="数值越小优先级越高，0 最高">
+            <NInputNumber v-model:value="form.priority" :min="0" :max="999" style="width:100%" />
           </NFormItem>
         </NForm>
         <template #footer>

@@ -90,107 +90,41 @@ func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 		return
 	}
 
-	var matchedModel *store.Model
-	for _, m := range allModels {
+	// 按渠道优先级查找所有启用的匹配模型（已按 c.priority 排序）
+	var candidates []*store.Model
+	for i, m := range allModels {
 		if m.ModelID == reqBody.Model && m.Status == "active" {
-			matchedModel = &m
-			break
+			candidates = append(candidates, &allModels[i])
 		}
 	}
-	if matchedModel == nil {
+	if len(candidates) == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("模型 %s 未找到或未启用", reqBody.Model)})
 		return
 	}
 
-	// 获取渠道
-	ch, err := h.channelRepo.GetByID(matchedModel.ChannelID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取渠道信息失败"})
-		return
-	}
+	// 按优先级依次尝试，失败时自动切换到下一渠道
+	var lastErr error
+	for _, matchedModel := range candidates {
+		// 获取渠道
+		ch, err := h.channelRepo.GetByID(matchedModel.ChannelID)
+		if err != nil {
+			lastErr = fmt.Errorf("渠道 %d 获取失败: %w", matchedModel.ChannelID, err)
+			log.Printf("[中转] %s", lastErr)
+			continue
+		}
+		if ch.Status != "active" {
+			continue
+		}
 
-	// 根据渠道类型选择适配器
-	adapt := adapter.NewAdapter(ch.Type)
-
-	// 转换请求体（如果需要）
-	convertedBody, err := adapt.ConvertRequest(matchedModel.ModelID, bodyBytes)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "请求格式转换失败"})
-		return
-	}
-
-	// 构造上游请求
-	upstreamURL := adapt.GetChatURL(ch.BaseURL)
-	// Gemini 需要额外在 URL 中指定模型名和 API Key
-	if ch.Type == "gemini" {
-		upstreamURL = fmt.Sprintf("%s/%s:generateContent", upstreamURL, matchedModel.ModelID)
-		if ch.APIKey != "" {
-			upstreamURL = fmt.Sprintf("%s?key=%s", upstreamURL, ch.APIKey)
+		if err := h.tryForward(c, bodyBytes, matchedModel, ch, apiKeyID); err == nil {
+			return // 成功
+		} else {
+			lastErr = err
+			log.Printf("[中转] 模型 %s 渠道 %s 失败，尝试下一渠道: %v", reqBody.Model, ch.Name, err)
 		}
 	}
 
-	req, err := http.NewRequestWithContext(c.Request.Context(), "POST", upstreamURL, bytes.NewReader(convertedBody))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "构造上游请求失败"})
-		return
-	}
-
-	// 设置请求头
-	req.Header.Set("Content-Type", "application/json")
-	if ch.Type == "anthropic" {
-		if ch.APIKey != "" {
-			req.Header.Set("x-api-key", ch.APIKey)
-			req.Header.Set("anthropic-version", "2023-06-01")
-		} else if auth := c.GetHeader("x-api-key"); auth != "" {
-			req.Header.Set("x-api-key", auth)
-			req.Header.Set("anthropic-version", "2023-06-01")
-		}
-	} else if ch.Type == "gemini" {
-		// Gemini API Key 放在 URL 参数中
-	} else {
-		if ch.APIKey != "" {
-			req.Header.Set("Authorization", "Bearer "+ch.APIKey)
-		} else if auth := c.GetHeader("Authorization"); auth != "" {
-			req.Header.Set("Authorization", auth)
-		}
-	}
-
-	// 转发请求
-	startTime := time.Now()
-	client := upstream.NewHTTPClient()
-	client.Timeout = 5 * time.Minute
-	resp, err := client.Do(req)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("上游请求失败: %v", err)})
-		return
-	}
-	defer resp.Body.Close()
-
-	latencyMs := int(time.Since(startTime).Milliseconds())
-
-	// 读取响应体
-	respBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "读取上游响应失败"})
-		return
-	}
-
-	// 转换响应体（如果需要）
-	convertedResp, err := adapt.ConvertResponse(respBytes)
-	if err != nil {
-		convertedResp = respBytes
-	}
-
-	// 异步记录使用信息
-	go h.recordUsage(bodyBytes, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
-
-	// 返回响应
-	for k, vals := range resp.Header {
-		for _, v := range vals {
-			c.Header(k, v)
-		}
-	}
-	c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), convertedResp)
+	c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("所有渠道均失败: %v", lastErr)})
 }
 
 // resolveAndValidateAPIKey 从请求中提取并验证 API Key
@@ -258,6 +192,83 @@ func (h *ProxyHandler) recordUsage(reqBody, rawResp, convertedResp []byte, adapt
 	}); err != nil {
 		log.Printf("[Usage] 插入记录失败: %v", err)
 	}
+}
+
+// tryForward 尝试将请求转发到指定渠道，成功返回 nil，失败返回 error
+func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64) error {
+	// 根据渠道类型选择适配器
+	adapt := adapter.NewAdapter(ch.Type)
+
+	// 转换请求体（如果需要）
+	convertedBody, err := adapt.ConvertRequest(matchedModel.ModelID, bodyBytes)
+	if err != nil {
+		return fmt.Errorf("请求格式转换失败: %w", err)
+	}
+
+	// 构造上游请求
+	upstreamURL := adapt.GetChatURL(ch.BaseURL)
+	if ch.Type == "gemini" {
+		upstreamURL = fmt.Sprintf("%s/%s:generateContent", upstreamURL, matchedModel.ModelID)
+		if ch.APIKey != "" {
+			upstreamURL = fmt.Sprintf("%s?key=%s", upstreamURL, ch.APIKey)
+		}
+	}
+
+	req, err := http.NewRequestWithContext(c.Request.Context(), "POST", upstreamURL, bytes.NewReader(convertedBody))
+	if err != nil {
+		return fmt.Errorf("构造上游请求失败: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	if ch.Type == "anthropic" {
+		if ch.APIKey != "" {
+			req.Header.Set("x-api-key", ch.APIKey)
+			req.Header.Set("anthropic-version", "2023-06-01")
+		} else if auth := c.GetHeader("x-api-key"); auth != "" {
+			req.Header.Set("x-api-key", auth)
+			req.Header.Set("anthropic-version", "2023-06-01")
+		}
+	} else if ch.Type != "gemini" {
+		if ch.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+ch.APIKey)
+		} else if auth := c.GetHeader("Authorization"); auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+	}
+
+	// 转发请求
+	startTime := time.Now()
+	client := upstream.NewHTTPClient()
+	client.Timeout = 5 * time.Minute
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("上游请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	latencyMs := int(time.Since(startTime).Milliseconds())
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("读取上游响应失败: %w", err)
+	}
+
+	// 转换响应
+	convertedResp, err := adapt.ConvertResponse(respBytes)
+	if err != nil {
+		convertedResp = respBytes
+	}
+
+	// 记录使用信息
+	go h.recordUsage(bodyBytes, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
+
+	// 返回响应
+	for k, vals := range resp.Header {
+		for _, v := range vals {
+			c.Header(k, v)
+		}
+	}
+	c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), convertedResp)
+	return nil
 }
 
 // splitAuth 解析 Authorization 头
