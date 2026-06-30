@@ -485,13 +485,11 @@ func (pa *ProxyAdapter) recordUsage(reqBody, rawResp, convertedResp []byte, adap
 		cacheHitTokens = usage.CacheHitTokens
 		totalTokens = usage.TotalTokens
 
-		// 计算费用（包含缓存价格）
-		cost = (float64(promptTokens) / 1000000) * model.PricingInput
-		cost += (float64(completionTokens) / 1000000) * model.PricingOutput
-		// 缓存费用（如果是负值表示折扣）
-		if model.PricingCacheRead > 0 {
-			cost += (float64(cacheHitTokens) / 1000000) * model.PricingCacheRead
-		}
+		// 计算费用：prompt_tokens 已包含 cache_hit_tokens，需减去缓存部分再分别计价
+		cacheMissTokens := promptTokens - cacheHitTokens
+		cost = (float64(cacheMissTokens)/1000000)*model.PricingInput +
+			(float64(cacheHitTokens)/1000000)*model.PricingCacheRead +
+			(float64(completionTokens)/1000000)*model.PricingOutput
 	}
 
 	if _, err := pa.usageRepo.Insert(&store.UsageRecord{

@@ -237,7 +237,10 @@ func (h *ProxyHandler) recordUsage(reqBody, rawResp, convertedResp []byte, adapt
 		completionTokens = usage.CompletionTokens
 		cacheHitTokens = usage.CacheHitTokens
 		totalTokens = usage.TotalTokens
-		cost = (float64(usage.PromptTokens)/1000000)*model.PricingInput +
+		// 计算费用：prompt_tokens 已包含 cache_hit_tokens，需减去缓存部分再分别计价
+		cacheMissTokens := usage.PromptTokens - usage.CacheHitTokens
+		cost = (float64(cacheMissTokens)/1000000)*model.PricingInput +
+			(float64(usage.CacheHitTokens)/1000000)*model.PricingCacheRead +
 			(float64(usage.CompletionTokens)/1000000)*model.PricingOutput
 	}
 
