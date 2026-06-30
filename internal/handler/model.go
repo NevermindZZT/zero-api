@@ -67,21 +67,16 @@ func (h *ModelHandler) DeleteModel(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// ToggleModel 启用/禁用模型
+// ToggleModel 启用/禁用模型（不标记 user_modified，不影响同步覆盖）
 func (h *ModelHandler) ToggleModel(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err := h.modelRepo.ToggleStatus(id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	m, err := h.modelRepo.GetByID(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "模型不存在"})
-		return
-	}
-	if m.Status == "active" {
-		m.Status = "inactive"
-	} else {
-		m.Status = "active"
-	}
-	if err := h.modelRepo.Update(m); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, m)

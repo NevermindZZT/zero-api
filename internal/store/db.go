@@ -128,6 +128,8 @@ func (d *DB) migrate() error {
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN mitm_all INTEGER DEFAULT 0`)
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN proxy_username TEXT DEFAULT ''`)
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN proxy_password TEXT DEFAULT ''`)
+	// 迁移：添加 user_modified 字段到 models 表
+	d.Exec(`ALTER TABLE models ADD COLUMN user_modified INTEGER DEFAULT 0`)
 
 	for _, q := range queries {
 		if _, err := d.Exec(q); err != nil {

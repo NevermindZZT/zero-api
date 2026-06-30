@@ -25,4 +25,97 @@ auth:
   password: "admin123"
   secret: "change-me-to-a-random-string"
 
+# 模型默认数据（优先级高于内置数据库，低于上游 API 和用户手动编辑）
+# 在此处预填模型的定价、上下文窗口、支持特性等
+model_defaults:
+  # GLM / 智谱
+  glm-5.2:
+    pricing_input: 1.40
+    pricing_output: 4.40
+    pricing_cache_read: 0.26
+    context_window: 1000000
+    max_output_tokens: 128000
+    supports_thinking: true
+    supports_vision: true
+  glm-5.1:
+    pricing_input: 1.40
+    pricing_output: 4.40
+    pricing_cache_read: 0.26
+  # Kimi / Moonshot
+  kimi-k2.7-code:
+    pricing_input: 0.95
+    pricing_output: 4.00
+    pricing_cache_read: 0.19
+  kimi-k2.6:
+    pricing_input: 0.95
+    pricing_output: 4.00
+    pricing_cache_read: 0.16
+  # MiMo / 小米
+  mimo-v2.5:
+    pricing_input: 0.14
+    pricing_output: 0.28
+    pricing_cache_read: 0.0028
+    context_window: 1000000
+    max_output_tokens: 128000
+    supports_thinking: true
+    supports_vision: true
+    supports_tools: true
+  mimo-v2.5-pro:
+    pricing_input: 1.74
+    pricing_output: 3.48
+    pricing_cache_read: 0.0145
+    context_window: 1000000
+    max_output_tokens: 128000
+    supports_thinking: true
+    supports_vision: true
+    supports_tools: true
+  # MiniMax
+  minimax-m3:
+    pricing_input: 0.30
+    pricing_output: 1.20
+    pricing_cache_read: 0.06
+  minimax-m2.7:
+    pricing_input: 0.30
+    pricing_output: 1.20
+    pricing_cache_read: 0.06
+    pricing_cache_write: 0.375
+  minimax-m2.5:
+    pricing_input: 0.30
+    pricing_output: 1.20
+    pricing_cache_read: 0.06
+    pricing_cache_write: 0.375
+  # Qwen / 通义千问
+  qwen3.7-max:
+    pricing_input: 2.50
+    pricing_output: 7.50
+    pricing_cache_read: 0.50
+    pricing_cache_write: 3.125
+  qwen3.7-plus:
+    pricing_input: 0.40
+    pricing_output: 1.60
+    pricing_cache_read: 0.04
+    pricing_cache_write: 0.50
+  qwen3.6-plus:
+    pricing_input: 0.50
+    pricing_output: 3.00
+    pricing_cache_read: 0.05
+    pricing_cache_write: 0.625
+  # DeepSeek
+  deepseek-v4-pro:
+    pricing_input: 1.74
+    pricing_output: 3.48
+    pricing_cache_read: 0.0145
+    context_window: 1000000
+    max_output_tokens: 384000
+    supports_thinking: true
+    supports_tools: true
+  deepseek-v4-flash:
+    pricing_input: 0.14
+    pricing_output: 0.28
+    pricing_cache_read: 0.0028
+    context_window: 1000000
+    max_output_tokens: 384000
+    supports_thinking: true
+    supports_tools: true
+
 log_level: "info"

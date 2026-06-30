@@ -145,8 +145,8 @@ async function syncModels(id: number) {
         </h2>
         <NButton type="primary" @click="openCreate">添加渠道</NButton>
       </div>
-      <NCard>
-        <NDataTable :columns="columns" :data="channels" :bordered="false" />
+      <NCard style="width:100%">
+        <NDataTable :columns="columns" :data="channels" :bordered="false" :scroll-x="800" />
       </NCard>
 
       <NModal v-model:show="showModal" title="渠道" preset="card" style="width:520px">

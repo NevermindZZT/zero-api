@@ -201,8 +201,12 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[MITM] → 模型列表请求")
 		status, respHeaders, respBody, err := s.adapter.HandleModelsRequest(headers)
 		if err != nil {
-			log.Printf("[MITM] ✗ 模型列表转发失败: %v", err)
-			writeHTTPResponse(tlsConn, 502, "Bad Gateway")
+			log.Printf("[MITM] ✗ 模型列表请求失败: %v", err)
+			if status > 0 {
+				writeHTTPResponse(tlsConn, status, err.Error())
+			} else {
+				writeHTTPResponse(tlsConn, 502, "Bad Gateway")
+			}
 			tlsConn.Close()
 			return
 		}
@@ -224,7 +228,11 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	status, respHeaders, respBody, err := s.adapter.HandleLLMRequest(req.Method, req.URL.Path, headers, bodyBytes)
 	if err != nil {
 		log.Printf("[MITM] ✗ LLM 转发失败: %v", err)
-		writeHTTPResponse(tlsConn, 502, "Bad Gateway")
+		if status > 0 {
+			writeHTTPResponse(tlsConn, status, err.Error())
+		} else {
+			writeHTTPResponse(tlsConn, 502, "Bad Gateway")
+		}
 		tlsConn.Close()
 		return
 	}
@@ -262,7 +270,11 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[代理] HTTP LLM 请求: %s (模型: %s)", r.URL.Path, extractModel(bodyBytes))
 		status, respHeaders, respBody, err := s.adapter.HandleLLMRequest(r.Method, r.URL.Path, headers, bodyBytes)
 		if err != nil {
-			http.Error(w, "Bad Gateway", http.StatusBadGateway)
+			if status > 0 {
+				http.Error(w, err.Error(), status)
+			} else {
+				http.Error(w, "Bad Gateway", http.StatusBadGateway)
+			}
 			return
 		}
 		for k, v := range respHeaders {

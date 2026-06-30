@@ -47,8 +47,8 @@ func main() {
 
 	svc := store.NewService(db)
 
-	// 初始化上游同步器
-	syncer := upstream.NewSyncer(svc.Channel, svc.Model)
+	// 初始化上游同步器（传入配置文件中的模型默认值）
+	syncer := upstream.NewSyncer(svc.Channel, svc.Model, cfg.ModelDefaults)
 
 	// 初始化处理器
 	channelH := handler.NewChannelHandler(svc.Channel, svc.Model)

@@ -30,6 +30,10 @@ const dailyColumns = [
   { title: '输出 Tokens', key: 'completion_tokens', render: (r: any) => r.completion_tokens?.toLocaleString() },
   { title: '缓存命中', key: 'cache_hit_tokens', render: (r: any) => r.cache_hit_tokens?.toLocaleString() || '-' },
   { title: '总 Tokens', key: 'total_tokens', render: (r: any) => r.total_tokens?.toLocaleString() },
+  { title: '缓存命中率', key: 'cache_hit_rate', render: (r: any) => {
+    if (!r.total_tokens) return '-'
+    return ((r.cache_hit_tokens || 0) / r.total_tokens * 100).toFixed(1) + '%'
+  }},
   { title: '费用 ($)', key: 'cost', render: (r: any) => r.cost?.toFixed(6) },
 ]
 

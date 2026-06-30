@@ -18,6 +18,7 @@ type Model struct {
 	PricingCacheRead  float64   `json:"pricing_cache_read"`   // $/1M tokens（缓存读取）
 	PricingCacheWrite float64   `json:"pricing_cache_write"`  // $/1M tokens（缓存写入）
 	Status            string    `json:"status"` // active, inactive
+	UserModified      bool      `json:"user_modified"`        // 用户是否手动编辑过
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 
@@ -38,13 +39,14 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 	var rows interface{ Scan(...interface{}) error; Close() error; Next() bool; Err() error }
 	var err error
 
+	userModifiedField := "m.user_modified"
 	if channelID > 0 {
 		rows, err = r.db.Query(
 			`SELECT m.id, m.channel_id, m.model_id, m.display_name,
 			        m.context_window, m.max_output_tokens,
 			        m.supports_vision, m.supports_thinking, m.supports_tools,
 		        m.pricing_input, m.pricing_output, m.pricing_cache_read, m.pricing_cache_write,
-		        m.status, m.created_at, m.updated_at,
+		        m.status,`+userModifiedField+`, m.created_at, m.updated_at,
 		        COALESCE(c.name, ''), COALESCE(c.type, '')
 			 FROM models m LEFT JOIN channels c ON m.channel_id = c.id
 			 WHERE m.channel_id = ? ORDER BY m.id`, channelID)
@@ -54,7 +56,7 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 		        m.context_window, m.max_output_tokens,
 		        m.supports_vision, m.supports_thinking, m.supports_tools,
 		        m.pricing_input, m.pricing_output, m.pricing_cache_read, m.pricing_cache_write,
-		        m.status, m.created_at, m.updated_at,
+		        m.status,`+userModifiedField+`, m.created_at, m.updated_at,
 		        COALESCE(c.name, ''), COALESCE(c.type, '')
 			 FROM models m LEFT JOIN channels c ON m.channel_id = c.id
 			 ORDER BY m.id`)
@@ -71,7 +73,7 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 			&m.ContextWindow, &m.MaxOutputTokens,
 			&m.SupportsVision, &m.SupportsThinking, &m.SupportsTools,
 			&m.PricingInput, &m.PricingOutput, &m.PricingCacheRead, &m.PricingCacheWrite,
-			&m.Status, &m.CreatedAt, &m.UpdatedAt,
+			&m.Status, &m.UserModified, &m.CreatedAt, &m.UpdatedAt,
 			&m.ChannelName, &m.ChannelType); err != nil {
 			return nil, err
 		}
@@ -87,7 +89,7 @@ func (r *ModelRepo) GetByID(id int64) (*Model, error) {
 		        m.context_window, m.max_output_tokens,
 		        m.supports_vision, m.supports_thinking, m.supports_tools,
 		        m.pricing_input, m.pricing_output, m.pricing_cache_read, m.pricing_cache_write,
-		        m.status, m.created_at, m.updated_at,
+		        m.status, m.user_modified, m.created_at, m.updated_at,
 		        COALESCE(c.name, ''), COALESCE(c.type, '')
 		 FROM models m LEFT JOIN channels c ON m.channel_id = c.id
 		 WHERE m.id = ?`, id,
@@ -95,7 +97,7 @@ func (r *ModelRepo) GetByID(id int64) (*Model, error) {
 		&m.ContextWindow, &m.MaxOutputTokens,
 		&m.SupportsVision, &m.SupportsThinking, &m.SupportsTools,
 		&m.PricingInput, &m.PricingOutput, &m.PricingCacheRead, &m.PricingCacheWrite,
-		&m.Status, &m.CreatedAt, &m.UpdatedAt,
+		&m.Status, &m.UserModified, &m.CreatedAt, &m.UpdatedAt,
 		&m.ChannelName, &m.ChannelType)
 	if err != nil {
 		return nil, err
@@ -113,12 +115,23 @@ func (r *ModelRepo) Upsert(m *Model) (int64, error) {
 		                     pricing_input, pricing_output, pricing_cache_read, pricing_cache_write, status)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(channel_id, model_id) DO UPDATE SET
-		   display_name = CASE WHEN display_name = model_id THEN ? ELSE display_name END,
+		   display_name = CASE WHEN display_name = model_id THEN ? ELSE display_name END,		   context_window = CASE WHEN user_modified = 0 THEN ? ELSE context_window END,
+		   max_output_tokens = CASE WHEN user_modified = 0 THEN ? ELSE max_output_tokens END,
+		   supports_vision = CASE WHEN user_modified = 0 THEN ? ELSE supports_vision END,
+		   supports_thinking = CASE WHEN user_modified = 0 THEN ? ELSE supports_thinking END,
+		   supports_tools = CASE WHEN user_modified = 0 THEN ? ELSE supports_tools END,
+		   pricing_input = CASE WHEN user_modified = 0 THEN ? ELSE pricing_input END,
+		   pricing_output = CASE WHEN user_modified = 0 THEN ? ELSE pricing_output END,
+		   pricing_cache_read = CASE WHEN user_modified = 0 THEN ? ELSE pricing_cache_read END,
+		   pricing_cache_write = CASE WHEN user_modified = 0 THEN ? ELSE pricing_cache_write END,
 		   updated_at = CURRENT_TIMESTAMP`,
 		m.ChannelID, m.ModelID, m.DisplayName, m.ContextWindow, m.MaxOutputTokens,
 		m.SupportsVision, m.SupportsThinking, m.SupportsTools,
 		m.PricingInput, m.PricingOutput, m.PricingCacheRead, m.PricingCacheWrite, m.Status,
 		m.DisplayName,
+		m.ContextWindow, m.MaxOutputTokens,
+		m.SupportsVision, m.SupportsThinking, m.SupportsTools,
+		m.PricingInput, m.PricingOutput, m.PricingCacheRead, m.PricingCacheWrite,
 	)
 	if err != nil {
 		return 0, err
@@ -131,7 +144,7 @@ func (r *ModelRepo) Update(m *Model) error {
 		`UPDATE models SET display_name=?, context_window=?, max_output_tokens=?,
 		 supports_vision=?, supports_thinking=?, supports_tools=?,
 		 pricing_input=?, pricing_output=?, pricing_cache_read=?, pricing_cache_write=?,
-		 status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		 status=?, user_modified=1, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
 		m.DisplayName, m.ContextWindow, m.MaxOutputTokens,
 		m.SupportsVision, m.SupportsThinking, m.SupportsTools,
 		m.PricingInput, m.PricingOutput, m.PricingCacheRead, m.PricingCacheWrite,
@@ -140,8 +153,26 @@ func (r *ModelRepo) Update(m *Model) error {
 	return err
 }
 
+// ClearUserModified 清除 user_modified 标记
+func (r *ModelRepo) ClearUserModified(id int64) error {
+	_, err := r.db.Exec(`UPDATE models SET user_modified = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
+	return err
+}
+
+// SetUserModified 设置 user_modified 标记
+func (r *ModelRepo) SetUserModified(id int64) error {
+	_, err := r.db.Exec(`UPDATE models SET user_modified = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
+	return err
+}
+
 func (r *ModelRepo) Delete(id int64) error {
 	_, err := r.db.Exec(`DELETE FROM models WHERE id = ?`, id)
+	return err
+}
+
+// ToggleStatus 切换模型启用/禁用状态（不标记 user_modified，不影响同步覆盖）
+func (r *ModelRepo) ToggleStatus(id int64) error {
+	_, err := r.db.Exec(`UPDATE models SET status = CASE WHEN status = 'active' THEN 'inactive' ELSE 'active' END, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
 	return err
 }
 
@@ -172,13 +203,13 @@ func (r *ModelRepo) FindByChannelAndModelID(channelID int64, modelID string) (*M
 		`SELECT id, channel_id, model_id, display_name, context_window, max_output_tokens,
 		        supports_vision, supports_thinking, supports_tools,
 		        pricing_input, pricing_output, pricing_cache_read, pricing_cache_write,
-		        status, created_at, updated_at
+		        status, user_modified, created_at, updated_at
 		 FROM models WHERE channel_id = ? AND model_id = ?`, channelID, modelID,
 	).Scan(&m.ID, &m.ChannelID, &m.ModelID, &m.DisplayName,
 		&m.ContextWindow, &m.MaxOutputTokens,
 		&m.SupportsVision, &m.SupportsThinking, &m.SupportsTools,
 		&m.PricingInput, &m.PricingOutput, &m.PricingCacheRead, &m.PricingCacheWrite,
-		&m.Status, &m.CreatedAt, &m.UpdatedAt)
+		&m.Status, &m.UserModified, &m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

@@ -53,3 +53,12 @@ func NewAdapter(channelType string) Adapter {
 		return &OpenAIAdapter{}
 	}
 }
+
+// GetModelDBInfo 从内置模型数据库中查找模型信息
+// 供上游同步器在合并优先级时使用
+func GetModelDBInfo(modelID string) *ModelInfo {
+	if m, ok := modelDB[modelID]; ok {
+		return m
+	}
+	return nil
+}

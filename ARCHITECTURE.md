@@ -249,6 +249,50 @@ CREATE TABLE api_keys (
 
 ---
 
+## 模型数据管理（三优先级合并）
+
+模型元数据（上下文窗口、最大输出、支持特性、定价等）支持三种来源，按优先级从低到高排列：
+
+### 优先级 1：内置数据库 + 配置文件默认值
+
+**内置 modelDB**（`internal/adapter/openai.go`）：项目内置 40+ 流行模型的基础元信息。
+
+**配置文件默认值**（`configs/config.yaml` 中的 `model_defaults` 段）：用户可在此预填模型的定价和规格：
+```yaml
+model_defaults:
+  deepseek-chat:
+    pricing_input: 0.5
+    pricing_output: 2.0
+    context_window: 65536
+  deepseek-reasoner:
+    pricing_input: 0.55
+    pricing_output: 2.19
+```
+
+### 优先级 2：上游 API
+
+同步模型列表时，如果上游 API 返回元信息（如 OpenRouter 返回 `context_length` 等字段），会覆盖 modelDB 和配置文件默认值。
+
+### 优先级 3：用户手动编辑
+
+用户在管理面板中编辑模型（修改定价、特性等），会标记 `user_modified=1`。之后任何同步操作**不会覆盖**用户已编辑过的模型字段。
+
+### 合并逻辑
+
+合并发生在 `internal/upstream/syncer.go` 的 `mergeModelInfo()` 中，按字段级别合并：
+
+1. 从上游 API 获取模型列表
+2. 对于每个模型，优先使用上游返回的值，空白字段从 modelDB 补全
+3. 再以配置文件默认值覆盖
+4. `Upsert` 到 DB 时，如果该模型已被用户编辑（`user_modified=1`），保留用户设置，不覆盖
+5. `UPDATE` 操作会自动设置 `user_modified=1`
+
+### 恢复上游数据
+
+如需让模型重新接受同步更新，可通过 `DELETE` 删除后重新同步，或通过 API 清除 `user_modified` 标记。
+
+---
+
 ## 已知问题 & 待改进
 
 ### 已修复的历史 Bug

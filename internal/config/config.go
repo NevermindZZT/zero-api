@@ -8,12 +8,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ModelDefault 预填的模型默认数据
+// 优先级：内置 modelDB < 配置默认值 < 上游 API < 用户手动编辑
+type ModelDefault struct {
+	ContextWindow   int     `yaml:"context_window"`
+	MaxOutputTokens int     `yaml:"max_output_tokens"`
+	SupportsVision  bool    `yaml:"supports_vision"`
+	SupportsThinking bool   `yaml:"supports_thinking"`
+	SupportsTools   bool    `yaml:"supports_tools"`
+	PricingInput      float64 `yaml:"pricing_input"`
+	PricingOutput     float64 `yaml:"pricing_output"`
+	PricingCacheRead  float64 `yaml:"pricing_cache_read"`
+	PricingCacheWrite float64 `yaml:"pricing_cache_write"`
+}
+
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Proxy    ProxyConfig    `yaml:"proxy"`
-	Database DatabaseConfig `yaml:"database"`
-	Auth     AuthConfig     `yaml:"auth"`
-	LogLevel string         `yaml:"log_level"`
+	Server        ServerConfig           `yaml:"server"`
+	Proxy         ProxyConfig            `yaml:"proxy"`
+	Database      DatabaseConfig          `yaml:"database"`
+	Auth          AuthConfig              `yaml:"auth"`
+	ModelDefaults map[string]ModelDefault `yaml:"model_defaults"`
+	LogLevel      string                  `yaml:"log_level"`
 }
 
 type AuthConfig struct {

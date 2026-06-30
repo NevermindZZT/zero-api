@@ -3,6 +3,7 @@
 > 个人自用的大模型 API 中转站 — 轻量、美观、全功能
 
 [![Build](https://github.com/NevermindZZT/zero-api/actions/workflows/build.yml/badge.svg)](https://github.com/NevermindZZT/zero-api/actions/workflows/build.yml)
+[![Version](https://img.shields.io/github/v/release/NevermindZZT/zero-api?label=Version&logo=github)](https://github.com/NevermindZZT/zero-api/releases)
 [![Docker Hub](https://img.shields.io/docker/v/nevermindzzt/zero-api?label=Docker%20Hub&logo=docker)](https://hub.docker.com/r/nevermindzzt/zero-api)
 
 zero-api 是一个基于 Go 的个人大模型 API 中转服务，集 **API 中转** 与 **MITM 代理** 于一体，支持多渠道多模型管理、使用统计与费用预估，开箱即用。

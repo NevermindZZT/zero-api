@@ -28,13 +28,10 @@ func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo,
 
 // ListLocalModels 返回本地启用的模型列表（兼容 OpenAI /v1/models）
 func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
-	// 验证 API Key（如果有提供）
-	auth := c.GetHeader("Authorization")
-	if auth != "" {
-		parts := splitAuth(auth)
-		if parts != nil && parts[0] == "Bearer" {
-			h.apiKeyRepo.GetByKey(parts[1]) // 仅验证，不阻断
-		}
+	// 验证 API Key
+	if _, err := h.resolveAndValidateAPIKey(c); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
 	}
 
 	models, err := h.modelRepo.List(0)
@@ -81,16 +78,11 @@ func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 		return
 	}
 
-	// 提取 API Key 认证
-	var apiKeyID *int64
-	auth := c.GetHeader("Authorization")
-	if auth != "" {
-		parts := splitAuth(auth)
-		if parts != nil && parts[0] == "Bearer" {
-			if k, err := h.apiKeyRepo.GetByKey(parts[1]); err == nil {
-				apiKeyID = &k.ID
-			}
-		}
+	// 验证并解析 API Key
+	apiKeyID, err := h.resolveAndValidateAPIKey(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
 	}
 	allModels, err := h.modelRepo.List(0)
 	if err != nil {
@@ -199,6 +191,27 @@ func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 		}
 	}
 	c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), convertedResp)
+}
+
+// resolveAndValidateAPIKey 从请求中提取并验证 API Key
+// 返回 apiKeyID，如果验证失败则返回 error
+func (h *ProxyHandler) resolveAndValidateAPIKey(c *gin.Context) (*int64, error) {
+	auth := c.GetHeader("Authorization")
+	if auth == "" {
+		return nil, fmt.Errorf("缺少 Authorization 头，请提供有效的 API Key")
+	}
+
+	parts := splitAuth(auth)
+	if parts == nil || parts[0] != "Bearer" {
+		return nil, fmt.Errorf("Authorization 格式错误，需 Bearer <api-key>")
+	}
+
+	k, err := h.apiKeyRepo.GetByKey(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("无效的 API Key：密钥不存在或已被禁用")
+	}
+
+	return &k.ID, nil
 }
 
 func (h *ProxyHandler) recordUsage(reqBody, rawResp, convertedResp []byte, adapt adapter.Adapter, model *store.Model, channelID int64, apiKeyID *int64, latencyMs int) {

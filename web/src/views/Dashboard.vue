@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { h, onMounted, onUnmounted, ref, nextTick } from 'vue'
-import { NCard, NGrid, NGi, NStatistic, NDataTable, NSpin, NSpace, NProgress, NIcon, NButton, NTag } from 'naive-ui'
+import { h, onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue'
+import { NCard, NGrid, NGi, NStatistic, NDataTable, NSpin, NSpace, NProgress, NIcon, NButton, NButtonGroup, NTag } from 'naive-ui'
 import {
   StatsChartSharp,
   SendSharp,
@@ -39,10 +39,10 @@ const recordColumns = [
 ]
 
 const statCards = [
-  { label: '总请求数', value: 'overview.total_requests', icon: SendSharp, color: '#667eea', bg: 'rgba(102,126,234,0.15)' },
-  { label: '总 Tokens', value: 'overview.total_tokens', icon: DocumentTextSharp, color: '#22c55e', bg: 'rgba(34,197,94,0.15)', format: 'tokens' },
-  { label: '总费用', value: 'overview.total_cost', icon: CashSharp, color: '#eab308', bg: 'rgba(250,204,21,0.15)', format: 'cost' },
-  { label: '活跃渠道', value: 'overview.active_channels', icon: CubeSharp, color: '#a855f7', bg: 'rgba(168,85,247,0.15)' },
+  { label: '请求数', value: 'total_requests', icon: SendSharp, color: '#667eea', bg: 'rgba(102,126,234,0.15)' },
+  { label: 'Tokens', value: 'total_tokens', icon: DocumentTextSharp, color: '#22c55e', bg: 'rgba(34,197,94,0.15)', format: 'tokens' },
+  { label: '费用', value: 'total_cost', icon: CashSharp, color: '#eab308', bg: 'rgba(250,204,21,0.15)', format: 'cost' },
+  { label: '活跃渠道', value: 'active_channels', icon: CubeSharp, color: '#a855f7', bg: 'rgba(168,85,247,0.15)' },
 ]
 
 function now() {
@@ -50,11 +50,123 @@ function now() {
   return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}`
 }
 
+// 时间范围切换
+const timeRange = ref<'total' | 'month' | 'week' | 'today'>('total')
+const timeRangeOptions: { label: string; value: typeof timeRange.value }[] = [
+  { label: '全部', value: 'total' },
+  { label: '本月', value: 'month' },
+  { label: '本周', value: 'week' },
+  { label: '今日', value: 'today' },
+]
+
+// 根据时间范围过滤 dailyStats 并聚合统计数据
+const rangeOverview = computed(() => {
+  const ov = overview.value
+  if (timeRange.value === 'total') {
+    return ov // 原始总览数据
+  }
+  if (timeRange.value === 'today') {
+    return {
+      total_requests: ov.today_requests || 0,
+      total_tokens: ov.today_tokens || 0,
+      total_cost: ov.total_cost, // 今日费用无法单独聚合，展示总费用
+      total_cache_hits: 0,
+      cache_hit_rate: 0,
+      active_channels: ov.active_channels,
+      active_models: ov.active_models,
+    }
+  }
+
+  // 过滤日期范围
+  const now = new Date()
+  let startDate: Date
+  if (timeRange.value === 'month') {
+    startDate = new Date(now.getFullYear(), now.getMonth(), 1)
+  } else {
+    // week: 从周一算起
+    const day = now.getDay()
+    const diff = day === 0 ? 6 : day - 1 // 周一为 0
+    startDate = new Date(now)
+    startDate.setDate(now.getDate() - diff)
+  }
+  const start = startDate.toISOString().split('T')[0]
+
+  const filtered = (dailyStats.value || []).filter((d: any) => d.date >= start)
+  const sum = {
+    total_requests: 0,
+    total_tokens: 0,
+    total_cost: 0,
+    total_cache_hits: 0,
+  }
+  filtered.forEach((d: any) => {
+    sum.total_requests += d.requests || 0
+    sum.total_tokens += d.total_tokens || 0
+    sum.total_cost += d.cost || 0
+    sum.total_cache_hits += d.cache_hit_tokens || 0
+  })
+
+  return {
+    ...sum,
+    cache_hit_rate: sum.total_tokens > 0 ? (sum.total_cache_hits / sum.total_tokens) * 100 : 0,
+    active_channels: ov.active_channels,
+    active_models: ov.active_models,
+  }
+})
+
+// 根据时间范围过滤 dailyStats（供图表使用）
+const filteredDailyStats = computed(() => {
+  if (timeRange.value === 'total') return dailyStats.value
+  const now = new Date()
+  let startDate: Date
+  if (timeRange.value === 'today') {
+    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  } else if (timeRange.value === 'month') {
+    startDate = new Date(now.getFullYear(), now.getMonth(), 1)
+  } else {
+    const day = now.getDay()
+    const diff = day === 0 ? 6 : day - 1
+    startDate = new Date(now)
+    startDate.setDate(now.getDate() - diff)
+  }
+  const start = startDate.toISOString().split('T')[0]
+  return (dailyStats.value || []).filter((d: any) => d.date >= start)
+})
+
+// 时间范围切换时重新加载数据
+watch(timeRange, () => {
+  loadData()
+  nextTick(renderCharts)
+})
+
 async function loadData() {
   try {
+    // 根据时间范围获取足够的 daily 数据
+    const today = new Date()
+    let start: string | undefined
+    let end: string | undefined
+    if (timeRange.value === 'month') {
+      const s = new Date(today.getFullYear(), today.getMonth(), 1)
+      start = s.toISOString().split('T')[0]
+    } else if (timeRange.value === 'week') {
+      const day = today.getDay()
+      const diff = day === 0 ? 6 : day - 1
+      const s = new Date(today)
+      s.setDate(today.getDate() - diff)
+      start = s.toISOString().split('T')[0]
+    } else if (timeRange.value === 'today') {
+      start = today.toISOString().split('T')[0]
+    }
+    // total: 获取近90天数据足够展示
+    if (timeRange.value === 'total') {
+      const s = new Date(today)
+      s.setDate(today.getDate() - 90)
+      start = s.toISOString().split('T')[0]
+    }
+    end = today.toISOString().split('T')[0]
+
     const [overviewRes, dailyRes, recordsRes] = await Promise.all([
       usageApi.overview(),
-      usageApi.daily(),
+      usageApi.daily(start, end),
       usageApi.records(),
     ])
     overview.value = overviewRes.data
@@ -102,7 +214,7 @@ function renderCharts() {
 }
 
 function renderTrendChart() {
-  if (!chartContainer.value || dailyStats.value.length === 0) {
+  if (!chartContainer.value || filteredDailyStats.value.length === 0) {
     trendChart?.dispose()
     trendChart = null
     return
@@ -110,9 +222,9 @@ function renderTrendChart() {
   if (!trendChart) {
     trendChart = echarts.init(chartContainer.value)
   }
-  const dates = dailyStats.value.map((d: any) => d.date).reverse()
-  const tokens = dailyStats.value.map((d: any) => d.total_tokens).reverse()
-  const requests = dailyStats.value.map((d: any) => d.requests).reverse()
+  const dates = filteredDailyStats.value.map((d: any) => d.date).reverse()
+  const tokens = filteredDailyStats.value.map((d: any) => d.total_tokens).reverse()
+  const requests = filteredDailyStats.value.map((d: any) => d.requests).reverse()
 
   trendChart.setOption({
     tooltip: { trigger: 'axis' },
@@ -178,16 +290,19 @@ function formatTokens(n: number) {
           </h2>
           <p class="page-subtitle">zero-api 全局概览</p>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
-          <span v-if="lastUpdated" style="font-size:12px;color:#64748b">
-            上次更新: {{ lastUpdated }}
-            <span style="color:#22c55e;margin-left:4px">● 15s 自动刷新</span>
-          </span>
-          <NButton size="tiny" :loading="refreshing" @click="refresh">
-            <template #icon><NIcon size="14"><RefreshSharp /></NIcon></template>
-            刷新
-          </NButton>
-        </div>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <NButtonGroup size="tiny">
+          <NButton v-for="opt in timeRangeOptions" :key="opt.value" :type="timeRange === opt.value ? 'primary' : 'default'" @click="timeRange = opt.value; nextTick(renderCharts)">{{ opt.label }}</NButton>
+        </NButtonGroup>
+        <span v-if="lastUpdated" style="font-size:12px;color:#64748b">
+          上次更新: {{ lastUpdated }}
+          <span style="color:#22c55e;margin-left:4px">● 15s 自动刷新</span>
+        </span>
+        <NButton size="tiny" :loading="refreshing" @click="refresh">
+          <template #icon><NIcon size="14"><RefreshSharp /></NIcon></template>
+          刷新
+        </NButton>
+      </div>
       </div>
 
       <NGrid :x-gap="16" :y-gap="16" :cols="4">
@@ -198,9 +313,9 @@ function formatTokens(n: number) {
             </div>
             <p class="stat-label">{{ card.label }}</p>
             <p class="stat-value">
-              <template v-if="card.format === 'tokens'">{{ formatTokens(overview[card.value.split('.')[1]]) }}</template>
-              <template v-else-if="card.format === 'cost'">${{ (overview[card.value.split('.')[1]] || 0).toFixed(6) }}</template>
-              <template v-else>{{ overview[card.value.split('.')[1]] || 0 }}</template>
+              <template v-if="card.format === 'tokens'">{{ formatTokens(rangeOverview[card.value]) }}</template>
+              <template v-else-if="card.format === 'cost'">${{ (rangeOverview[card.value] || 0).toFixed(6) }}</template>
+              <template v-else>{{ rangeOverview[card.value] || 0 }}</template>
             </p>
           </NCard>
         </NGi>
@@ -218,14 +333,14 @@ function formatTokens(n: number) {
             <div class="chart-card-body">
               <div style="display:flex;align-items:center;gap:32px;padding:8px">
                 <div style="position:relative;width:120px;height:120px">
-                  <NProgress type="circle" :percentage="Math.round(overview.cache_hit_rate || 0)" :stroke-width="10" :size="120">
-                    <div style="text-align:center"><span style="font-size:28px;font-weight:700">{{ (overview.cache_hit_rate || 0).toFixed(1) }}%</span></div>
+                  <NProgress type="circle" :percentage="Math.round(rangeOverview.cache_hit_rate || 0)" :stroke-width="10" :size="120">
+                    <div style="text-align:center;white-space:nowrap"><span style="font-size:24px;font-weight:700">{{ (rangeOverview.cache_hit_rate || 0).toFixed(1) }}%</span></div>
                   </NProgress>
                 </div>
                 <div>
                   <div class="cache-stat-row">
                     <span class="cache-stat-label">缓存命中</span>
-                    <span class="cache-stat-value">{{ formatTokens(overview.total_cache_hits) }} tokens</span>
+                    <span class="cache-stat-value">{{ formatTokens(rangeOverview.total_cache_hits) }} tokens</span>
                   </div>
                   <div class="cache-stat-row">
                     <span class="cache-stat-label">今日请求</span>

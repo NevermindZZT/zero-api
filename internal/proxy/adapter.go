@@ -53,6 +53,11 @@ func (pa *ProxyAdapter) SetModelMappings(mappings map[string]ModelMappingConfig)
 // HandleModelsRequest 处理模型列表请求
 // 精确匹配 ModelProxy 返回的 OpenRouter 格式（Copilot 依赖此格式判断模型能力）
 func (pa *ProxyAdapter) HandleModelsRequest(headers map[string]string) (statusCode int, respHeaders map[string]string, respBody []byte, err error) {
+	// 验证 API Key
+	if _, err := pa.resolveAndValidateAPIKey(headers); err != nil {
+		return 401, nil, nil, fmt.Errorf("API Key 验证失败: %w", err)
+	}
+
 	allModels, err := pa.modelRepo.List(0)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("查询模型失败: %w", err)
@@ -190,15 +195,10 @@ func (pa *ProxyAdapter) HandleLLMRequest(method, path string, headers map[string
 		log.Printf("[代理] 模型映射: %s → %s", originalModel, targetModel)
 	}
 
-	// 提取 API Key 认证
-	var apiKeyID *int64
-	if auth, ok := headers["authorization"]; ok {
-		parts := strings.SplitN(auth, " ", 2)
-		if len(parts) == 2 && parts[0] == "Bearer" {
-			if k, err := pa.apiKeyRepo.GetByKey(parts[1]); err == nil {
-				apiKeyID = &k.ID
-			}
-		}
+	// 验证并解析 API Key
+	apiKeyID, err := pa.resolveAndValidateAPIKey(headers)
+	if err != nil {
+		return 401, nil, nil, fmt.Errorf("API Key 验证失败: %w", err)
 	}
 
 	// 查找本地模型（用目标模型名）
@@ -341,6 +341,27 @@ func (pa *ProxyAdapter) HandleLLMRequest(method, path string, headers map[string
 	}
 
 	return resp.StatusCode, respHeaders, convertedResp, nil
+}
+
+// resolveAndValidateAPIKey 从请求头中提取并验证 API Key
+// 返回 apiKeyID，如果验证失败则返回 error
+func (pa *ProxyAdapter) resolveAndValidateAPIKey(headers map[string]string) (*int64, error) {
+	auth, ok := headers["authorization"]
+	if !ok || auth == "" {
+		return nil, fmt.Errorf("缺少 Authorization 头，请提供有效的 API Key")
+	}
+
+	parts := strings.SplitN(auth, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return nil, fmt.Errorf("Authorization 格式错误，需 Bearer <api-key>")
+	}
+
+	k, err := pa.apiKeyRepo.GetByKey(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("无效的 API Key：密钥不存在或已被禁用")
+	}
+
+	return &k.ID, nil
 }
 
 // injectParams 注入模型映射参数（model 替换 + thinking/reasoning_effort）
