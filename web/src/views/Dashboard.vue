@@ -124,9 +124,19 @@ const filteredDailyStats = computed(() => {
   return (dailyStats.value || []).filter((d: any) => d.date >= start)
 })
 
+// 根据时间范围过滤 recentRecords（供图表使用）
+const filteredRecords = computed(() => {
+  if (timeRange.value === 'total') return recentRecords.value
+  const start = formatLocalDate(getRangeStartDate(timeRange.value))
+  return (recentRecords.value || []).filter((r: any) => {
+    const d = r.created_at?.slice(0, 10) || ''
+    return d >= start
+  })
+})
+
 // 时间范围切换时重新加载数据
-watch(timeRange, () => {
-  loadData()
+watch(timeRange, async () => {
+  await loadData()
   nextTick(renderCharts)
 })
 
@@ -223,7 +233,7 @@ function renderTrendChart() {
 }
 
 function renderPieChart() {
-  if (!pieContainer.value || recentRecords.value.length === 0) {
+  if (!pieContainer.value || filteredRecords.value.length === 0) {
     pieChart?.dispose()
     pieChart = null
     return
@@ -232,7 +242,7 @@ function renderPieChart() {
     pieChart = echarts.init(pieContainer.value)
   }
   const modelMap = new Map<string, number>()
-  recentRecords.value.forEach((r: any) => {
+  filteredRecords.value.forEach((r: any) => {
     modelMap.set(r.request_model, (modelMap.get(r.request_model) || 0) + r.total_tokens)
   })
   const data = Array.from(modelMap.entries()).map(([name, value]) => ({ name, value }))
@@ -267,7 +277,7 @@ function formatTokens(n: number) {
         </div>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <NButtonGroup size="tiny">
-          <NButton v-for="opt in timeRangeOptions" :key="opt.value" :type="timeRange === opt.value ? 'primary' : 'default'" @click="timeRange = opt.value; nextTick(renderCharts)">{{ opt.label }}</NButton>
+          <NButton v-for="opt in timeRangeOptions" :key="opt.value" :type="timeRange === opt.value ? 'primary' : 'default'" @click="timeRange = opt.value">{{ opt.label }}</NButton>
         </NButtonGroup>
         <span v-if="lastUpdated" style="font-size:12px;color:#64748b">
           上次更新: {{ lastUpdated }}
