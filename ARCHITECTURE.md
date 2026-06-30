@@ -106,6 +106,8 @@ CREATE TABLE channels (
     base_url TEXT NOT NULL,
     api_key TEXT DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active',
+    priority INTEGER DEFAULT 99,          -- 0=最高优先级，越大优先级越低
+    use_proxy INTEGER DEFAULT 0,          -- 是否通过出站代理转发
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -154,6 +156,13 @@ CREATE TABLE proxy_config (
     intercept_domains TEXT DEFAULT '[]',
     smart_intercept_domains TEXT DEFAULT '[]',
     default_channel_id INTEGER,
+    model_mappings TEXT DEFAULT '{}',
+    mitm_all INTEGER DEFAULT 0,
+    proxy_username TEXT DEFAULT '',
+    proxy_password TEXT DEFAULT '',
+    forward_proxy_url TEXT DEFAULT '',     -- 全局出站代理地址
+    forward_proxy_user TEXT DEFAULT '',    -- 出站代理用户名
+    forward_proxy_pass TEXT DEFAULT '',    -- 出站代理密码
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -309,6 +318,9 @@ model_defaults:
 - **模型按 ID 查询缓存**：`FindByChannelAndModelID` 有 COALESCE 问题未完全验证
 - **前端图表**：仪表盘和使用统计页有 ECharts 趋势图和饼图
 - **批量操作前端**：模型管理已有复选框 + 批量启用/禁用/删除
+
+### 已实现功能
+- **出站代理**：每个渠道可独立开启出站代理，全局配置代理地址/认证。转发请求时通过 `http.Transport.Proxy` 中转到上游 API
 
 ### 架构注意事项
 - **嵌入前端**：`//go:embed web/dist/index.html web/dist/assets/*` 要求文件必须存在于编译时

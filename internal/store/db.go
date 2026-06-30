@@ -132,6 +132,12 @@ func (d *DB) migrate() error {
 	d.Exec(`ALTER TABLE models ADD COLUMN user_modified INTEGER DEFAULT 0`)
 	// 迁移：添加 priority 字段到 channels 表（0=最高优先级，越大优先级越低）
 	d.Exec(`ALTER TABLE channels ADD COLUMN priority INTEGER DEFAULT 99`)
+	// 迁移：添加出站代理字段到 channels 表（每个渠道独立的代理开关）
+	d.Exec(`ALTER TABLE channels ADD COLUMN use_proxy INTEGER DEFAULT 0`)
+	// 迁移：添加全局出站代理配置到 proxy_config 表
+	d.Exec(`ALTER TABLE proxy_config ADD COLUMN forward_proxy_url TEXT DEFAULT ''`)
+	d.Exec(`ALTER TABLE proxy_config ADD COLUMN forward_proxy_user TEXT DEFAULT ''`)
+	d.Exec(`ALTER TABLE proxy_config ADD COLUMN forward_proxy_pass TEXT DEFAULT ''`)
 
 	for _, q := range queries {
 		if _, err := d.Exec(q); err != nil {

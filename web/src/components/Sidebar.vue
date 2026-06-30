@@ -11,6 +11,7 @@ import {
   KeySharp,
   TrendingUpSharp,
   FlashSharp,
+  RocketSharp,
 } from '@vicons/ionicons5'
 
 const route = useRoute()
@@ -46,6 +47,7 @@ const menuOptions = [
     key: 'group-settings',
     children: [
       { label: '代理设置', key: '/proxy', icon: renderIcon(ShieldCheckmarkSharp) },
+      { label: '出站代理', key: '/forward-proxy', icon: renderIcon(RocketSharp) },
     ],
   },
 ]

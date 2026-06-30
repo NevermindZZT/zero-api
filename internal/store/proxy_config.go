@@ -26,6 +26,9 @@ type ProxyConfigData struct {
 	MitmAll               bool                   `json:"mitm_all"`
 	ProxyUsername         string                 `json:"proxy_username"`
 	ProxyPassword         string                 `json:"proxy_password"`
+	ForwardProxyURL       string                 `json:"forward_proxy_url"`
+	ForwardProxyUser      string                 `json:"forward_proxy_user"`
+	ForwardProxyPass      string                 `json:"forward_proxy_pass"`
 	CreatedAt             time.Time              `json:"created_at"`
 	UpdatedAt             time.Time              `json:"updated_at"`
 }
@@ -43,8 +46,8 @@ func (r *ProxyConfigRepo) Get() (*ProxyConfigData, error) {
 	c := &ProxyConfigData{}
 	var interceptJSON, smartJSON, mappingsJSON string
 	err := r.db.QueryRow(
-		`SELECT id, intercept_domains, smart_intercept_domains, default_channel_id, model_mappings, mitm_all, proxy_username, proxy_password, created_at, updated_at FROM proxy_config LIMIT 1`,
-	).Scan(&c.ID, &interceptJSON, &smartJSON, &c.DefaultChannelID, &mappingsJSON, &c.MitmAll, &c.ProxyUsername, &c.ProxyPassword, &c.CreatedAt, &c.UpdatedAt)
+		`SELECT id, intercept_domains, smart_intercept_domains, default_channel_id, model_mappings, mitm_all, proxy_username, proxy_password, forward_proxy_url, forward_proxy_user, forward_proxy_pass, created_at, updated_at FROM proxy_config LIMIT 1`,
+	).Scan(&c.ID, &interceptJSON, &smartJSON, &c.DefaultChannelID, &mappingsJSON, &c.MitmAll, &c.ProxyUsername, &c.ProxyPassword, &c.ForwardProxyURL, &c.ForwardProxyUser, &c.ForwardProxyPass, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -70,8 +73,8 @@ func (r *ProxyConfigRepo) Update(c *ProxyConfigData) error {
 	mappingsJSON, _ := json.Marshal(c.ModelMappings)
 
 	_, err := r.db.Exec(
-		`UPDATE proxy_config SET intercept_domains=?, smart_intercept_domains=?, default_channel_id=?, model_mappings=?, mitm_all=?, proxy_username=?, proxy_password=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
-		string(interceptJSON), string(smartJSON), c.DefaultChannelID, string(mappingsJSON), c.MitmAll, c.ProxyUsername, c.ProxyPassword, c.ID,
+		`UPDATE proxy_config SET intercept_domains=?, smart_intercept_domains=?, default_channel_id=?, model_mappings=?, mitm_all=?, proxy_username=?, proxy_password=?, forward_proxy_url=?, forward_proxy_user=?, forward_proxy_pass=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		string(interceptJSON), string(smartJSON), c.DefaultChannelID, string(mappingsJSON), c.MitmAll, c.ProxyUsername, c.ProxyPassword, c.ForwardProxyURL, c.ForwardProxyUser, c.ForwardProxyPass, c.ID,
 	)
 	return err
 }

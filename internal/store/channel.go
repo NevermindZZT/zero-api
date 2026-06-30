@@ -11,6 +11,7 @@ type Channel struct {
 	APIKey    string    `json:"api_key,omitempty"`
 	Status    string    `json:"status"` // active, inactive
 	Priority  int       `json:"priority"`   // 0=最高优先级，越大优先级越低
+	UseProxy  bool      `json:"use_proxy"`  // 是否通过全局出站代理转发请求
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -24,7 +25,7 @@ func NewChannelRepo(db *DB) *ChannelRepo {
 }
 
 func (r *ChannelRepo) List() ([]Channel, error) {
-	rows, err := r.db.Query(`SELECT id, name, type, base_url, api_key, status, priority, created_at, updated_at FROM channels ORDER BY priority, id`)
+	rows, err := r.db.Query(`SELECT id, name, type, base_url, api_key, status, priority, use_proxy, created_at, updated_at FROM channels ORDER BY priority, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +34,7 @@ func (r *ChannelRepo) List() ([]Channel, error) {
 	var channels []Channel
 	for rows.Next() {
 		var c Channel
-		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.BaseURL, &c.APIKey, &c.Status, &c.Priority, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.BaseURL, &c.APIKey, &c.Status, &c.Priority, &c.UseProxy, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		channels = append(channels, c)
@@ -44,8 +45,8 @@ func (r *ChannelRepo) List() ([]Channel, error) {
 func (r *ChannelRepo) GetByID(id int64) (*Channel, error) {
 	c := &Channel{}
 	err := r.db.QueryRow(
-		`SELECT id, name, type, base_url, api_key, status, priority, created_at, updated_at FROM channels WHERE id = ?`, id,
-	).Scan(&c.ID, &c.Name, &c.Type, &c.BaseURL, &c.APIKey, &c.Status, &c.Priority, &c.CreatedAt, &c.UpdatedAt)
+		`SELECT id, name, type, base_url, api_key, status, priority, use_proxy, created_at, updated_at FROM channels WHERE id = ?`, id,
+	).Scan(&c.ID, &c.Name, &c.Type, &c.BaseURL, &c.APIKey, &c.Status, &c.Priority, &c.UseProxy, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -54,8 +55,8 @@ func (r *ChannelRepo) GetByID(id int64) (*Channel, error) {
 
 func (r *ChannelRepo) Create(c *Channel) (int64, error) {
 	result, err := r.db.Exec(
-		`INSERT INTO channels (name, type, base_url, api_key, status, priority) VALUES (?, ?, ?, ?, ?, ?)`,
-		c.Name, c.Type, c.BaseURL, c.APIKey, c.Status, c.Priority,
+		`INSERT INTO channels (name, type, base_url, api_key, status, priority, use_proxy) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		c.Name, c.Type, c.BaseURL, c.APIKey, c.Status, c.Priority, c.UseProxy,
 	)
 	if err != nil {
 		return 0, err
@@ -65,8 +66,8 @@ func (r *ChannelRepo) Create(c *Channel) (int64, error) {
 
 func (r *ChannelRepo) Update(c *Channel) error {
 	_, err := r.db.Exec(
-		`UPDATE channels SET name=?, type=?, base_url=?, api_key=?, status=?, priority=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
-		c.Name, c.Type, c.BaseURL, c.APIKey, c.Status, c.Priority, c.ID,
+		`UPDATE channels SET name=?, type=?, base_url=?, api_key=?, status=?, priority=?, use_proxy=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		c.Name, c.Type, c.BaseURL, c.APIKey, c.Status, c.Priority, c.UseProxy, c.ID,
 	)
 	return err
 }

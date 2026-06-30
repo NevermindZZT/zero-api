@@ -3,7 +3,7 @@ import { h, onMounted, ref } from 'vue'
 import {
   NButton, NCard, NDataTable, NModal, NForm, NFormItem,
   NInput, NInputNumber, NSelect, NSpace, NTag, NPopconfirm, NMessageProvider,
-  useMessage, NSpin, NIcon,
+  useMessage, NSpin, NIcon, NSwitch,
 } from 'naive-ui'
 import { GlobeSharp } from '@vicons/ionicons5'
 import { channelApi } from '@/api'
@@ -14,7 +14,7 @@ const channels = ref<any[]>([])
 const showModal = ref(false)
 const editing = ref<any>(null)
 const syncingId = ref<number | null>(null)
-const form = ref({ name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99 })
+const form = ref({ name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99, use_proxy: false })
 
 const channelTypes = [
   { label: 'OpenAI 兼容', value: 'openai' },
@@ -43,6 +43,16 @@ const columns = [
       r.status === 'active'
         ? h(NTag, { type: 'success', size: 'small' }, () => '启用')
         : h(NTag, { type: 'default', size: 'small' }, () => '禁用')
+    ),
+  },
+  {
+    title: '代理',
+    key: 'use_proxy',
+    width: 80,
+    render: (r: any) => (
+      r.use_proxy
+        ? h(NTag, { type: 'warning', size: 'small' }, () => '代理')
+        : h(NTag, { type: 'default', size: 'small' }, () => '直连')
     ),
   },
   {
@@ -85,7 +95,7 @@ async function loadChannels() {
 
 function openCreate() {
   editing.value = null
-  form.value = { name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99 }
+  form.value = { name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99, use_proxy: false }
   showModal.value = true
 }
 
@@ -171,6 +181,12 @@ async function syncModels(id: number) {
           </NFormItem>
           <NFormItem label="优先级" label-description="数值越小优先级越高，0 最高">
             <NInputNumber v-model:value="form.priority" :min="0" :max="999" style="width:100%" />
+          </NFormItem>
+          <NFormItem label="出站代理">
+            <NSwitch v-model:value="form.use_proxy" />
+            <span style="color:#94a3b8;font-size:13px;margin-left:8px">
+              启用后此渠道的请求通过全局代理转发
+            </span>
           </NFormItem>
         </NForm>
         <template #footer>

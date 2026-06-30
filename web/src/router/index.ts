@@ -34,6 +34,12 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/forward-proxy',
+      name: 'forward-proxy',
+      component: () => import('@/views/ForwardProxy.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/usage',
       name: 'usage',
       component: () => import('@/views/Usage.vue'),

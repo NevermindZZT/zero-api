@@ -16,15 +16,16 @@ import (
 )
 
 type ProxyHandler struct {
-	channelRepo *store.ChannelRepo
-	modelRepo   *store.ModelRepo
-	usageRepo   *store.UsageRepo
-	apiKeyRepo  *store.APIKeyRepo
+	channelRepo    *store.ChannelRepo
+	modelRepo      *store.ModelRepo
+	usageRepo      *store.UsageRepo
+	apiKeyRepo     *store.APIKeyRepo
+	proxyConfigRepo *store.ProxyConfigRepo
 	requestTimeout time.Duration
 }
 
-func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo, requestTimeout time.Duration) *ProxyHandler {
-	return &ProxyHandler{channelRepo: channelRepo, modelRepo: modelRepo, usageRepo: usageRepo, apiKeyRepo: apiKeyRepo, requestTimeout: requestTimeout}
+func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo, requestTimeout time.Duration, proxyConfigRepo *store.ProxyConfigRepo) *ProxyHandler {
+	return &ProxyHandler{channelRepo: channelRepo, modelRepo: modelRepo, usageRepo: usageRepo, apiKeyRepo: apiKeyRepo, requestTimeout: requestTimeout, proxyConfigRepo: proxyConfigRepo}
 }
 
 // ListLocalModels 返回本地启用的模型列表（兼容 OpenAI /v1/models）
@@ -239,7 +240,23 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 
 	// 转发请求
 	startTime := time.Now()
-	client := upstream.NewHTTPClient()
+	var client *http.Client
+	if ch.UseProxy && h.proxyConfigRepo != nil {
+		cfg, err := h.proxyConfigRepo.Get()
+		if err == nil && cfg.ForwardProxyURL != "" {
+			client, err = upstream.NewHTTPClientWithProxy(
+				cfg.ForwardProxyURL,
+				cfg.ForwardProxyUser,
+				cfg.ForwardProxyPass,
+			)
+			if err != nil {
+				log.Printf("[中转] 渠道 %s 代理配置错误，回退直连: %v", ch.Name, err)
+			}
+		}
+	}
+	if client == nil {
+		client = upstream.NewHTTPClient()
+	}
 	client.Timeout = h.requestTimeout
 	resp, err := client.Do(req)
 	if err != nil {
