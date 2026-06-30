@@ -25,6 +25,7 @@ type ModelDefault struct {
 type Config struct {
 	Server        ServerConfig           `yaml:"server"`
 	Proxy         ProxyConfig            `yaml:"proxy"`
+	Upstream      UpstreamConfig         `yaml:"upstream"`
 	Database      DatabaseConfig          `yaml:"database"`
 	Auth          AuthConfig              `yaml:"auth"`
 	ModelDefaults map[string]ModelDefault `yaml:"model_defaults"`
@@ -53,6 +54,10 @@ type ProxyConfig struct {
 	Port                  int      `yaml:"port"`
 	InterceptDomains      []string `yaml:"intercept_domains"`
 	SmartInterceptDomains []string `yaml:"smart_intercept_domains"`
+}
+
+type UpstreamConfig struct {
+	RequestTimeoutSeconds int `yaml:"request_timeout_seconds"`
 }
 
 func (p ProxyConfig) Addr() string {
@@ -116,6 +121,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Proxy.Port == 0 {
 		c.Proxy.Port = 8520
+	}
+	if c.Upstream.RequestTimeoutSeconds == 0 {
+		c.Upstream.RequestTimeoutSeconds = 60
 	}
 	if c.Database.Path == "" {
 		c.Database.Path = "data/zero-api.db"

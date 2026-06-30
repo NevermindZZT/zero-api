@@ -39,6 +39,7 @@ const dailyColumns = [
 
 const recordColumns = [
   { title: '模型', key: 'request_model' },
+  { title: '渠道', key: 'channel_name', render: (r: any) => r.channel_name || '-' },
   { title: 'API Key', key: 'api_key_name', render: (r: any) => r.api_key_name || '-' },
   { title: '输入', key: 'prompt_tokens' },
   { title: '输出', key: 'completion_tokens' },

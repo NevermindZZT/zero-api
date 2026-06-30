@@ -20,10 +20,11 @@ type ProxyHandler struct {
 	modelRepo   *store.ModelRepo
 	usageRepo   *store.UsageRepo
 	apiKeyRepo  *store.APIKeyRepo
+	requestTimeout time.Duration
 }
 
-func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo) *ProxyHandler {
-	return &ProxyHandler{channelRepo: channelRepo, modelRepo: modelRepo, usageRepo: usageRepo, apiKeyRepo: apiKeyRepo}
+func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo, requestTimeout time.Duration) *ProxyHandler {
+	return &ProxyHandler{channelRepo: channelRepo, modelRepo: modelRepo, usageRepo: usageRepo, apiKeyRepo: apiKeyRepo, requestTimeout: requestTimeout}
 }
 
 // ListLocalModels 返回本地启用的模型列表（兼容 OpenAI /v1/models）
@@ -239,7 +240,7 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 	// 转发请求
 	startTime := time.Now()
 	client := upstream.NewHTTPClient()
-	client.Timeout = 5 * time.Minute
+	client.Timeout = h.requestTimeout
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("上游请求失败: %w", err)
@@ -258,6 +259,10 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 		convertedResp = respBytes
 	}
 
+	if shouldFailoverStatus(resp.StatusCode) {
+		return fmt.Errorf("上游返回可切换错误状态 %d: %s", resp.StatusCode, string(respBytes))
+	}
+
 	// 记录使用信息
 	go h.recordUsage(bodyBytes, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
 
@@ -269,6 +274,14 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 	}
 	c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), convertedResp)
 	return nil
+}
+
+func shouldFailoverStatus(statusCode int) bool {
+	switch statusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusRequestTimeout, http.StatusTooManyRequests:
+		return true
+	}
+	return statusCode >= 500
 }
 
 // splitAuth 解析 Authorization 头

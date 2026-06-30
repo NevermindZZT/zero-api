@@ -16,6 +16,10 @@ proxy:
   # 智能拦截域名（仅拦截 LLM 推理请求）
   smart_intercept_domains: []
 
+upstream:
+  # 上游请求超时时间（秒）。超时会触发渠道故障切换
+  request_timeout_seconds: 60
+
 database:
   path: "data/zero-api.db"
 

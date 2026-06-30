@@ -33,15 +33,17 @@ type ProxyAdapter struct {
 	usageRepo     *store.UsageRepo
 	apiKeyRepo    *store.APIKeyRepo
 	modelMappings map[string]ModelMappingConfig
+	requestTimeout time.Duration
 }
 
-func NewProxyAdapter(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo) *ProxyAdapter {
+func NewProxyAdapter(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo, requestTimeout time.Duration) *ProxyAdapter {
 	return &ProxyAdapter{
 		channelRepo:   channelRepo,
 		modelRepo:     modelRepo,
 		usageRepo:     usageRepo,
 		apiKeyRepo:    apiKeyRepo,
 		modelMappings: make(map[string]ModelMappingConfig),
+		requestTimeout: requestTimeout,
 	}
 }
 
@@ -278,6 +280,14 @@ func (pa *ProxyAdapter) resolveAndValidateAPIKey(headers map[string]string) (*in
 	return &k.ID, nil
 }
 
+func shouldFailoverStatus(statusCode int) bool {
+	switch statusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusRequestTimeout, http.StatusTooManyRequests:
+		return true
+	}
+	return statusCode >= 500
+}
+
 // tryForwardModel 尝试将请求转发到指定渠道，成功返回响应，失败返回 error
 func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, originalModel string, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64) (int, map[string]string, []byte, error) {
 	// 检查模型映射
@@ -338,7 +348,7 @@ func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, 
 	// 转发
 	startTime := time.Now()
 	client := upstream.NewHTTPClient()
-	client.Timeout = 5 * time.Minute
+	client.Timeout = pa.requestTimeout
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("上游请求失败: %w", err)
@@ -352,6 +362,10 @@ func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, 
 	convertedResp, err := adapt.ConvertResponse(respBytes)
 	if err != nil {
 		convertedResp = respBytes
+	}
+
+	if shouldFailoverStatus(resp.StatusCode) {
+		return resp.StatusCode, nil, nil, fmt.Errorf("上游返回可切换错误状态 %d: %s", resp.StatusCode, string(respBytes))
 	}
 
 	// 重写响应中的模型名

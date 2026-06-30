@@ -6,6 +6,7 @@ import "time"
 type UsageRecord struct {
 	ID               int64     `json:"id"`
 	ChannelID        *int64    `json:"channel_id,omitempty"`
+	ChannelName      string    `json:"channel_name,omitempty"`
 	ModelID          *int64    `json:"model_id,omitempty"`
 	APIKeyID         *int64    `json:"api_key_id,omitempty"`
 	APIKeyName       string    `json:"api_key_name,omitempty"`
@@ -148,9 +149,11 @@ func (r *UsageRepo) GetRecentRecords(limit int, apiKeyID ...string) ([]UsageReco
 		`SELECT u.id, u.channel_id, u.model_id, u.api_key_id, u.request_model,
 		        u.prompt_tokens, u.completion_tokens, u.cache_hit_tokens, u.total_tokens,
 		        u.latency_ms, u.cost, u.created_at,
-		        COALESCE(ak.name, '') AS api_key_name
+		        COALESCE(ak.name, '') AS api_key_name,
+		        COALESCE(c.name, '') AS channel_name
 		 FROM usage_records u
-		 LEFT JOIN api_keys ak ON u.api_key_id = ak.id`+where+` ORDER BY u.created_at DESC LIMIT ?`, args...,
+		 LEFT JOIN api_keys ak ON u.api_key_id = ak.id
+		 LEFT JOIN channels c ON u.channel_id = c.id`+where+` ORDER BY u.created_at DESC LIMIT ?`, args...,
 	)
 	if err != nil {
 		return nil, err
@@ -163,7 +166,7 @@ func (r *UsageRepo) GetRecentRecords(limit int, apiKeyID ...string) ([]UsageReco
 		var u UsageRecord
 		if err := rows.Scan(&u.ID, &u.ChannelID, &u.ModelID, &u.APIKeyID, &u.RequestModel,
 			&u.PromptTokens, &u.CompletionTokens, &u.CacheHitTokens, &u.TotalTokens,
-			&u.LatencyMs, &u.Cost, &u.CreatedAt, &u.APIKeyName); err != nil {
+			&u.LatencyMs, &u.Cost, &u.CreatedAt, &u.APIKeyName, &u.ChannelName); err != nil {
 			return nil, err
 		}
 		records = append(records, u)

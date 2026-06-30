@@ -30,6 +30,7 @@ let pieChart: echarts.ECharts | null = null
 
 const recordColumns = [
   { title: '模型', key: 'request_model' },
+  { title: '渠道', key: 'channel_name', render: (r: any) => r.channel_name || '-' },
   { title: '输入', key: 'prompt_tokens' },
   { title: '输出', key: 'completion_tokens' },
   { title: '缓存命中', key: 'cache_hit_tokens' },
@@ -44,6 +45,33 @@ const statCards = [
   { label: '费用', value: 'total_cost', icon: CashSharp, color: '#eab308', bg: 'rgba(250,204,21,0.15)', format: 'cost' },
   { label: '活跃渠道', value: 'active_channels', icon: CubeSharp, color: '#a855f7', bg: 'rgba(168,85,247,0.15)' },
 ]
+
+function formatLocalDate(date: Date) {
+  const year = date.getFullYear()
+  const month = `${date.getMonth() + 1}`.padStart(2, '0')
+  const day = `${date.getDate()}`.padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function getRangeStartDate(range: 'total' | 'month' | 'week' | 'today') {
+  const today = new Date()
+  if (range === 'today') {
+    return new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  }
+  if (range === 'month') {
+    return new Date(today.getFullYear(), today.getMonth(), 1)
+  }
+  if (range === 'week') {
+    const day = today.getDay()
+    const diff = day === 0 ? 6 : day - 1
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+    start.setDate(start.getDate() - diff)
+    return start
+  }
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  start.setDate(start.getDate() - 90)
+  return start
+}
 
 function now() {
   const d = new Date()
@@ -65,31 +93,7 @@ const rangeOverview = computed(() => {
   if (timeRange.value === 'total') {
     return ov // 原始总览数据
   }
-  if (timeRange.value === 'today') {
-    return {
-      total_requests: ov.today_requests || 0,
-      total_tokens: ov.today_tokens || 0,
-      total_cost: ov.total_cost, // 今日费用无法单独聚合，展示总费用
-      total_cache_hits: 0,
-      cache_hit_rate: 0,
-      active_channels: ov.active_channels,
-      active_models: ov.active_models,
-    }
-  }
-
-  // 过滤日期范围
-  const now = new Date()
-  let startDate: Date
-  if (timeRange.value === 'month') {
-    startDate = new Date(now.getFullYear(), now.getMonth(), 1)
-  } else {
-    // week: 从周一算起
-    const day = now.getDay()
-    const diff = day === 0 ? 6 : day - 1 // 周一为 0
-    startDate = new Date(now)
-    startDate.setDate(now.getDate() - diff)
-  }
-  const start = startDate.toISOString().split('T')[0]
+  const start = formatLocalDate(getRangeStartDate(timeRange.value))
 
   const filtered = (dailyStats.value || []).filter((d: any) => d.date >= start)
   const sum = {
@@ -116,19 +120,7 @@ const rangeOverview = computed(() => {
 // 根据时间范围过滤 dailyStats（供图表使用）
 const filteredDailyStats = computed(() => {
   if (timeRange.value === 'total') return dailyStats.value
-  const now = new Date()
-  let startDate: Date
-  if (timeRange.value === 'today') {
-    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  } else if (timeRange.value === 'month') {
-    startDate = new Date(now.getFullYear(), now.getMonth(), 1)
-  } else {
-    const day = now.getDay()
-    const diff = day === 0 ? 6 : day - 1
-    startDate = new Date(now)
-    startDate.setDate(now.getDate() - diff)
-  }
-  const start = startDate.toISOString().split('T')[0]
+  const start = formatLocalDate(getRangeStartDate(timeRange.value))
   return (dailyStats.value || []).filter((d: any) => d.date >= start)
 })
 
@@ -144,25 +136,8 @@ async function loadData() {
     const today = new Date()
     let start: string | undefined
     let end: string | undefined
-    if (timeRange.value === 'month') {
-      const s = new Date(today.getFullYear(), today.getMonth(), 1)
-      start = s.toISOString().split('T')[0]
-    } else if (timeRange.value === 'week') {
-      const day = today.getDay()
-      const diff = day === 0 ? 6 : day - 1
-      const s = new Date(today)
-      s.setDate(today.getDate() - diff)
-      start = s.toISOString().split('T')[0]
-    } else if (timeRange.value === 'today') {
-      start = today.toISOString().split('T')[0]
-    }
-    // total: 获取近90天数据足够展示
-    if (timeRange.value === 'total') {
-      const s = new Date(today)
-      s.setDate(today.getDate() - 90)
-      start = s.toISOString().split('T')[0]
-    }
-    end = today.toISOString().split('T')[0]
+    start = formatLocalDate(getRangeStartDate(timeRange.value))
+    end = formatLocalDate(today)
 
     const [overviewRes, dailyRes, recordsRes] = await Promise.all([
       usageApi.overview(),

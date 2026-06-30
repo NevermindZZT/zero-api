@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { NMenu, NLayoutSider, NIcon } from 'naive-ui'
 import {
   BarChartSharp,
+  ChatbubbleEllipsesSharp,
   GlobeSharp,
   HardwareChipSharp,
   ShieldCheckmarkSharp,
@@ -36,6 +37,7 @@ const menuOptions = [
       { label: '渠道管理', key: '/channels', icon: renderIcon(GlobeSharp) },
       { label: '模型管理', key: '/models', icon: renderIcon(HardwareChipSharp) },
       { label: 'API 密钥', key: '/api-keys', icon: renderIcon(KeySharp) },
+      { label: 'Chat 测试', key: '/chat', icon: renderIcon(ChatbubbleEllipsesSharp) },
     ],
   },
   {
@@ -48,7 +50,7 @@ const menuOptions = [
   },
 ]
 
-const appVersion = 'v1.0.3'
+const appVersion = 'v1.0.4'
 const projectUrl = 'https://github.com/NevermindZZT/zero-api'
 
 const activeKey = ref(route.path)

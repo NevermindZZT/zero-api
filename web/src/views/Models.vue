@@ -2,7 +2,7 @@
 import { onMounted, ref, h, computed, type VNode } from 'vue'
 import {
   NButton, NCard, NDataTable, NSpace, NTag, NModal, NPopconfirm,
-  NForm, NFormItem, NInput, NInputNumber, NSwitch, NDivider,
+  NForm, NFormItem, NInput, NInputNumber, NSwitch, NDivider, NSelect,
   useMessage, NSpin, NIcon,
 } from 'naive-ui'
 import { HardwareChipSharp } from '@vicons/ionicons5'
@@ -24,10 +24,15 @@ const form = ref({
 // 批量操作
 const checkedRowKeys = ref<DataTableRowKey[]>([])
 const batchDisabled = computed(() => checkedRowKeys.value.length === 0)
+const statusFilter = ref<'all' | 'active' | 'inactive'>('all')
 
 const totalModels = computed(() => models.value.length)
 const activeModels = computed(() => models.value.filter(m => m.status === 'active').length)
 const inactiveModels = computed(() => totalModels.value - activeModels.value)
+const filteredModels = computed(() => {
+  if (statusFilter.value === 'all') return models.value
+  return models.value.filter((model) => model.status === statusFilter.value)
+})
 
 const columns = [
   { type: 'selection' as const },
@@ -187,6 +192,19 @@ async function batchAction(action: string) {
             <span style="color:#94a3b8">{{ inactiveModels }} 禁用</span>
           </p>
         </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="color:#94a3b8;font-size:13px">状态过滤</span>
+          <NSelect
+            v-model:value="statusFilter"
+            size="small"
+            style="width:140px"
+            :options="[
+              { label: '全部模型', value: 'all' },
+              { label: '仅启用', value: 'active' },
+              { label: '仅禁用', value: 'inactive' },
+            ]"
+          />
+        </div>
       </div>
 
       <!-- 批量操作栏 -->
@@ -208,7 +226,7 @@ async function batchAction(action: string) {
       <NCard style="flex:1;min-height:0">
         <NDataTable
           :columns="columns"
-          :data="models"
+          :data="filteredModels"
           :bordered="false"
           :row-key="(row: any) => row.id"
           v-model:checked-row-keys="checkedRowKeys"

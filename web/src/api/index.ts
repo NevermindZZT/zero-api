@@ -53,6 +53,22 @@ export const modelApi = {
   batch: (action: string, ids: number[]) => api.post('/models/batch', { action, ids }),
 }
 
+export const chatTestApi = {
+  models: (apiKey: string) => axios.get('/v1/models', {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    timeout: 30000,
+  }),
+  chat: (apiKey: string, model: string, content: string) => axios.post('/v1/chat/completions', {
+    model,
+    messages: [
+      { role: 'user', content },
+    ],
+  }, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    timeout: 120000,
+  }),
+}
+
 // ===== Usage API =====
 export const usageApi = {
   overview: (apiKeyId?: number) => api.get('/stats/overview', { params: { api_key_id: apiKeyId || undefined } }),

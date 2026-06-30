@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/never/zero-api/internal/config"
@@ -46,6 +47,7 @@ func main() {
 	defer db.Close()
 
 	svc := store.NewService(db)
+	requestTimeout := time.Duration(cfg.Upstream.RequestTimeoutSeconds) * time.Second
 
 	// 初始化上游同步器（传入配置文件中的模型默认值）
 	syncer := upstream.NewSyncer(svc.Channel, svc.Model, cfg.ModelDefaults)
@@ -54,7 +56,7 @@ func main() {
 	channelH := handler.NewChannelHandler(svc.Channel, svc.Model)
 	modelH := handler.NewModelHandler(svc.Model)
 	usageH := handler.NewUsageHandler(svc.Usage)
-	proxyH := handler.NewProxyHandler(svc.Channel, svc.Model, svc.Usage, svc.APIKey)
+	proxyH := handler.NewProxyHandler(svc.Channel, svc.Model, svc.Usage, svc.APIKey, requestTimeout)
 	proxyConfigH := handler.NewProxyConfigHandler(svc.ProxyConfig, "certs")
 	syncH := handler.NewSyncHandler(syncer)
 	authH := handler.NewAuthHandler(cfg.Auth.Username, cfg.Auth.Password, cfg.Auth.Secret)
@@ -200,7 +202,7 @@ func main() {
 			router := proxy.NewRequestRouter(interceptDomains, smartDomains, mitmAll)
 
 			// 初始化代理适配器
-			pAdapter := proxy.NewProxyAdapter(svc.Channel, svc.Model, svc.Usage, svc.APIKey)
+			pAdapter := proxy.NewProxyAdapter(svc.Channel, svc.Model, svc.Usage, svc.APIKey, requestTimeout)
 			// 加载模型映射配置
 			if err == nil && len(proxyCfg.ModelMappings) > 0 {
 				mappings := make(map[string]proxy.ModelMappingConfig)
