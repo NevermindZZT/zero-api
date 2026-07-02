@@ -29,13 +29,8 @@ func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo,
 }
 
 // ListLocalModels 返回本地启用的模型列表（兼容 OpenAI /v1/models）
+// 格式参考 OpenRouter /api/v1/models，返回丰富的模型元信息
 func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
-	// 验证 API Key
-	if _, err := h.resolveAndValidateAPIKey(c); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
-		return
-	}
-
 	models, err := h.modelRepo.List(0)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -47,12 +42,86 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 		if m.Status != "active" {
 			continue
 		}
-		data = append(data, gin.H{
-			"id":       m.ModelID,
-			"object":   "model",
-			"created":  m.CreatedAt.Unix(),
-			"owned_by": m.ChannelName,
-		})
+
+		displayName := m.DisplayName
+		if displayName == "" {
+			displayName = m.ModelID
+		}
+
+		// 构建输入/输出模态
+		inputModalities := []string{"text"}
+		outputModalities := []string{"text"}
+		if m.SupportsVision {
+			inputModalities = append(inputModalities, "image")
+		}
+
+		// 构建 supported_parameters
+		supportedParams := []string{"max_tokens", "temperature", "top_p", "seed", "stop", "response_format", "structured_outputs"}
+		if m.SupportsTools {
+			supportedParams = append(supportedParams, "tools", "tool_choice")
+		}
+		if m.SupportsThinking {
+			supportedParams = append(supportedParams, "reasoning", "include_reasoning")
+		}
+
+		// 构建 pricing（OpenRouter 格式：每 token 价格的字符串表示）
+		pricing := gin.H{
+			"prompt":     fmt.Sprintf("%.9f", m.PricingInput/1000000),
+			"completion": fmt.Sprintf("%.9f", m.PricingOutput/1000000),
+		}
+		if m.PricingCacheRead > 0 {
+			pricing["input_cache_read"] = fmt.Sprintf("%.9f", m.PricingCacheRead/1000000)
+		}
+		if m.PricingCacheWrite > 0 {
+			pricing["input_cache_write"] = fmt.Sprintf("%.9f", m.PricingCacheWrite/1000000)
+		}
+
+		// 构建 default_parameters（OpenRouter 格式）
+		defaultParams := gin.H{
+			"temperature":          nil,
+			"top_p":                nil,
+			"top_k":                nil,
+			"frequency_penalty":    nil,
+			"presence_penalty":     nil,
+			"repetition_penalty":   nil,
+		}
+
+		entry := gin.H{
+			"id":              m.ModelID,
+			"name":            displayName,
+			"created":         m.CreatedAt.Unix(),
+			"description":     fmt.Sprintf("zero-api model: %s via %s", m.ModelID, m.ChannelName),
+			"context_length":  m.ContextWindow,
+			"architecture": gin.H{
+				"modality":          "text->text",
+				"input_modalities":  inputModalities,
+				"output_modalities": outputModalities,
+				"tokenizer":         "Custom",
+				"instruct_type":     nil,
+			},
+			"pricing":             pricing,
+			"top_provider": gin.H{
+				"context_length":        m.ContextWindow,
+				"max_completion_tokens": m.MaxOutputTokens,
+				"is_moderated":          false,
+			},
+			"per_request_limits":   nil,
+			"supported_parameters": supportedParams,
+			"default_parameters":   defaultParams,
+			"supported_voices":     nil,
+			"knowledge_cutoff":     nil,
+			"expiration_date":      nil,
+		}
+
+		// reasoning 字段（OpenRouter 格式）
+		if m.SupportsThinking {
+			entry["reasoning"] = gin.H{
+				"mandatory":       false,
+				"default_enabled": true,
+			}
+		}
+
+		data = append(data, entry)
 	}
 	if data == nil {
 		data = []gin.H{}

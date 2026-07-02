@@ -141,7 +141,19 @@ func (pa *ProxyAdapter) HandleModelsRequest(headers map[string]string) (statusCo
 				Tokenizer:        "Custom",
 				InstructType:     nil,
 			},
-			Pricing:            map[string]string{"prompt": "0", "completion": "0"},
+			Pricing: func() map[string]string {
+				p := map[string]string{
+					"prompt":           fmt.Sprintf("%.9f", m.PricingInput/1000000),
+					"completion":       fmt.Sprintf("%.9f", m.PricingOutput/1000000),
+				}
+				if m.PricingCacheRead > 0 {
+					p["input_cache_read"] = fmt.Sprintf("%.9f", m.PricingCacheRead/1000000)
+				}
+				if m.PricingCacheWrite > 0 {
+					p["input_cache_write"] = fmt.Sprintf("%.9f", m.PricingCacheWrite/1000000)
+				}
+				return p
+			}(),
 			TopProvider: topProvider{
 				ContextLength:       m.ContextWindow,
 				MaxCompletionTokens: m.MaxOutputTokens,
@@ -149,7 +161,14 @@ func (pa *ProxyAdapter) HandleModelsRequest(headers map[string]string) (statusCo
 			},
 			PerRequestLimits:    nil,
 			SupportedParameters: params,
-			DefaultParameters:   map[string]interface{}{},
+			DefaultParameters: map[string]interface{}{
+				"temperature":        nil,
+				"top_p":              nil,
+				"top_k":              nil,
+				"frequency_penalty":  nil,
+				"presence_penalty":   nil,
+				"repetition_penalty": nil,
+			},
 			SupportedVoices:     nil,
 			KnowledgeCutoff:     nil,
 			ExpirationDate:      nil,
