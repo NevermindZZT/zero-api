@@ -88,6 +88,12 @@ const timeRangeOptions: { label: string; value: typeof timeRange.value }[] = [
 ]
 
 // 根据时间范围过滤 dailyStats 并聚合统计数据
+const rangeLabel = computed(() => {
+  const opt = timeRangeOptions.find(o => o.value === timeRange.value)
+  return opt?.label || '全部'
+})
+
+// 根据时间范围过滤 dailyStats 并聚合统计数据
 const rangeOverview = computed(() => {
   const ov = overview.value
   if (timeRange.value === 'total') {
@@ -117,28 +123,20 @@ const rangeOverview = computed(() => {
   }
 })
 
-// 根据时间范围过滤 dailyStats（供图表使用）
-const filteredDailyStats = computed(() => {
-  if (timeRange.value === 'total') return dailyStats.value
-  const start = formatLocalDate(getRangeStartDate(timeRange.value))
-  return (dailyStats.value || []).filter((d: any) => d.date >= start)
-})
-
-// 根据时间范围过滤 recentRecords（供图表使用）
-const filteredRecords = computed(() => {
-  if (timeRange.value === 'total') return recentRecords.value
-  const start = formatLocalDate(getRangeStartDate(timeRange.value))
-  return (recentRecords.value || []).filter((r: any) => {
-    const d = r.created_at?.slice(0, 10) || ''
-    return d >= start
-  })
-})
-
 // 时间范围切换时重新加载数据
 watch(timeRange, async () => {
   await loadData()
   nextTick(renderCharts)
 })
+
+function getFilteredCount() {
+  if (timeRange.value === 'total') return recentRecords.value.length
+  const start = formatLocalDate(getRangeStartDate(timeRange.value))
+  return (recentRecords.value || []).filter((r: any) => {
+    const d = r.created_at?.slice(0, 10) || ''
+    return d >= start
+  }).length
+}
 
 async function loadData() {
   try {
@@ -152,7 +150,7 @@ async function loadData() {
     const [overviewRes, dailyRes, recordsRes] = await Promise.all([
       usageApi.overview(),
       usageApi.daily(start, end),
-      usageApi.records(),
+      usageApi.records(undefined, undefined, undefined, 10000),  // 获取足够记录，前端按范围过滤
     ])
     overview.value = overviewRes.data
     dailyStats.value = dailyRes.data
@@ -199,17 +197,23 @@ function renderCharts() {
 }
 
 function renderTrendChart() {
-  if (!chartContainer.value || filteredDailyStats.value.length === 0) {
-    trendChart?.dispose()
+  // 在函数内直接计算过滤后的数据
+  let stats = dailyStats.value
+  if (timeRange.value !== 'total') {
+    const start = formatLocalDate(getRangeStartDate(timeRange.value))
+    stats = (dailyStats.value || []).filter((d: any) => d.date >= start)
+  }
+  // 每次完全重新创建图表实例
+  if (trendChart) {
+    trendChart.dispose()
     trendChart = null
-    return
   }
-  if (!trendChart) {
-    trendChart = echarts.init(chartContainer.value)
-  }
-  const dates = filteredDailyStats.value.map((d: any) => d.date).reverse()
-  const tokens = filteredDailyStats.value.map((d: any) => d.total_tokens).reverse()
-  const requests = filteredDailyStats.value.map((d: any) => d.requests).reverse()
+  if (!chartContainer.value || !stats || stats.length === 0) return
+
+  trendChart = echarts.init(chartContainer.value)
+  const dates = stats.map((d: any) => d.date).reverse()
+  const tokens = stats.map((d: any) => d.total_tokens).reverse()
+  const requests = stats.map((d: any) => d.requests).reverse()
 
   trendChart.setOption({
     tooltip: { trigger: 'axis' },
@@ -233,16 +237,25 @@ function renderTrendChart() {
 }
 
 function renderPieChart() {
-  if (!pieContainer.value || filteredRecords.value.length === 0) {
-    pieChart?.dispose()
+  // 在函数内直接计算过滤后的数据，避免 computed 响应式时机问题
+  let records = recentRecords.value
+  if (timeRange.value !== 'total') {
+    const start = formatLocalDate(getRangeStartDate(timeRange.value))
+    records = (recentRecords.value || []).filter((r: any) => {
+      const d = r.created_at?.slice(0, 10) || ''
+      return d >= start
+    })
+  }
+  // 每次完全重新创建图表实例，确保数据强制刷新
+  if (pieChart) {
+    pieChart.dispose()
     pieChart = null
-    return
   }
-  if (!pieChart) {
-    pieChart = echarts.init(pieContainer.value)
-  }
+  if (!pieContainer.value || !records || records.length === 0) return
+
+  pieChart = echarts.init(pieContainer.value)
   const modelMap = new Map<string, number>()
-  filteredRecords.value.forEach((r: any) => {
+  records.forEach((r: any) => {
     modelMap.set(r.request_model, (modelMap.get(r.request_model) || 0) + r.total_tokens)
   })
   const data = Array.from(modelMap.entries()).map(([name, value]) => ({ name, value }))
@@ -345,9 +358,13 @@ function formatTokens(n: number) {
                 <span>模型用量分布</span>
               </div>
             </template>
-            <div class="chart-card-body">
+            <div class="chart-card-body" style="flex-direction:column">
               <div ref="pieContainer" style="height:200px;width:100%"></div>
               <p v-if="recentRecords.length === 0" style="color:#94a3b8;text-align:center;padding:40px">暂无数据</p>
+              <div v-else style="display:flex;gap:16px;font-size:12px;color:#94a3b8;padding:4px 0 0">
+                <span>范围: <b style="color:#e2e8f0">{{ rangeLabel }}</b></span>
+                <span>统计记录: <b style="color:#e2e8f0">{{ getFilteredCount() }}</b> / {{ recentRecords.length }} 条</span>
+              </div>
             </div>
           </NCard>
         </NGi>

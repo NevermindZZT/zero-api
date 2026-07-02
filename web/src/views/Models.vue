@@ -6,12 +6,13 @@ import {
   useMessage, NSpin, NIcon,
 } from 'naive-ui'
 import { HardwareChipSharp } from '@vicons/ionicons5'
-import { modelApi } from '@/api'
+import { modelApi, channelApi } from '@/api'
 import type { DataTableRowKey } from 'naive-ui'
 
 const message = useMessage()
 const loading = ref(true)
 const models = ref<any[]>([])
+const channels = ref<any[]>([])
 const showModal = ref(false)
 const editing = ref<any>(null)
 const form = ref({
@@ -25,13 +26,20 @@ const form = ref({
 const checkedRowKeys = ref<DataTableRowKey[]>([])
 const batchDisabled = computed(() => checkedRowKeys.value.length === 0)
 const statusFilter = ref<'all' | 'active' | 'inactive'>('all')
+const channelFilter = ref<number | null>(null)
 
 const totalModels = computed(() => models.value.length)
 const activeModels = computed(() => models.value.filter(m => m.status === 'active').length)
 const inactiveModels = computed(() => totalModels.value - activeModels.value)
 const filteredModels = computed(() => {
-  if (statusFilter.value === 'all') return models.value
-  return models.value.filter((model) => model.status === statusFilter.value)
+  let list = models.value
+  if (statusFilter.value !== 'all') {
+    list = list.filter((model) => model.status === statusFilter.value)
+  }
+  if (channelFilter.value !== null && channelFilter.value !== undefined) {
+    list = list.filter((model) => model.channel_id === channelFilter.value)
+  }
+  return list
 })
 
 const columns = [
@@ -102,7 +110,9 @@ const columns = [
   },
 ]
 
-onMounted(loadModels)
+onMounted(async () => {
+  await Promise.all([loadModels(), loadChannels()])
+})
 
 async function loadModels() {
   loading.value = true
@@ -111,6 +121,15 @@ async function loadModels() {
     models.value = res.data
   } finally {
     loading.value = false
+  }
+}
+
+async function loadChannels() {
+  try {
+    const res = await channelApi.list()
+    channels.value = res.data || []
+  } catch {
+    // 静默失败
   }
 }
 
@@ -203,6 +222,15 @@ async function batchAction(action: string) {
               { label: '仅启用', value: 'active' },
               { label: '仅禁用', value: 'inactive' },
             ]"
+          />
+          <span style="color:#94a3b8;font-size:13px;margin-left:8px">渠道过滤</span>
+          <NSelect
+            v-model:value="channelFilter"
+            size="small"
+            style="width:160px"
+            clearable
+            placeholder="全部渠道"
+            :options="channels.map((ch: any) => ({ label: ch.name, value: ch.id }))"
           />
         </div>
       </div>

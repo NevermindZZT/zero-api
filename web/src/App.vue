@@ -25,7 +25,7 @@ const isLoginPage = computed(() => route.path === '/login')
               <div class="content-container">
                 <router-view v-slot="{ Component }">
                   <transition name="fade-slide" mode="out-in">
-                    <component :is="Component" />
+                    <component :is="Component" :key="$route.path" />
                   </transition>
                 </router-view>
               </div>

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -46,9 +47,16 @@ func (h *UsageHandler) GetDailyStats(c *gin.Context) {
 
 // GetRecentRecords 获取最近使用记录
 func (h *UsageHandler) GetRecentRecords(c *gin.Context) {
-	limit := 50
+	limit := 200
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if v, err := strconv.Atoi(limitStr); err == nil && v > 0 && v <= 50000 {
+			limit = v
+		}
+	}
 	apiKeyIDStr := c.Query("api_key_id")
-	records, err := h.usageRepo.GetRecentRecords(limit, apiKeyIDStr)
+	start := c.Query("start")
+	end := c.Query("end")
+	records, err := h.usageRepo.GetRecentRecords(limit, apiKeyIDStr, start, end)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

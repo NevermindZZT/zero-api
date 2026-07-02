@@ -137,12 +137,24 @@ func (r *UsageRepo) GetDailyStats(start, end string, apiKeyID ...string) ([]Dail
 }
 
 // GetRecentRecords 获取最近使用记录
-func (r *UsageRepo) GetRecentRecords(limit int, apiKeyID ...string) ([]UsageRecord, error) {
+func (r *UsageRepo) GetRecentRecords(limit int, apiKeyID, startDate, endDate string) ([]UsageRecord, error) {
 	args := []interface{}{}
+	conditions := []string{}
+	if apiKeyID != "" {
+		conditions = append(conditions, "u.api_key_id = ?")
+		args = append(args, apiKeyID)
+	}
+	if startDate != "" {
+		conditions = append(conditions, "date(u.created_at) >= ?")
+		args = append(args, startDate)
+	}
+	if endDate != "" {
+		conditions = append(conditions, "date(u.created_at) <= ?")
+		args = append(args, endDate)
+	}
 	where := ""
-	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
-		where = " WHERE api_key_id = ?"
-		args = append(args, apiKeyID[0])
+	if len(conditions) > 0 {
+		where = " WHERE " + joinConditions(conditions)
 	}
 	args = append(args, limit)
 	rows, err := r.db.Query(
@@ -175,4 +187,16 @@ func (r *UsageRepo) GetRecentRecords(limit int, apiKeyID ...string) ([]UsageReco
 		return nil, err
 	}
 	return records, nil
+}
+
+// joinConditions 拼接 SQL WHERE 条件
+func joinConditions(conds []string) string {
+	result := ""
+	for i, c := range conds {
+		if i > 0 {
+			result += " AND "
+		}
+		result += c
+	}
+	return result
 }
