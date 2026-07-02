@@ -76,3 +76,21 @@ func (r *ChannelRepo) Delete(id int64) error {
 	_, err := r.db.Exec(`DELETE FROM channels WHERE id = ?`, id)
 	return err
 }
+
+// ToggleStatus 切换渠道启用/禁用状态
+func (r *ChannelRepo) ToggleStatus(id int64) (*Channel, error) {
+	ch, err := r.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	newStatus := "inactive"
+	if ch.Status != "active" {
+		newStatus = "active"
+	}
+	_, err = r.db.Exec(`UPDATE channels SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, newStatus, id)
+	if err != nil {
+		return nil, err
+	}
+	ch.Status = newStatus
+	return ch, nil
+}

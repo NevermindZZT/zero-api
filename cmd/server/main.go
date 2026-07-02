@@ -81,6 +81,7 @@ func main() {
 		api.DELETE("/channels/:id", channelH.DeleteChannel)
 		api.POST("/channels/:id/test", syncH.TestChannel)
 		api.POST("/channels/:id/sync", syncH.SyncModels)
+		api.POST("/channels/:id/toggle", channelH.ToggleChannel)
 
 		// 模型管理
 		api.GET("/models", modelH.ListModels)

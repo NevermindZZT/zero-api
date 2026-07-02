@@ -46,7 +46,19 @@ const columns = [
   { type: 'selection' as const },
   { title: '模型 ID', key: 'model_id', ellipsis: true, width: 180 },
   { title: '显示名称', key: 'display_name', width: 140 },
-  { title: '渠道', key: 'channel_name', width: 100 },
+  {
+    title: '渠道', key: 'channel_name', width: 110,
+    render: (r: any) => {
+      if (!r.channel_name) return '-'
+      if (r.channel_status === 'inactive') {
+        return h('div', { style: 'display:flex;align-items:center;gap:4px' }, [
+          h(NTag, { size: 'tiny', type: 'error', bordered: false }, () => '禁用'),
+          h('span', { style: 'color:#94a3b8;text-decoration:line-through' }, r.channel_name),
+        ])
+      }
+      return r.channel_name
+    },
+  },
   { title: '上下文', key: 'context_window', width: 80, render: (r: any) => {
     const v = r.context_window
     if (!v || v === 0) return '-'

@@ -85,3 +85,14 @@ func (h *ChannelHandler) DeleteChannel(c *gin.Context) {
 	}
 	c.Status(http.StatusNoContent)
 }
+
+// ToggleChannel 启用/禁用渠道（不改变所属模型的启用/禁用状态）
+func (h *ChannelHandler) ToggleChannel(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	ch, err := h.channelRepo.ToggleStatus(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, ch)
+}

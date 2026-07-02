@@ -6,6 +6,7 @@ import {
   useMessage, NSpin, NIcon, NSwitch,
 } from 'naive-ui'
 import { GlobeSharp } from '@vicons/ionicons5'
+import api from '@/api'
 import { channelApi } from '@/api'
 
 const message = useMessage()
@@ -58,26 +59,30 @@ const columns = [
   {
     title: '操作',
     key: 'actions',
+    width: 200,
     render: (r: any) =>
-      h(NSpace, null, {
-        default: () => [
-          h(NButton, {
-            size: 'small', onClick: () => editChannel(r),
-          }, () => '编辑'),
-          h(NButton, {
-            size: 'small',
-            loading: syncingId.value === r.id,
-            disabled: syncingId.value !== null,
-            onClick: () => syncModels(r.id),
-          }, () => '同步'),
-          h(NPopconfirm, {
-            onPositiveClick: () => deleteChannel(r.id),
-          }, {
-            default: () => '确认删除？',
-            trigger: () => h(NButton, { size: 'small', type: 'error' }, () => '删除'),
-          }),
-        ],
-      }),
+      h('div', { style: 'display:flex;gap:4px;flex-wrap:nowrap;align-items:center' }, [
+        h(NButton, {
+          size: 'tiny', onClick: () => editChannel(r),
+        }, () => '编辑'),
+        h(NButton, {
+          size: 'tiny',
+          onClick: () => toggleChannel(r),
+          type: r.status === 'active' ? 'warning' : 'success',
+        }, () => r.status === 'active' ? '禁用' : '启用'),
+        h(NButton, {
+          size: 'tiny',
+          loading: syncingId.value === r.id,
+          disabled: syncingId.value !== null,
+          onClick: () => syncModels(r.id),
+        }, () => '同步'),
+        h(NPopconfirm, {
+          onPositiveClick: () => deleteChannel(r.id),
+        }, {
+          default: () => '确认删除？',
+          trigger: () => h(NButton, { size: 'tiny', type: 'error' }, () => '删除'),
+        }),
+      ]),
   },
 ]
 
@@ -144,6 +149,17 @@ async function syncModels(id: number) {
     syncingId.value = null
   }
 }
+
+async function toggleChannel(ch: any) {
+  try {
+    const label = ch.status === 'active' ? '禁用' : '启用'
+    await api.post(`/channels/${ch.id}/toggle`)
+    message.success(`渠道已${label}`)
+    loadChannels()
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '操作失败')
+  }
+}
 </script>
 
 <template>
@@ -157,7 +173,7 @@ async function syncModels(id: number) {
         <NButton type="primary" @click="openCreate">添加渠道</NButton>
       </div>
       <NCard style="width:100%">
-        <NDataTable :columns="columns" :data="channels" :bordered="false" :scroll-x="800" />
+        <NDataTable :columns="columns" :data="channels" :bordered="false" :scroll-x="1000" />
       </NCard>
 
       <NModal v-model:show="showModal" title="渠道" preset="card" style="width:520px">

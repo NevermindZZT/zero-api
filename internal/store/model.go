@@ -26,6 +26,7 @@ type Model struct {
 	ChannelName     string `json:"channel_name,omitempty"`
 	ChannelType     string `json:"channel_type,omitempty"`
 	ChannelPriority int    `json:"channel_priority,omitempty"`
+	ChannelStatus   string `json:"channel_status,omitempty"`
 }
 
 type ModelRepo struct {
@@ -43,6 +44,7 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 	userModifiedField := "m.user_modified"
 	channelNameType := "COALESCE(c.name, ''), COALESCE(c.type, '')"
 	channelPriority := "COALESCE(c.priority, 99)"
+	channelStatus := "COALESCE(c.status, 'active')"
 	if channelID > 0 {
 		rows, err = r.db.Query(
 			`SELECT m.id, m.channel_id, m.model_id, m.display_name,
@@ -50,7 +52,7 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 			        m.supports_vision, m.supports_thinking, m.supports_tools,
 		        m.pricing_input, m.pricing_output, m.pricing_cache_read, m.pricing_cache_write,
 		        m.status,`+userModifiedField+`, m.created_at, m.updated_at,
-		        `+channelNameType+`, `+channelPriority+`
+		        `+channelNameType+`, `+channelPriority+`, `+channelStatus+`
 			 FROM models m LEFT JOIN channels c ON m.channel_id = c.id
 			 WHERE m.channel_id = ? ORDER BY c.priority, m.id`, channelID)
 	} else {
@@ -60,7 +62,7 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 		        m.supports_vision, m.supports_thinking, m.supports_tools,
 		        m.pricing_input, m.pricing_output, m.pricing_cache_read, m.pricing_cache_write,
 		        m.status,`+userModifiedField+`, m.created_at, m.updated_at,
-		        `+channelNameType+`, `+channelPriority+`
+		        `+channelNameType+`, `+channelPriority+`, `+channelStatus+`
 			 FROM models m LEFT JOIN channels c ON m.channel_id = c.id
 			 ORDER BY c.priority, m.id`)
 	}
@@ -77,7 +79,7 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 			&m.SupportsVision, &m.SupportsThinking, &m.SupportsTools,
 			&m.PricingInput, &m.PricingOutput, &m.PricingCacheRead, &m.PricingCacheWrite,
 			&m.Status, &m.UserModified, &m.CreatedAt, &m.UpdatedAt,
-			&m.ChannelName, &m.ChannelType, &m.ChannelPriority); err != nil {
+			&m.ChannelName, &m.ChannelType, &m.ChannelPriority, &m.ChannelStatus); err != nil {
 			return nil, err
 		}
 		models = append(models, m)
@@ -93,7 +95,7 @@ func (r *ModelRepo) GetByID(id int64) (*Model, error) {
 		        m.supports_vision, m.supports_thinking, m.supports_tools,
 		        m.pricing_input, m.pricing_output, m.pricing_cache_read, m.pricing_cache_write,
 		        m.status, m.user_modified, m.created_at, m.updated_at,
-		        COALESCE(c.name, ''), COALESCE(c.type, ''), COALESCE(c.priority, 99)
+		        COALESCE(c.name, ''), COALESCE(c.type, ''), COALESCE(c.priority, 99), COALESCE(c.status, 'active')
 		 FROM models m LEFT JOIN channels c ON m.channel_id = c.id
 		 WHERE m.id = ?`, id,
 	).Scan(&m.ID, &m.ChannelID, &m.ModelID, &m.DisplayName,
@@ -101,7 +103,7 @@ func (r *ModelRepo) GetByID(id int64) (*Model, error) {
 		&m.SupportsVision, &m.SupportsThinking, &m.SupportsTools,
 		&m.PricingInput, &m.PricingOutput, &m.PricingCacheRead, &m.PricingCacheWrite,
 		&m.Status, &m.UserModified, &m.CreatedAt, &m.UpdatedAt,
-		&m.ChannelName, &m.ChannelType, &m.ChannelPriority)
+		&m.ChannelName, &m.ChannelType, &m.ChannelPriority, &m.ChannelStatus)
 	if err != nil {
 		return nil, err
 	}
