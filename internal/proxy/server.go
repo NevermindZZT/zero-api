@@ -501,7 +501,9 @@ func checkProxyBasicAuth(authHeader, user, pass string) bool {
 	if authHeader == "" || !strings.HasPrefix(authHeader, "Basic ") {
 		return false
 	}
-	decoded, err := base64.StdEncoding.DecodeString(authHeader[6:])
+	// 有些客户端会在 base64 后追加多余空白或换行
+	encoded := strings.TrimSpace(authHeader[6:])
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return false
 	}
