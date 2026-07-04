@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -287,11 +288,12 @@ func (h *ProxyHandler) resolveAndValidateAPIKey(c *gin.Context) (*int64, error) 
 	return &k.ID, nil
 }
 
-func (h *ProxyHandler) recordUsage(reqBody, rawResp, convertedResp []byte, adapt adapter.Adapter, model *store.Model, channelID int64, apiKeyID *int64, latencyMs int) {
-	var req struct {
-		Model string `json:"model"`
-	}
-	json.Unmarshal(reqBody, &req)
+func (h *ProxyHandler) recordUsage(requestModel string, rawResp, convertedResp []byte, adapt adapter.Adapter, model *store.Model, channelID int64, apiKeyID *int64, latencyMs int) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[Usage] 记录用量 panic 恢复: %v", r)
+		}
+	}()
 
 	modelID := model.ID
 	var promptTokens, completionTokens, cacheHitTokens, totalTokens int
@@ -303,14 +305,12 @@ func (h *ProxyHandler) recordUsage(reqBody, rawResp, convertedResp []byte, adapt
 		usage, err = adapt.ExtractUsage(rawResp)
 	}
 	if err != nil {
-		log.Printf("[Usage] ExtractUsage 失败 (model=%s): %v — 仍记录请求", req.Model, err)
-		// 即使提取失败也记录一条空用量，确保请求被计数
+		log.Printf("[Usage] ExtractUsage 失败 (model=%s): %v — 仍记录请求", requestModel, err)
 	} else {
 		promptTokens = usage.PromptTokens
 		completionTokens = usage.CompletionTokens
 		cacheHitTokens = usage.CacheHitTokens
 		totalTokens = usage.TotalTokens
-		// 计算费用：prompt_tokens 已包含 cache_hit_tokens，需减去缓存部分再分别计价
 		cacheMissTokens := usage.PromptTokens - usage.CacheHitTokens
 		cost = (float64(cacheMissTokens)/1000000)*model.PricingInput +
 			(float64(usage.CacheHitTokens)/1000000)*model.PricingCacheRead +
@@ -321,7 +321,7 @@ func (h *ProxyHandler) recordUsage(reqBody, rawResp, convertedResp []byte, adapt
 		ChannelID:        &channelID,
 		ModelID:          &modelID,
 		APIKeyID:         apiKeyID,
-		RequestModel:     req.Model,
+		RequestModel:     requestModel,
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
 		CacheHitTokens:   cacheHitTokens,
@@ -353,7 +353,11 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 		}
 	}
 
-	req, err := http.NewRequestWithContext(c.Request.Context(), "POST", upstreamURL, bytes.NewReader(convertedBody))
+	// 使用独立超时 context，不绑定到客户端请求 context
+	// 避免客户端断开导致上游请求被取消而错误触发熔断
+	upstreamCtx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(upstreamCtx, "POST", upstreamURL, bytes.NewReader(convertedBody))
 	if err != nil {
 		return fmt.Errorf("构造上游请求失败: %w", err)
 	}
@@ -415,7 +419,7 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 	}
 
 	// 记录使用信息
-	go h.recordUsage(bodyBytes, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
+	go h.recordUsage(matchedModel.ModelID, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
 
 	// 返回响应
 	for k, vals := range resp.Header {

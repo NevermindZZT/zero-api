@@ -19,6 +19,14 @@ func InitUsageBuffer(db *DB) {
 }
 
 func flushUsageLoop(db *DB) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[Usage] 批量写入协程 panic 恢复，重启协程: %v", r)
+			time.Sleep(3 * time.Second)
+			go flushUsageLoop(db)
+		}
+	}()
+
 	batch := make([]*UsageRecord, 0, 100)
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
