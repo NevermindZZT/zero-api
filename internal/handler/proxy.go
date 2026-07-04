@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -155,6 +156,7 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 	if data == nil {
 		data = []gin.H{}
 	}
+	c.Header("Cache-Control", "public, max-age=60")
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",
 		"data":   data,
@@ -434,8 +436,9 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 	// 记录使用信息
 	go h.recordUsage(matchedModel.ModelID, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
 
-	// 返回响应
-	for k, vals := range resp.Header {
+	// 返回响应（过滤逐跳头）
+	filteredHeaders := filterHopByHop(resp.Header)
+	for k, vals := range filteredHeaders {
 		for _, v := range vals {
 			c.Header(k, v)
 		}
@@ -446,8 +449,9 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 
 // streamResponse 流式转发上游 SSE 响应
 func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt adapter.Adapter, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, startTime time.Time) error {
-	// 设置 SSE 响应头
-	for k, vals := range resp.Header {
+	// 设置响应头（过滤逐跳头）
+	filteredHeaders := filterHopByHop(resp.Header)
+	for k, vals := range filteredHeaders {
 		for _, v := range vals {
 			c.Header(k, v)
 		}
@@ -463,35 +467,34 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 		return fmt.Errorf("ResponseWriter 不支持 Flusher")
 	}
 
-	// 使用 bufio.Scanner 逐行扫描 SSE 事件
-	scanner := bufio.NewScanner(resp.Body)
-	// 增大缓冲区以应对大行（JSON 可能很长）
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	// 使用 bufio.Reader 逐行读取，减少内存分配
+	reader := bufio.NewReaderSize(resp.Body, 64*1024)
+	var buf bytes.Buffer
 
-	var fullRespBytes []byte
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		lineCopy := make([]byte, len(line))
-		copy(lineCopy, line)
-
-		fullRespBytes = append(fullRespBytes, lineCopy...)
-		fullRespBytes = append(fullRespBytes, '\n')
-
-		// 逐行写入客户端并 flush
-		if _, err := c.Writer.Write(lineCopy); err != nil {
-			return fmt.Errorf("写入流式响应失败: %w", err)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err != nil && err != io.EOF {
+			log.Printf("[流式] 读取出错: %v", err)
+			break
 		}
-		c.Writer.Write([]byte("\n"))
+
+		// 累积完整响应用于后续用量记录
+		buf.Write(line)
+
+		// 写入客户端
+		if _, werr := c.Writer.Write(line); werr != nil {
+			return fmt.Errorf("写入流式响应失败: %w", werr)
+		}
 		flusher.Flush()
+
+		if err == io.EOF {
+			break
+		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		log.Printf("[流式] 读取 SSE 流失败: %v (模型=%s, 渠道=%s)", err, matchedModel.ModelID, ch.Name)
-		// 继续尝试记录已收到的数据，不返回 error（因为可能已写了部分数据给客户端）
-	}
-
-	// 记录使用信息（基于累积的完整响应）
+	// 记录使用信息
 	latencyMs := int(time.Since(startTime).Milliseconds())
+	fullRespBytes := buf.Bytes()
 	if len(fullRespBytes) > 0 {
 		convertedResp, _ := adapt.ConvertResponse(fullRespBytes)
 		go h.recordUsage(matchedModel.ModelID, fullRespBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
@@ -518,4 +521,31 @@ func splitAuth(auth string) []string {
 		}
 	}
 	return nil
+}
+
+// isHopByHop 判断是否为逐跳头，不应转发给客户端
+var hopByHopHeaders = map[string]bool{
+	"transfer-encoding":    true,
+	"connection":           true,
+	"keep-alive":           true,
+	"te":                   true,
+	"trailer":              true,
+	"upgrade":              true,
+	"proxy-authorization":  true,
+	"proxy-authenticate":   true,
+}
+
+func isHopByHop(key string) bool {
+	return hopByHopHeaders[key]
+}
+
+// filterHopByHop 筛除逐跳头，返回安全可转发给客户端的头
+func filterHopByHop(headers map[string][]string) map[string][]string {
+	result := make(map[string][]string, len(headers))
+	for k, vals := range headers {
+		if !isHopByHop(strings.ToLower(k)) {
+			result[k] = vals
+		}
+	}
+	return result
 }

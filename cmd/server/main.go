@@ -169,10 +169,18 @@ func main() {
 		}
 	}
 
-	// 启动 API 服务
+	// 启动 API 服务（使用 http.Server 设置超时，防止慢速连接耗尽资源）
+	apiServer := &http.Server{
+		Addr:              cfg.Server.Addr(),
+		Handler:           r,
+		ReadTimeout:       30 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       90 * time.Second,
+	}
 	go func() {
 		log.Printf("API 服务启动于 http://%s", cfg.Server.Addr())
-		if err := r.Run(cfg.Server.Addr()); err != nil {
+		if err := apiServer.ListenAndServe(); err != nil {
 			log.Fatalf("API 服务启动失败: %v", err)
 		}
 	}()
