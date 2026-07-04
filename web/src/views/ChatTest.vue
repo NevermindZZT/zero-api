@@ -19,10 +19,17 @@ const keyOptions = computed(() => apiKeys.value.map((item: any) => ({
   value: item.key,
 })))
 
-const modelOptions = computed(() => models.value.map((item: any) => ({
-  label: item.id,
-  value: item.id,
-})))
+const modelOptions = computed(() => {
+  const seen = new Set<string>()
+  return models.value.filter((item: any) => {
+    if (seen.has(item.id)) return false
+    seen.add(item.id)
+    return true
+  }).map((item: any) => ({
+    label: item.id,
+    value: item.id,
+  }))
+})
 
 onMounted(async () => {
   const res = await api.get('/api-keys')
