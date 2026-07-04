@@ -74,7 +74,8 @@ onMounted(async () => {
     apiKeys.value = keysRes.data
   } catch {}
   loadData()
-  refreshTimer = setInterval(loadData, 15000)
+  // 智能轮询：每 15s 检查是否有新数据，有变化才全量刷新
+  refreshTimer = setInterval(smartPoll, 15000)
 })
 
 onUnmounted(() => {
@@ -98,6 +99,22 @@ async function loadData() {
     records.value = recordsRes.data
   } finally {
     loading.value = false
+  }
+}
+
+// 智能轮询：每 15s 只检查 overview，有变化才全量刷新
+async function smartPoll() {
+  try {
+    const ak = selectedApiKeyId.value || undefined
+    const res = await usageApi.overview(ak)
+    const newTotal = res.data?.total_requests || 0
+    const oldTotal = overview.value?.total_requests
+    // oldTotal 为 undefined 说明还没加载过，不触发刷新（首次由 loadData 处理）
+    if (oldTotal === undefined || newTotal !== oldTotal) {
+      await loadData()
+    }
+  } catch (e) {
+    console.error(e)
   }
 }
 
