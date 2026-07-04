@@ -58,6 +58,8 @@ func main() {
 	usageH := handler.NewUsageHandler(svc.Usage)
 	proxyH := handler.NewProxyHandler(svc.Channel, svc.Model, svc.Usage, svc.APIKey, svc.ProxyConfig)
 	proxyConfigH := handler.NewProxyConfigHandler(svc.ProxyConfig, "certs")
+	// 代理配置更新后通知 ProxyHandler 刷新缓存
+	proxyConfigH.SetOnUpdate(proxyH.InvalidateProxyConfig)
 	syncH := handler.NewSyncHandler(syncer)
 	authH := handler.NewAuthHandler(cfg.Auth.Username, cfg.Auth.Password, cfg.Auth.Secret)
 	apiKeyH := handler.NewAPIKeyHandler(svc.APIKey)

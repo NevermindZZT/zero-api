@@ -16,16 +16,17 @@ import (
 )
 
 type ProxyHandler struct {
-	channelRepo     *store.ChannelRepo
-	modelRepo       *store.ModelRepo
-	usageRepo       *store.UsageRepo
-	apiKeyRepo      *store.APIKeyRepo
-	proxyConfigRepo *store.ProxyConfigRepo
-	breaker         *CircuitBreaker
+	channelRepo       *store.ChannelRepo
+	modelRepo         *store.ModelRepo
+	usageRepo         *store.UsageRepo
+	apiKeyRepo        *store.APIKeyRepo
+	proxyConfigRepo   *store.ProxyConfigRepo
+	breaker           *CircuitBreaker
+	proxyConfigCache  *store.ProxyConfigData // 缓存 proxy_config，减少重复 DB 读取
 }
 
 func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo, proxyConfigRepo *store.ProxyConfigRepo) *ProxyHandler {
-	return &ProxyHandler{
+	h := &ProxyHandler{
 		channelRepo:     channelRepo,
 		modelRepo:       modelRepo,
 		usageRepo:       usageRepo,
@@ -33,6 +34,25 @@ func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo,
 		proxyConfigRepo: proxyConfigRepo,
 		breaker:         NewCircuitBreaker(),
 	}
+	// 预读取 proxyConfig 到缓存
+	cfg, err := proxyConfigRepo.Get()
+	if err == nil {
+		h.proxyConfigCache = cfg
+	}
+	return h
+}
+
+// getProxyConfig 获取代理配置（优先使用缓存）
+func (h *ProxyHandler) getProxyConfig() *store.ProxyConfigData {
+	if h.proxyConfigCache != nil {
+		return h.proxyConfigCache
+	}
+	cfg, err := h.proxyConfigRepo.Get()
+	if err != nil {
+		return &store.ProxyConfigData{RequestTimeoutSeconds: 60, FailoverEnabled: true}
+	}
+	h.proxyConfigCache = cfg
+	return cfg
 }
 
 // ListLocalModels 返回本地启用的模型列表（兼容 OpenAI /v1/models）
@@ -180,11 +200,8 @@ func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 		return
 	}
 
-	// 读取 proxyConfig（用于超时和探测 API Key）
-	proxyConfig, err := h.proxyConfigRepo.Get()
-	if err != nil {
-		proxyConfig = &store.ProxyConfigData{RequestTimeoutSeconds: 60}
-	}
+	// 读取 proxyConfig（用于超时和探测 API Key）—— 使用缓存减少 DB 查询
+	proxyConfig := h.getProxyConfig()
 	requestTimeout := time.Duration(proxyConfig.RequestTimeoutSeconds) * time.Second
 
 	// 按优先级依次尝试，失败时自动切换到下一渠道（含熔断逻辑）
@@ -230,7 +247,7 @@ func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 			}
 		}
 
-		if err := h.tryForward(c, bodyBytes, matchedModel, ch, apiKeyID, requestTimeout); err == nil {
+		if err := h.tryForward(c, bodyBytes, matchedModel, ch, apiKeyID, requestTimeout, proxyConfig); err == nil {
 			// 成功，清除熔断状态
 			h.breaker.RecordSuccess(ch.ID)
 			return
@@ -242,6 +259,11 @@ func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("所有渠道均失败: %v", lastErr)})
+}
+
+// InvalidateProxyConfig 清除代理配置缓存（设置页面保存后调用）
+func (h *ProxyHandler) InvalidateProxyConfig() {
+	h.proxyConfigCache = nil
 }
 
 // resolveAndValidateAPIKey 从请求中提取并验证 API Key
@@ -312,7 +334,7 @@ func (h *ProxyHandler) recordUsage(reqBody, rawResp, convertedResp []byte, adapt
 }
 
 // tryForward 尝试将请求转发到指定渠道，成功返回 nil，失败返回 error
-func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, requestTimeout time.Duration) error {
+func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, requestTimeout time.Duration, proxyConfig *store.ProxyConfigData) error {
 	// 根据渠道类型选择适配器
 	adapt := adapter.NewAdapter(ch.Type)
 
@@ -356,23 +378,20 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 	// 转发请求
 	startTime := time.Now()
 	var client *http.Client
-	if ch.UseProxy && h.proxyConfigRepo != nil {
-		cfg, err := h.proxyConfigRepo.Get()
-		if err == nil && cfg.ForwardProxyURL != "" {
-			client, err = upstream.NewHTTPClientWithProxy(
-				cfg.ForwardProxyURL,
-				cfg.ForwardProxyUser,
-				cfg.ForwardProxyPass,
-			)
-			if err != nil {
-				log.Printf("[中转] 渠道 %s 代理配置错误，回退直连: %v", ch.Name, err)
-			}
+	if ch.UseProxy && proxyConfig.ForwardProxyURL != "" {
+		client, err = upstream.NewHTTPClientWithProxyAndTimeout(
+			proxyConfig.ForwardProxyURL,
+			proxyConfig.ForwardProxyUser,
+			proxyConfig.ForwardProxyPass,
+			requestTimeout,
+		)
+		if err != nil {
+			log.Printf("[中转] 渠道 %s 代理配置错误，回退直连: %v", ch.Name, err)
 		}
 	}
 	if client == nil {
-		client = upstream.NewHTTPClient()
+		client = upstream.NewHTTPClientWithTimeout(requestTimeout)
 	}
-	client.Timeout = requestTimeout
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("上游请求失败: %w", err)

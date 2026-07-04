@@ -11,10 +11,16 @@ import (
 type ProxyConfigHandler struct {
 	proxyConfigRepo *store.ProxyConfigRepo
 	certDir         string
+	onUpdate        func() // 配置更新后的回调（用于通知 ProxyHandler 刷新缓存）
 }
 
 func NewProxyConfigHandler(proxyConfigRepo *store.ProxyConfigRepo, certDir string) *ProxyConfigHandler {
 	return &ProxyConfigHandler{proxyConfigRepo: proxyConfigRepo, certDir: certDir}
+}
+
+// SetOnUpdate 设置配置更新后的回调
+func (h *ProxyConfigHandler) SetOnUpdate(fn func()) {
+	h.onUpdate = fn
 }
 
 // GetConfig 获取代理配置
@@ -43,6 +49,10 @@ func (h *ProxyConfigHandler) UpdateConfig(c *gin.Context) {
 	if err := h.proxyConfigRepo.Update(&cfg); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	// 通知 ProxyHandler 刷新配置缓存
+	if h.onUpdate != nil {
+		h.onUpdate()
 	}
 	c.JSON(http.StatusOK, cfg)
 }
