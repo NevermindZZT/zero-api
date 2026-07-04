@@ -28,6 +28,11 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null
 let trendChart: echarts.ECharts | null = null
 let pieChart: echarts.ECharts | null = null
 
+// 响应式列数
+const statCols = ref(4)
+const chartCols = ref(2)
+let mqListener: (() => void) | null = null
+
 const recordColumns = [
   { title: '模型', key: 'request_model' },
   { title: '渠道', key: 'channel_name', render: (r: any) => r.channel_name || '-' },
@@ -172,6 +177,16 @@ async function refresh() {
 }
 
 onMounted(async () => {
+  // 响应式列数
+  function updateCols() {
+    const w = window.innerWidth
+    statCols.value = w < 480 ? 1 : w < 768 ? 2 : 4
+    chartCols.value = w < 768 ? 1 : 2
+  }
+  updateCols()
+  window.addEventListener('resize', updateCols)
+  mqListener = () => window.removeEventListener('resize', updateCols)
+
   await loadData()
   loading.value = false
   nextTick(renderCharts)
@@ -303,7 +318,7 @@ function formatTokens(n: number) {
       </div>
       </div>
 
-      <NGrid :x-gap="16" :y-gap="16" :cols="4">
+      <NGrid :x-gap="16" :y-gap="16" :cols="statCols">
         <NGi v-for="card in statCards" :key="card.label">
           <NCard class="stat-card" hoverable>
             <div class="stat-icon" :style="{ background: card.bg, color: card.color }">
@@ -319,7 +334,7 @@ function formatTokens(n: number) {
         </NGi>
       </NGrid>
 
-      <NGrid :x-gap="16" :y-gap="16" :cols="2">
+      <NGrid :x-gap="16" :y-gap="16" :cols="chartCols">
         <NGi>
           <NCard class="chart-card">
             <template #header>
@@ -388,7 +403,7 @@ function formatTokens(n: number) {
             <span>最近请求</span>
           </div>
         </template>
-        <NDataTable :columns="recordColumns" :data="recentRecords" :max-height="400" :bordered="false" size="small" :single-line="false" striped />
+        <NDataTable :columns="recordColumns" :data="recentRecords" :max-height="400" :bordered="false" size="small" :single-line="false" striped :scroll-x="800" />
       </NCard>
     </NSpace>
   </NSpin>
@@ -455,4 +470,10 @@ function formatTokens(n: number) {
 }
 .cache-stat-label { color: #94a3b8; font-size: 13px; }
 .cache-stat-value { color: #e2e8f0; font-size: 14px; font-weight: 600; }
+
+/* 响应式 */
+@media (max-width: 767px) {
+  .stat-value { font-size: 22px; }
+  .cache-stat-row { flex-direction: column; gap: 2px; }
+}
 </style>

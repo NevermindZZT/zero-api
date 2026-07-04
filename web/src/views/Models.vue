@@ -105,7 +105,7 @@ const columns = [
       ),
   },
   {
-    title: '操作', key: 'actions', width: 160, fixed: 'right' as const,
+    title: '操作', key: 'actions', width: 160,
     render: (r: any) =>
       h(NSpace, { size: 4 }, () => [
         h(NButton, { size: 'tiny', onClick: () => editModel(r) }, () => '编辑'),

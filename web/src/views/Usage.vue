@@ -18,6 +18,24 @@ const apiKeys = ref<any[]>([])
 const selectedApiKeyId = ref<number | null>(null)
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
+// 响应式列数
+const usageStatCols = ref(2)
+const usageDetailCols = ref(4)
+
+function updateCols() {
+  const w = window.innerWidth
+  usageStatCols.value = w < 480 ? 1 : 2
+  usageDetailCols.value = w < 480 ? 1 : w < 768 ? 2 : 4
+}
+
+onMounted(() => {
+  updateCols()
+  window.addEventListener('resize', updateCols)
+})
+onUnmounted(() => {
+  window.removeEventListener('resize', updateCols)
+})
+
 const apiKeyOptions = computed(() => [
   { label: '全部密钥', value: null },
   ...apiKeys.value.map((k: any) => ({ label: `${k.name} (${k.key?.substring(0, 12)}...)`, value: k.id })),
@@ -149,7 +167,7 @@ function now() {
         </div>
       </div>
 
-      <NGrid :x-gap="16" :y-gap="16" :cols="2" narrow>
+      <NGrid :x-gap="16" :y-gap="16" :cols="usageStatCols" narrow>
         <NGi>
           <NCard title="总请求数" hoverable>
             <NStatistic :value="overview.total_requests || 0" />
@@ -161,7 +179,7 @@ function now() {
           </NCard>
         </NGi>
       </NGrid>
-      <NGrid :x-gap="16" :y-gap="16" :cols="4">
+      <NGrid :x-gap="16" :y-gap="16" :cols="usageDetailCols">
         <NGi>
           <NCard title="今日 Tokens" hoverable>
             <NStatistic :value="overview.today_tokens?.toLocaleString() || '0'" />
@@ -190,11 +208,11 @@ function now() {
       </div>
 
       <NCard title="按日统计">
-        <NDataTable :columns="dailyColumns" :data="dailyStats" :bordered="false" size="small" />
+        <NDataTable :columns="dailyColumns" :data="dailyStats" :bordered="false" size="small" :scroll-x="900" />
       </NCard>
 
       <NCard title="最近使用记录">
-        <NDataTable :columns="recordColumns" :data="records" :bordered="false" size="small" :max-height="500" />
+        <NDataTable :columns="recordColumns" :data="records" :bordered="false" size="small" :max-height="500" :scroll-x="1000" />
       </NCard>
     </NSpace>
   </NSpin>

@@ -3,10 +3,18 @@ import { h, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NButton, NBreadcrumb, NBreadcrumbItem, NIcon, NDropdown } from 'naive-ui'
 import {
-  MenuSharp,
+  HomeSharp,
   PersonCircleSharp,
   LogOutSharp,
 } from '@vicons/ionicons5'
+
+defineProps<{
+  isMobile?: boolean
+}>()
+
+const emit = defineEmits<{
+  'toggle-mobile-menu': []
+}>()
 
 const route = useRoute()
 const router = useRouter()
@@ -18,8 +26,10 @@ const breadcrumbMap: Record<string, string> = {
   '/channels': '渠道管理',
   '/models': '模型管理',
   '/proxy': '代理设置',
+  '/forward-proxy': '出站代理',
   '/api-keys': 'API 密钥',
   '/usage': '使用统计',
+  '/database': '数据库管理',
 }
 
 const currentTitle = computed(() => breadcrumbMap[route.path] || '')
@@ -48,31 +58,19 @@ function handleUserMenuAction(key: string) {
     router.push('/login')
   }
 }
-
-function toggleSidebar() {
-  // Emit event or use a store to toggle sidebar
-  window.dispatchEvent(new CustomEvent('toggle-sidebar'))
-}
 </script>
 
 <template>
   <header class="header-bar">
     <div class="header-left">
-      <NButton quaternary size="small" class="menu-toggle" @click="toggleSidebar">
+      <NButton quaternary size="small" class="home-btn" @click="isMobile ? emit('toggle-mobile-menu') : router.push('/dashboard')">
         <template #icon>
-          <NIcon size="20"><MenuSharp /></NIcon>
+          <NIcon size="18"><HomeSharp /></NIcon>
         </template>
+        <span class="home-text">zero-api</span>
       </NButton>
-      <NBreadcrumb>
-        <NBreadcrumbItem>
-          <NIcon size="14" style="vertical-align:-2px;margin-right:4px">
-            <svg viewBox="0 0 512 512" width="14" height="14" fill="currentColor">
-              <path d="M256 48L48 192v272h160V320h96v144h160V192z"/>
-            </svg>
-          </NIcon>
-          zero-api
-        </NBreadcrumbItem>
-        <NBreadcrumbItem v-if="currentTitle">{{ currentTitle }}</NBreadcrumbItem>
+      <NBreadcrumb v-if="currentTitle" style="margin-left:8px">
+        <NBreadcrumbItem>{{ currentTitle }}</NBreadcrumbItem>
       </NBreadcrumb>
     </div>
 
@@ -109,6 +107,19 @@ function toggleSidebar() {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.home-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+}
+.home-text {
+  font-size: 15px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 .header-right {
   display: flex;

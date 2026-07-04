@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { NButton, NCard, NForm, NFormItem, NInput, NSelect, NSpace, NSpin, NAlert, NIcon } from 'naive-ui'
+import { NButton, NCard, NForm, NFormItem, NInput, NSelect, NSpin, NAlert, NIcon } from 'naive-ui'
 import { ChatbubbleEllipsesSharp } from '@vicons/ionicons5'
 import api, { chatTestApi } from '@/api'
 
@@ -69,7 +69,7 @@ async function sendMessage() {
 
 <template>
   <NSpin :show="loading || modelsLoading" style="width:100%">
-    <NSpace vertical size="large" style="width:100%;min-width:600px">
+    <div style="display:flex;flex-direction:column;gap:16px;width:100%">
       <div class="page-header">
         <div>
           <h2>
@@ -102,6 +102,6 @@ async function sendMessage() {
       <NCard title="响应结果" style="min-width:100%;width:100%">
         <pre style="white-space:pre-wrap;word-break:break-word;min-height:160px;color:#e2e8f0">{{ responseText || '暂无响应' }}</pre>
       </NCard>
-    </NSpace>
+    </div>
   </NSpin>
 </template>

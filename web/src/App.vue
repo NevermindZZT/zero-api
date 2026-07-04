@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { darkTheme, zhCN, dateZhCN } from 'naive-ui'
 import { NConfigProvider, NMessageProvider, NDialogProvider } from 'naive-ui'
 import Sidebar from '@/components/Sidebar.vue'
@@ -8,6 +8,39 @@ import { useRoute } from 'vue-router'
 
 const route = useRoute()
 const isLoginPage = computed(() => route.path === '/login')
+
+// 移动端检测
+const isMobile = ref(false)
+const sidebarOpen = ref(false)
+let mq: MediaQueryList | null = null
+
+function onMqChange(e: MediaQueryListEvent | MediaQueryList) {
+  isMobile.value = e.matches
+  if (!e.matches) sidebarOpen.value = false
+}
+
+onMounted(() => {
+  mq = window.matchMedia('(max-width: 767px)')
+  mq.addEventListener('change', onMqChange)
+  onMqChange(mq)
+
+  window.addEventListener('toggle-sidebar', toggleSidebar)
+  window.addEventListener('close-mobile-sidebar', closeSidebar)
+})
+
+onUnmounted(() => {
+  mq?.removeEventListener('change', onMqChange)
+  window.removeEventListener('toggle-sidebar', toggleSidebar)
+  window.removeEventListener('close-mobile-sidebar', closeSidebar)
+})
+
+function toggleSidebar() {
+  sidebarOpen.value = !sidebarOpen.value
+}
+
+function closeSidebar() {
+  sidebarOpen.value = false
+}
 </script>
 
 <template>
@@ -17,10 +50,16 @@ const isLoginPage = computed(() => route.path === '/login')
         <div v-if="isLoginPage" class="login-layout">
           <router-view />
         </div>
-        <div v-else class="app-layout">
-          <Sidebar />
+        <div v-else class="app-layout" :class="{ 'is-mobile': isMobile }">
+          <!-- 移动端遮罩 -->
+          <div v-if="isMobile && sidebarOpen" class="sidebar-overlay" @click="closeSidebar"></div>
+          <!-- 移动端：渲染 Sidebar 为固定浮层 / 桌面端：正常侧边栏 -->
+          <div v-if="isMobile" class="sidebar-mobile-wrapper" :class="{ open: sidebarOpen }">
+            <Sidebar :is-mobile="true" />
+          </div>
+          <Sidebar v-else />
           <div class="main-area">
-            <HeaderBar />
+            <HeaderBar :is-mobile="isMobile" @toggle-mobile-menu="toggleSidebar" />
             <main class="main-content">
               <div class="content-container">
                 <router-view v-slot="{ Component }">
@@ -109,6 +148,7 @@ body {
   background: rgba(148, 163, 184, 0.4);
 }
 .content-container {
+  width: 100%;
   max-width: 1400px;
   margin: 0 auto;
   padding: 24px 32px;
@@ -254,5 +294,141 @@ body {
   background: rgba(255, 255, 255, 0.03) !important;
   backdrop-filter: blur(8px) !important;
   border: 1px solid rgba(255, 255, 255, 0.06) !important;
+}
+
+/* NSpin 强制 block 布局（默认 inline-block 导致宽度塌陷） */
+.n-spin-container {
+  display: block !important;
+  width: 100% !important;
+}
+
+/* NSpace 子元素撑满宽度（解决卡片变窄） */
+.n-space--vertical > .n-space-item {
+  width: 100% !important;
+}
+
+/* 表格容器横向滚动（移动端不换行） */
+.n-data-table-wrapper {
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+.n-data-table {
+  min-width: 100%;
+}
+
+/* 移动端：卡片内容不溢出 */
+.n-card {
+  overflow: hidden;
+  align-self: stretch;
+}
+
+/* ===== 移动端遮罩 ===== */
+.sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* ===== 移动端侧边栏浮层 ===== */
+.sidebar-mobile-wrapper {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 100;
+  width: 220px;
+  transform: translateX(-100%);
+  transition: transform 0.3s ease;
+}
+.sidebar-mobile-wrapper.open {
+  transform: translateX(0);
+}
+.sidebar-mobile-wrapper .n-layout-sider {
+  width: 220px !important;
+  height: 100%;
+}
+
+/* ===== 响应式布局 ===== */
+@media (max-width: 767px) {
+  .content-container {
+    padding: 16px !important;
+  }
+
+  .page-header {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 8px;
+  }
+  .page-header h2 {
+    font-size: 20px !important;
+  }
+
+  /* 统计卡片一行一个 */
+  .n-grid > .n-gi {
+    min-width: 100% !important;
+  }
+
+  /* 表格在小屏横向滚动 */
+  .n-data-table {
+    overflow-x: auto;
+  }
+
+  /* 图表卡片内 flex 元素垂直排列 */
+  .chart-card-body {
+    flex-direction: column !important;
+    text-align: center;
+  }
+  .chart-card-body .cache-stat-row {
+    justify-content: center;
+  }
+}
+
+/* 小屏适配（续） */
+@media (max-width: 1023px) {
+  .content-container {
+    padding: 20px !important;
+  }
+}
+
+/* 移动端内容容器 */
+@media (max-width: 767px) {
+  .content-container {
+    padding: 12px !important;
+    max-width: 100% !important;
+  }
+}
+
+/* 登录页面移动端适配 */
+@media (max-width: 480px) {
+  .login-card {
+    width: 90vw !important;
+    padding: 16px !important;
+  }
+  .login-header h1 {
+    font-size: 24px !important;
+  }
+}
+
+/* 弹窗移动端适配 */
+@media (max-width: 600px) {
+  .n-modal-content,
+  .n-card[role="dialog"] {
+    max-width: calc(100vw - 32px) !important;
+    margin: 16px !important;
+  }
+}
+
+/* 表单行移动端竖排 */
+@media (max-width: 600px) {
+  .n-form .n-form-item {
+    flex-direction: column;
+  }
+  .n-form .n-form-item-label {
+    text-align: left;
+    padding-bottom: 4px !important;
+  }
 }
 </style>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { h, ref, watch } from 'vue'
+import { h, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NMenu, NLayoutSider, NIcon } from 'naive-ui'
+import { NMenu, NLayoutSider, NIcon, NButton } from 'naive-ui'
 import {
   BarChartSharp,
   ChatbubbleEllipsesSharp,
@@ -13,7 +13,12 @@ import {
   FlashSharp,
   RocketSharp,
   ServerSharp,
+  CloseSharp,
 } from '@vicons/ionicons5'
+
+const props = defineProps<{
+  isMobile?: boolean
+}>()
 
 const route = useRoute()
 const router = useRouter()
@@ -62,6 +67,14 @@ watch(() => route.path, (p) => { activeKey.value = p })
 
 function handleUpdate(key: string) {
   router.push(key)
+  // 移动端点击菜单后关闭侧边栏
+  if (props.isMobile) {
+    window.dispatchEvent(new CustomEvent('close-mobile-sidebar'))
+  }
+}
+
+function closeMobile() {
+  window.dispatchEvent(new CustomEvent('close-mobile-sidebar'))
 }
 </script>
 
@@ -72,13 +85,17 @@ function handleUpdate(key: string) {
     :collapsed-width="64"
     :width="220"
     collapse-mode="width"
-    :show-trigger="'bar'"
+    :show-trigger="isMobile ? false : 'bar'"
     @collapse="collapsed = true"
     @expand="collapsed = false"
     :native-scrollbar="false"
     style="background: var(--bg-secondary); position: relative;"
-  >
-    <div class="sidebar-logo">
+  >    <!-- 移动端关闭按钮 -->
+    <div v-if="isMobile" class="sidebar-close">
+      <NButton quaternary size="small" @click="closeMobile">
+        <template #icon><NIcon size="18"><CloseSharp /></NIcon></template>
+      </NButton>
+    </div>    <div class="sidebar-logo">
       <div class="logo-icon-wrapper">
         <NIcon size="22" color="#fff"><FlashSharp /></NIcon>
       </div>
@@ -181,5 +198,12 @@ function handleUpdate(key: string) {
 :deep(.n-menu--collapsed .n-menu-item-content .n-menu-item-content__icon) {
   margin-right: 0 !important;
   justify-self: center;
+}
+
+/* 移动端关闭按钮 */
+.sidebar-close {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 16px 0;
 }
 </style>
