@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -170,7 +171,8 @@ func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
 	var reqBody struct {
-		Model string `json:"model"`
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
 	}
 	if err := json.Unmarshal(bodyBytes, &reqBody); err != nil || reqBody.Model == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 model 字段"})
@@ -248,7 +250,7 @@ func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 			}
 		}
 
-		if err := h.tryForward(c, bodyBytes, matchedModel, ch, apiKeyID, requestTimeout, proxyConfig); err == nil {
+		if err := h.tryForward(c, bodyBytes, matchedModel, ch, apiKeyID, requestTimeout, proxyConfig, reqBody.Stream); err == nil {
 			// 成功，清除熔断状态
 			h.breaker.RecordSuccess(ch.ID)
 			return
@@ -334,7 +336,7 @@ func (h *ProxyHandler) recordUsage(requestModel string, rawResp, convertedResp [
 }
 
 // tryForward 尝试将请求转发到指定渠道，成功返回 nil，失败返回 error
-func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, requestTimeout time.Duration, proxyConfig *store.ProxyConfigData) error {
+func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, requestTimeout time.Duration, proxyConfig *store.ProxyConfigData, isStream bool) error {
 	// 根据渠道类型选择适配器
 	adapt := adapter.NewAdapter(ch.Type)
 
@@ -353,8 +355,7 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 		}
 	}
 
-	// 使用独立超时 context，不绑定到客户端请求 context
-	// 避免客户端断开导致上游请求被取消而错误触发熔断
+	// 使用独立超时 context，避免客户端断开导致上游请求被取消
 	upstreamCtx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(upstreamCtx, "POST", upstreamURL, bytes.NewReader(convertedBody))
@@ -379,7 +380,7 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 		}
 	}
 
-	// 转发请求
+	// 创建 HTTP 客户端
 	startTime := time.Now()
 	var client *http.Client
 	if ch.UseProxy && proxyConfig.ForwardProxyURL != "" {
@@ -402,6 +403,22 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 	}
 	defer resp.Body.Close()
 
+	// 检查可切换错误状态
+	if shouldFailoverStatus(resp.StatusCode) {
+		respBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("上游返回可切换错误状态 %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	if isStream {
+		// 流式响应：即使中途出错也不触发熔断（客户端断开等非上游问题）
+		err = h.streamResponse(c, resp, adapt, matchedModel, ch, apiKeyID, startTime)
+		if err != nil {
+			log.Printf("[流式] 模型 %s 渠道 %s 流式转发错误: %v", matchedModel.ModelID, ch.Name, err)
+		}
+		return nil
+	}
+
+	// === 非流式响应（原逻辑）===
 	latencyMs := int(time.Since(startTime).Milliseconds())
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -414,10 +431,6 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 		convertedResp = respBytes
 	}
 
-	if shouldFailoverStatus(resp.StatusCode) {
-		return fmt.Errorf("上游返回可切换错误状态 %d: %s", resp.StatusCode, string(respBytes))
-	}
-
 	// 记录使用信息
 	go h.recordUsage(matchedModel.ModelID, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
 
@@ -428,6 +441,61 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 		}
 	}
 	c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), convertedResp)
+	return nil
+}
+
+// streamResponse 流式转发上游 SSE 响应
+func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt adapter.Adapter, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, startTime time.Time) error {
+	// 设置 SSE 响应头
+	for k, vals := range resp.Header {
+		for _, v := range vals {
+			c.Header(k, v)
+		}
+	}
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Status(resp.StatusCode)
+
+	// 获取 Flusher
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		return fmt.Errorf("ResponseWriter 不支持 Flusher")
+	}
+
+	// 使用 bufio.Scanner 逐行扫描 SSE 事件
+	scanner := bufio.NewScanner(resp.Body)
+	// 增大缓冲区以应对大行（JSON 可能很长）
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	var fullRespBytes []byte
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		lineCopy := make([]byte, len(line))
+		copy(lineCopy, line)
+
+		fullRespBytes = append(fullRespBytes, lineCopy...)
+		fullRespBytes = append(fullRespBytes, '\n')
+
+		// 逐行写入客户端并 flush
+		if _, err := c.Writer.Write(lineCopy); err != nil {
+			return fmt.Errorf("写入流式响应失败: %w", err)
+		}
+		c.Writer.Write([]byte("\n"))
+		flusher.Flush()
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("[流式] 读取 SSE 流失败: %v (模型=%s, 渠道=%s)", err, matchedModel.ModelID, ch.Name)
+		// 继续尝试记录已收到的数据，不返回 error（因为可能已写了部分数据给客户端）
+	}
+
+	// 记录使用信息（基于累积的完整响应）
+	latencyMs := int(time.Since(startTime).Milliseconds())
+	if len(fullRespBytes) > 0 {
+		convertedResp, _ := adapt.ConvertResponse(fullRespBytes)
+		go h.recordUsage(matchedModel.ModelID, fullRespBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
+	}
 	return nil
 }
 
