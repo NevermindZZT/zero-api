@@ -211,6 +211,7 @@ func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 
 	// 按优先级依次尝试，失败时自动切换到下一渠道（含熔断逻辑）
 	var lastErr error
+	var breakerSkipped bool // 标记是否有渠道因熔断冷却被跳过
 	for _, matchedModel := range candidates {
 		// 获取渠道
 		ch, err := h.channelRepo.GetByID(matchedModel.ChannelID)
@@ -229,6 +230,7 @@ func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 			allow, needProbe := h.breaker.MayProceed(ch.ID)
 			if !allow && !needProbe {
 				log.Printf("[中转] 渠道 %s (%d) 熔断冷却中，跳过", ch.Name, ch.ID)
+				breakerSkipped = true
 				continue
 			}
 			if needProbe {
@@ -261,6 +263,23 @@ func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 			h.breaker.RecordFailure(ch.ID)
 			log.Printf("[中转] 模型 %s 渠道 %s 失败，尝试下一渠道: %v", reqBody.Model, ch.Name, err)
 		}
+	}
+
+	// 如果所有候选渠道都因熔断冷却被跳过（没有任何渠道被实际尝试），
+	// 说明当前没有可用的渠道，需要清除熔断状态让后续请求重新尝试
+	if breakerSkipped && lastErr == nil {
+		for _, matchedModel := range candidates {
+			ch, err := h.channelRepo.GetByID(matchedModel.ChannelID)
+			if err == nil && ch.Status == "active" && h.breaker != nil {
+				allow, _ := h.breaker.MayProceed(ch.ID)
+				if !allow {
+					h.breaker.RecordSuccess(ch.ID)
+					log.Printf("[中转] 模型 %s 的渠道 %s (%d) 已清除熔断，等待下次请求重试", reqBody.Model, ch.Name, ch.ID)
+				}
+			}
+		}
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": fmt.Sprintf("模型 %s 的所有候选渠道均暂时不可用（熔断冷却），已重置熔断状态，请重试", reqBody.Model)})
+		return
 	}
 
 	c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("所有渠道均失败: %v", lastErr)})
@@ -412,10 +431,11 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 	}
 
 	if isStream {
-		// 流式响应：即使中途出错也不触发熔断（客户端断开等非上游问题）
-		err = h.streamResponse(c, resp, adapt, matchedModel, ch, apiKeyID, startTime)
+		// 流式转发，错误会触发熔断回落
+		err = h.streamResponse(c, resp, adapt, matchedModel, ch, apiKeyID, startTime, requestTimeout)
 		if err != nil {
 			log.Printf("[流式] 模型 %s 渠道 %s 流式转发错误: %v", matchedModel.ModelID, ch.Name, err)
+			return fmt.Errorf("流式转发失败: %w", err)
 		}
 		return nil
 	}
@@ -448,7 +468,7 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 }
 
 // streamResponse 流式转发上游 SSE 响应
-func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt adapter.Adapter, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, startTime time.Time) error {
+func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt adapter.Adapter, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, startTime time.Time, requestTimeout time.Duration) error {
 	// 设置响应头（过滤逐跳头）
 	filteredHeaders := filterHopByHop(resp.Header)
 	for k, vals := range filteredHeaders {
@@ -467,15 +487,26 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 		return fmt.Errorf("ResponseWriter 不支持 Flusher")
 	}
 
-	// 使用 bufio.Reader 逐行读取，减少内存分配
+	// 创建流式读取的超时 context
+	// 防止上游中途停滞导致 reader 永久阻塞
+	streamCtx, streamCancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer streamCancel()
+
+	// 超时后自动关闭 resp.Body，解除 ReadBytes 阻塞
+	go func() {
+		<-streamCtx.Done()
+		resp.Body.Close()
+	}()
+
+	// 使用 bufio.Reader 逐行读取
 	reader := bufio.NewReaderSize(resp.Body, 64*1024)
 	var buf bytes.Buffer
 
 	for {
 		line, err := reader.ReadBytes('\n')
 		if err != nil && err != io.EOF {
-			log.Printf("[流式] 读取出错: %v", err)
-			break
+			// 超时或连接断开，返回 error 触发熔断回落
+			return fmt.Errorf("流式读取失败: %w", err)
 		}
 
 		// 累积完整响应用于后续用量记录
