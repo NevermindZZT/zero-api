@@ -57,6 +57,7 @@ func (h *ChannelHandler) CreateChannel(c *gin.Context) {
 		return
 	}
 	ch.ID = id
+	h.channelRepo.InvalidateChannelCache()
 	c.JSON(http.StatusCreated, ch)
 }
 
@@ -73,6 +74,7 @@ func (h *ChannelHandler) UpdateChannel(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	h.channelRepo.InvalidateChannelCache()
 	c.JSON(http.StatusOK, ch)
 }
 
@@ -83,6 +85,7 @@ func (h *ChannelHandler) DeleteChannel(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	h.channelRepo.InvalidateChannelCache()
 	c.Status(http.StatusNoContent)
 }
 
@@ -94,5 +97,6 @@ func (h *ChannelHandler) ToggleChannel(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	h.channelRepo.InvalidateChannelCache()
 	c.JSON(http.StatusOK, ch)
 }

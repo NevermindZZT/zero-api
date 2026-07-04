@@ -1,6 +1,27 @@
 package store
 
-import "time"
+import (
+	"sync"
+	"time"
+)
+
+// 渠道缓存：GetByID 缓存，5 分钟 TTL
+var (
+	channelCacheMu     sync.RWMutex
+	channelCache       = make(map[int64]*cachedChannel)
+)
+
+type cachedChannel struct {
+	ch     *Channel
+	expiry time.Time
+}
+
+// InvalidateChannelCache 清除渠道缓存（创建/更新/删除渠道时调用）
+func (r *ChannelRepo) InvalidateChannelCache() {
+	channelCacheMu.Lock()
+	defer channelCacheMu.Unlock()
+	channelCache = make(map[int64]*cachedChannel)
+}
 
 // Channel 渠道商
 type Channel struct {
@@ -45,6 +66,15 @@ func (r *ChannelRepo) List() ([]Channel, error) {
 }
 
 func (r *ChannelRepo) GetByID(id int64) (*Channel, error) {
+	// 查缓存
+	channelCacheMu.RLock()
+	if cached, ok := channelCache[id]; ok && time.Now().Before(cached.expiry) {
+		ch := *cached.ch
+		channelCacheMu.RUnlock()
+		return &ch, nil
+	}
+	channelCacheMu.RUnlock()
+
 	c := &Channel{}
 	err := r.db.QueryRow(
 		`SELECT id, name, type, base_url, api_key, status, priority, use_proxy, failover_enabled, test_model, created_at, updated_at FROM channels WHERE id = ?`, id,
@@ -52,6 +82,10 @@ func (r *ChannelRepo) GetByID(id int64) (*Channel, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 写入缓存（5 分钟 TTL）
+	channelCacheMu.Lock()
+	channelCache[id] = &cachedChannel{ch: c, expiry: time.Now().Add(5 * time.Minute)}
+	channelCacheMu.Unlock()
 	return c, nil
 }
 

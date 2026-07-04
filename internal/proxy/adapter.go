@@ -366,8 +366,7 @@ func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, 
 
 	// 转发
 	startTime := time.Now()
-	client := upstream.NewHTTPClient()
-	client.Timeout = pa.requestTimeout
+	client := upstream.NewHTTPClientWithTimeout(pa.requestTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("上游请求失败: %w", err)
@@ -396,7 +395,7 @@ func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, 
 	}
 
 	// 异步记录用量
-	go pa.recordUsage(body, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
+	go pa.recordUsage(originalModel, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
 
 	// 构建响应头
 	respHeaders := make(map[string]string)
@@ -517,11 +516,12 @@ func (pa *ProxyAdapter) rewriteSSEResponse(bodyStr, fromModel, toModel string) [
 	return nil
 }
 
-func (pa *ProxyAdapter) recordUsage(reqBody, rawResp, convertedResp []byte, adapt adapter.Adapter, model *store.Model, channelID int64, apiKeyID *int64, latencyMs int) {
-	var req struct {
-		Model string `json:"model"`
-	}
-	json.Unmarshal(reqBody, &req)
+func (pa *ProxyAdapter) recordUsage(requestModel string, rawResp, convertedResp []byte, adapt adapter.Adapter, model *store.Model, channelID int64, apiKeyID *int64, latencyMs int) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[代理][Usage] 记录用量 panic 恢复: %v", r)
+		}
+	}()
 
 	modelID := model.ID
 	var promptTokens, completionTokens, cacheHitTokens, totalTokens int
@@ -533,7 +533,7 @@ func (pa *ProxyAdapter) recordUsage(reqBody, rawResp, convertedResp []byte, adap
 		usage, err = adapt.ExtractUsage(rawResp)
 	}
 	if err != nil {
-		log.Printf("[代理][Usage] ExtractUsage 失败 (model=%s): %v — 仍记录请求", req.Model, err)
+		log.Printf("[代理][Usage] ExtractUsage 失败 (model=%s): %v — 仍记录请求", requestModel, err)
 	} else {
 		promptTokens = usage.PromptTokens
 		completionTokens = usage.CompletionTokens
@@ -551,7 +551,7 @@ func (pa *ProxyAdapter) recordUsage(reqBody, rawResp, convertedResp []byte, adap
 		ChannelID:        &channelID,
 		ModelID:          &modelID,
 		APIKeyID:         apiKeyID,
-		RequestModel:     req.Model,
+		RequestModel:     requestModel,
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
 		CacheHitTokens:   cacheHitTokens,
