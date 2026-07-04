@@ -5,15 +5,17 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/never/zero-api/internal/store"
 	"github.com/never/zero-api/internal/upstream"
 )
 
 type SyncHandler struct {
-	syncer *upstream.Syncer
+	syncer    *upstream.Syncer
+	modelRepo *store.ModelRepo
 }
 
-func NewSyncHandler(syncer *upstream.Syncer) *SyncHandler {
-	return &SyncHandler{syncer: syncer}
+func NewSyncHandler(syncer *upstream.Syncer, modelRepo *store.ModelRepo) *SyncHandler {
+	return &SyncHandler{syncer: syncer, modelRepo: modelRepo}
 }
 
 // SyncModels 从上游同步模型列表
@@ -29,6 +31,9 @@ func (h *SyncHandler) SyncModels(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// 同步完成，清除模型缓存
+	h.modelRepo.InvalidateModelCache()
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "同步完成",

@@ -146,6 +146,10 @@ func (d *DB) migrate() error {
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN request_timeout_seconds INTEGER DEFAULT 60`)
 	// 迁移：添加全局熔断开关（默认启用）
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN failover_enabled INTEGER DEFAULT 1`)
+	// 索引：加速 API Key 验证查询
+	d.Exec(`CREATE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(key)`)
+	// 索引：加速按 API Key 过滤的统计查询
+	d.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_api_key ON usage_records(api_key_id)`)
 
 	for _, q := range queries {
 		if _, err := d.Exec(q); err != nil {

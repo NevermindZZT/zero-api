@@ -41,6 +41,8 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	// API Key 变更，清除缓存
+	h.apiKeyRepo.InvalidateAPIKeyCache()
 	c.JSON(http.StatusCreated, key)
 }
 
@@ -59,5 +61,6 @@ func (h *APIKeyHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	h.apiKeyRepo.InvalidateAPIKeyCache()
 	c.Status(http.StatusNoContent)
 }

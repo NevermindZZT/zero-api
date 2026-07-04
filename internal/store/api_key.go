@@ -3,8 +3,27 @@ package store
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"sync"
 	"time"
 )
+
+// APIKey 缓存
+var (
+	apiKeyCacheMu sync.RWMutex
+	apiKeyCache   = make(map[string]*cachedAPIKey)
+)
+
+type cachedAPIKey struct {
+	key    *APIKey
+	expiry time.Time
+}
+
+// InvalidateAPIKeyCache 清除 API Key 缓存（创建/删除密钥时调用）
+func (r *APIKeyRepo) InvalidateAPIKeyCache() {
+	apiKeyCacheMu.Lock()
+	defer apiKeyCacheMu.Unlock()
+	apiKeyCache = make(map[string]*cachedAPIKey)
+}
 
 // APIKey API 密钥
 type APIKey struct {
@@ -42,6 +61,15 @@ func (r *APIKeyRepo) List() ([]APIKey, error) {
 }
 
 func (r *APIKeyRepo) GetByKey(key string) (*APIKey, error) {
+	// 先查缓存
+	apiKeyCacheMu.RLock()
+	if cached, ok := apiKeyCache[key]; ok && time.Now().Before(cached.expiry) {
+		apiKeyCacheMu.RUnlock()
+		k := *cached.key // 返回副本
+		return &k, nil
+	}
+	apiKeyCacheMu.RUnlock()
+
 	k := &APIKey{}
 	err := r.db.QueryRow(
 		`SELECT id, key, name, enabled, created_at FROM api_keys WHERE key = ? AND enabled = 1`, key,
@@ -49,6 +77,15 @@ func (r *APIKeyRepo) GetByKey(key string) (*APIKey, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// 写入缓存（5 分钟 TTL）
+	apiKeyCacheMu.Lock()
+	apiKeyCache[key] = &cachedAPIKey{
+		key:    k,
+		expiry: time.Now().Add(5 * time.Minute),
+	}
+	apiKeyCacheMu.Unlock()
+
 	return k, nil
 }
 

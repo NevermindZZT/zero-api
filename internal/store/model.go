@@ -1,6 +1,24 @@
 package store
 
-import "time"
+import (
+	"sync"
+	"time"
+)
+
+// 模型列表缓存
+var (
+	modelCacheMu     sync.RWMutex
+	modelCache       []Model
+	modelCacheExpiry time.Time
+)
+
+// InvalidateModelCache 清除模型列表缓存（同步/编辑模型时调用）
+func (r *ModelRepo) InvalidateModelCache() {
+	modelCacheMu.Lock()
+	defer modelCacheMu.Unlock()
+	modelCache = nil
+	modelCacheExpiry = time.Time{}
+}
 
 // Model 模型
 type Model struct {
@@ -38,6 +56,18 @@ func NewModelRepo(db *DB) *ModelRepo {
 }
 
 func (r *ModelRepo) List(channelID int64) ([]Model, error) {
+	// 无筛选条件时使用缓存
+	if channelID == 0 {
+		modelCacheMu.RLock()
+		if modelCache != nil && time.Now().Before(modelCacheExpiry) {
+			result := make([]Model, len(modelCache))
+			copy(result, modelCache)
+			modelCacheMu.RUnlock()
+			return result, nil
+		}
+		modelCacheMu.RUnlock()
+	}
+
 	var rows interface{ Scan(...interface{}) error; Close() error; Next() bool; Err() error }
 	var err error
 
@@ -84,6 +114,15 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 		}
 		models = append(models, m)
 	}
+
+	// channelID == 0 时写入缓存（5 分钟 TTL）
+	if channelID == 0 && err == nil {
+		modelCacheMu.Lock()
+		modelCache = models
+		modelCacheExpiry = time.Now().Add(5 * time.Minute)
+		modelCacheMu.Unlock()
+	}
+
 	return models, nil
 }
 

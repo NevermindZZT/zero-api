@@ -47,6 +47,8 @@ func main() {
 	defer db.Close()
 
 	svc := store.NewService(db)
+	// 启动 usage 批量写入协程
+	store.InitUsageBuffer(db)
 	requestTimeout := time.Duration(cfg.Upstream.RequestTimeoutSeconds) * time.Second
 
 	// 初始化上游同步器（传入配置文件中的模型默认值）
@@ -60,7 +62,7 @@ func main() {
 	proxyConfigH := handler.NewProxyConfigHandler(svc.ProxyConfig, "certs")
 	// 代理配置更新后通知 ProxyHandler 刷新缓存
 	proxyConfigH.SetOnUpdate(proxyH.InvalidateProxyConfig)
-	syncH := handler.NewSyncHandler(syncer)
+	syncH := handler.NewSyncHandler(syncer, svc.Model)
 	authH := handler.NewAuthHandler(cfg.Auth.Username, cfg.Auth.Password, cfg.Auth.Secret)
 	apiKeyH := handler.NewAPIKeyHandler(svc.APIKey)
 	dbH := handler.NewDatabaseHandler(db, cfg.Database.Path)

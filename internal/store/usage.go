@@ -1,8 +1,76 @@
 package store
 
-import "time"
+import (
+	"log"
+	"sync"
+	"time"
+)
 
-// UsageRecord 使用记录
+// ===== 批量写入缓冲区 =====
+
+var usageBuffer = make(chan *UsageRecord, 2000)
+var bufferOnce sync.Once
+
+// InitUsageBuffer 启动批量写入后台协程（在数据库初始化后调用）
+func InitUsageBuffer(db *DB) {
+	bufferOnce.Do(func() {
+		go flushUsageLoop(db)
+	})
+}
+
+func flushUsageLoop(db *DB) {
+	batch := make([]*UsageRecord, 0, 100)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case record := <-usageBuffer:
+			batch = append(batch, record)
+			if len(batch) >= 100 {
+				flushUsageBatch(db, batch)
+				batch = make([]*UsageRecord, 0, 100)
+			}
+		case <-ticker.C:
+			if len(batch) > 0 {
+				flushUsageBatch(db, batch)
+				batch = make([]*UsageRecord, 0, 100)
+			}
+		}
+	}
+}
+
+func flushUsageBatch(db *DB, batch []*UsageRecord) {
+	tx, err := db.Begin()
+	if err != nil {
+		log.Printf("[Usage] 批量写入开始事务失败: %v", err)
+		return
+	}
+	stmt, err := tx.Prepare(`INSERT INTO usage_records
+		(channel_id, model_id, api_key_id, request_model,
+		 prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens,
+		 latency_ms, cost)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		tx.Rollback()
+		log.Printf("[Usage] 批量写入预编译失败: %v", err)
+		return
+	}
+	defer stmt.Close()
+
+	for _, u := range batch {
+		if _, err := stmt.Exec(u.ChannelID, u.ModelID, u.APIKeyID, u.RequestModel,
+			u.PromptTokens, u.CompletionTokens, u.CacheHitTokens, u.TotalTokens,
+			u.LatencyMs, u.Cost); err != nil {
+			log.Printf("[Usage] 批量写入单条失败: %v", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("[Usage] 批量写入提交事务失败: %v", err)
+	}
+}
+
+// ===== UsageRecord & Repo =====
 type UsageRecord struct {
 	ID               int64     `json:"id"`
 	ChannelID        *int64    `json:"channel_id,omitempty"`
@@ -52,8 +120,20 @@ func NewUsageRepo(db *DB) *UsageRepo {
 	return &UsageRepo{db: db}
 }
 
-// Insert 记录一条使用记录
+// Insert 记录一条使用记录（通过缓冲区批量写入，不阻塞请求）
 func (r *UsageRepo) Insert(u *UsageRecord) (int64, error) {
+	select {
+	case usageBuffer <- u:
+	default:
+		// 缓冲区满，直接写入（不应发生，2000 缓冲应足够）
+		log.Printf("[Usage] 缓冲队列已满，直接写入")
+		return r.insertDirect(u)
+	}
+	return 0, nil
+}
+
+// insertDirect 直接写入（绕过缓冲区）
+func (r *UsageRepo) insertDirect(u *UsageRecord) (int64, error) {
 	result, err := r.db.Exec(
 		`INSERT INTO usage_records (channel_id, model_id, api_key_id, request_model, prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens, latency_ms, cost)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -85,27 +165,40 @@ func (r *UsageRepo) GetOverview(apiKeyID ...string) (*OverviewStats, error) {
 		stats.CacheHitRate = float64(stats.TotalCacheHits) / float64(stats.TotalTokens) * 100
 	}
 
-	r.db.QueryRow(`SELECT COUNT(*) FROM channels WHERE status = 'active'`).Scan(&stats.ActiveChannels)
-	r.db.QueryRow(`SELECT COUNT(*) FROM models WHERE status = 'active'`).Scan(&stats.ActiveModels)
+	// 合并活跃渠道/模型数到一次查询
+	r.db.QueryRow(
+		`SELECT
+			(SELECT COUNT(*) FROM channels WHERE status = 'active'),
+			(SELECT COUNT(*) FROM models WHERE status = 'active')`,
+	).Scan(&stats.ActiveChannels, &stats.ActiveModels)
 
+	// 今日统计：使用 created_at >= 范围查询（可利用 idx_usage_created_at 索引）
 	todayArgs := []interface{}{}
 	todayWhere := ""
 	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
 		todayWhere = " AND api_key_id = ?"
 		todayArgs = append(todayArgs, apiKeyID[0])
 	}
-	r.db.QueryRow(
-		`SELECT COALESCE(COUNT(*), 0), COALESCE(SUM(total_tokens), 0) FROM usage_records WHERE date(created_at) = date('now')`+todayWhere,
-		todayArgs...,
+	todayStart := time.Now().Format("2006-01-02")
+	err = r.db.QueryRow(
+		`SELECT COALESCE(COUNT(*), 0), COALESCE(SUM(total_tokens), 0) FROM usage_records WHERE created_at >= ?`+todayWhere,
+		append([]interface{}{todayStart}, todayArgs...)...,
 	).Scan(&stats.TodayRequests, &stats.TodayTokens)
+	if err != nil {
+		// 静默处理：可能是旧版数据中没有 created_at
+		stats.TodayRequests = 0
+		stats.TodayTokens = 0
+	}
 
 	return stats, nil
 }
 
 // GetDailyStats 获取按日聚合统计
 func (r *UsageRepo) GetDailyStats(start, end string, apiKeyID ...string) ([]DailyStats, error) {
-	whereDate := "WHERE date(created_at) >= ? AND date(created_at) <= ?"
-	args := []interface{}{start, end}
+	// 使用 created_at >= ? AND created_at < ? 范围查询以利用 idx_usage_created_at 索引
+	nextDay := addDay(end)
+	whereDate := "WHERE created_at >= ? AND created_at < ?"
+	args := []interface{}{start, nextDay}
 	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
 		whereDate += " AND api_key_id = ?"
 		args = append(args, apiKeyID[0])
@@ -145,12 +238,12 @@ func (r *UsageRepo) GetRecentRecords(limit int, apiKeyID, startDate, endDate str
 		args = append(args, apiKeyID)
 	}
 	if startDate != "" {
-		conditions = append(conditions, "date(u.created_at) >= ?")
+		conditions = append(conditions, "u.created_at >= ?")
 		args = append(args, startDate)
 	}
 	if endDate != "" {
-		conditions = append(conditions, "date(u.created_at) <= ?")
-		args = append(args, endDate)
+		conditions = append(conditions, "u.created_at < ?")
+		args = append(args, addDay(endDate))
 	}
 	where := ""
 	if len(conditions) > 0 {
@@ -199,4 +292,13 @@ func joinConditions(conds []string) string {
 		result += c
 	}
 	return result
+}
+
+// addDay 将日期字符串加一天，用于范围查询结束边界
+func addDay(d string) string {
+	t, err := time.Parse("2006-01-02", d)
+	if err != nil {
+		return d
+	}
+	return t.AddDate(0, 0, 1).Format("2006-01-02")
 }
