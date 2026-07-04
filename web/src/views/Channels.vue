@@ -15,7 +15,7 @@ const channels = ref<any[]>([])
 const showModal = ref(false)
 const editing = ref<any>(null)
 const syncingId = ref<number | null>(null)
-const form = ref({ name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99, use_proxy: false })
+const form = ref({ name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99, use_proxy: false, failover_enabled: true, test_model: '' })
 
 const channelTypes = [
   { label: 'OpenAI 兼容', value: 'openai' },
@@ -54,6 +54,16 @@ const columns = [
       r.use_proxy
         ? h(NTag, { type: 'warning', size: 'small' }, () => '代理')
         : h(NTag, { type: 'default', size: 'small' }, () => '直连')
+    ),
+  },
+  {
+    title: '熔断',
+    key: 'failover_enabled',
+    width: 80,
+    render: (r: any) => (
+      r.failover_enabled === false
+        ? h(NTag, { type: 'default', size: 'small' }, () => '关闭')
+        : h(NTag, { type: 'success', size: 'small' }, () => '开启')
     ),
   },
   {
@@ -100,7 +110,7 @@ async function loadChannels() {
 
 function openCreate() {
   editing.value = null
-  form.value = { name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99, use_proxy: false }
+  form.value = { name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99, use_proxy: false, failover_enabled: true, test_model: '' }
   showModal.value = true
 }
 
@@ -203,6 +213,15 @@ async function toggleChannel(ch: any) {
             <span style="color:#94a3b8;font-size:13px;margin-left:8px">
               启用后此渠道的请求通过全局代理转发
             </span>
+          </NFormItem>
+          <NFormItem label="熔断回落">
+            <NSwitch v-model:value="form.failover_enabled" />
+            <span style="color:#94a3b8;font-size:13px;margin-left:8px">
+              启用后，渠道失败会触发熔断，自动回落到其他渠道
+            </span>
+          </NFormItem>
+          <NFormItem label="测试模型" label-description="熔断探测用模型，留空则使用该渠道最高优先级的活跃模型">
+            <NInput v-model:value="form.test_model" placeholder="留空自动选取" />
           </NFormItem>
         </NForm>
         <template #footer>

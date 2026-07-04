@@ -138,6 +138,14 @@ func (d *DB) migrate() error {
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN forward_proxy_url TEXT DEFAULT ''`)
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN forward_proxy_user TEXT DEFAULT ''`)
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN forward_proxy_pass TEXT DEFAULT ''`)
+	// 迁移：添加渠道熔断相关字段
+	d.Exec(`ALTER TABLE channels ADD COLUMN failover_enabled INTEGER DEFAULT 1`)
+	d.Exec(`ALTER TABLE channels ADD COLUMN test_model TEXT DEFAULT ''`)
+	// 迁移：添加系统配置字段到 proxy_config（熔断探针 + 请求超时）
+	d.Exec(`ALTER TABLE proxy_config ADD COLUMN probe_api_key TEXT DEFAULT ''`)
+	d.Exec(`ALTER TABLE proxy_config ADD COLUMN request_timeout_seconds INTEGER DEFAULT 60`)
+	// 迁移：添加全局熔断开关（默认启用）
+	d.Exec(`ALTER TABLE proxy_config ADD COLUMN failover_enabled INTEGER DEFAULT 1`)
 
 	for _, q := range queries {
 		if _, err := d.Exec(q); err != nil {

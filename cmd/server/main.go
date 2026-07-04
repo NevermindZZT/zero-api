@@ -56,7 +56,7 @@ func main() {
 	channelH := handler.NewChannelHandler(svc.Channel, svc.Model)
 	modelH := handler.NewModelHandler(svc.Model)
 	usageH := handler.NewUsageHandler(svc.Usage)
-	proxyH := handler.NewProxyHandler(svc.Channel, svc.Model, svc.Usage, svc.APIKey, requestTimeout, svc.ProxyConfig)
+	proxyH := handler.NewProxyHandler(svc.Channel, svc.Model, svc.Usage, svc.APIKey, svc.ProxyConfig)
 	proxyConfigH := handler.NewProxyConfigHandler(svc.ProxyConfig, "certs")
 	syncH := handler.NewSyncHandler(syncer)
 	authH := handler.NewAuthHandler(cfg.Auth.Username, cfg.Auth.Password, cfg.Auth.Secret)

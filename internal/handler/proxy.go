@@ -16,16 +16,23 @@ import (
 )
 
 type ProxyHandler struct {
-	channelRepo    *store.ChannelRepo
-	modelRepo      *store.ModelRepo
-	usageRepo      *store.UsageRepo
-	apiKeyRepo     *store.APIKeyRepo
+	channelRepo     *store.ChannelRepo
+	modelRepo       *store.ModelRepo
+	usageRepo       *store.UsageRepo
+	apiKeyRepo      *store.APIKeyRepo
 	proxyConfigRepo *store.ProxyConfigRepo
-	requestTimeout time.Duration
+	breaker         *CircuitBreaker
 }
 
-func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo, requestTimeout time.Duration, proxyConfigRepo *store.ProxyConfigRepo) *ProxyHandler {
-	return &ProxyHandler{channelRepo: channelRepo, modelRepo: modelRepo, usageRepo: usageRepo, apiKeyRepo: apiKeyRepo, requestTimeout: requestTimeout, proxyConfigRepo: proxyConfigRepo}
+func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo, proxyConfigRepo *store.ProxyConfigRepo) *ProxyHandler {
+	return &ProxyHandler{
+		channelRepo:     channelRepo,
+		modelRepo:       modelRepo,
+		usageRepo:       usageRepo,
+		apiKeyRepo:      apiKeyRepo,
+		proxyConfigRepo: proxyConfigRepo,
+		breaker:         NewCircuitBreaker(),
+	}
 }
 
 // ListLocalModels 返回本地启用的模型列表（兼容 OpenAI /v1/models）
@@ -173,7 +180,14 @@ func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 		return
 	}
 
-	// 按优先级依次尝试，失败时自动切换到下一渠道
+	// 读取 proxyConfig（用于超时和探测 API Key）
+	proxyConfig, err := h.proxyConfigRepo.Get()
+	if err != nil {
+		proxyConfig = &store.ProxyConfigData{RequestTimeoutSeconds: 60}
+	}
+	requestTimeout := time.Duration(proxyConfig.RequestTimeoutSeconds) * time.Second
+
+	// 按优先级依次尝试，失败时自动切换到下一渠道（含熔断逻辑）
 	var lastErr error
 	for _, matchedModel := range candidates {
 		// 获取渠道
@@ -181,16 +195,48 @@ func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 		if err != nil {
 			lastErr = fmt.Errorf("渠道 %d 获取失败: %w", matchedModel.ChannelID, err)
 			log.Printf("[中转] %s", lastErr)
+			h.breaker.RecordFailure(matchedModel.ChannelID)
 			continue
 		}
 		if ch.Status != "active" {
 			continue
 		}
 
-		if err := h.tryForward(c, bodyBytes, matchedModel, ch, apiKeyID); err == nil {
-			return // 成功
+		// 熔断检查（全局开关 + 渠道开关）
+		if proxyConfig.FailoverEnabled && ch.FailoverEnabled {
+			allow, needProbe := h.breaker.MayProceed(ch.ID)
+			if !allow && !needProbe {
+				log.Printf("[中转] 渠道 %s (%d) 熔断冷却中，跳过", ch.Name, ch.ID)
+				continue
+			}
+			if needProbe {
+				log.Printf("[中转] 渠道 %s (%d) 需探测健康状态", ch.Name, ch.ID)
+				h.breaker.EnterProbing(ch.ID)
+				testModel := ch.TestModel
+				if testModel == "" {
+					testModel = matchedModel.ModelID
+				}
+				forwardURL, forwardUser, forwardPass := "", "", ""
+				if ch.UseProxy && proxyConfig.ForwardProxyURL != "" {
+					forwardURL = proxyConfig.ForwardProxyURL
+					forwardUser = proxyConfig.ForwardProxyUser
+					forwardPass = proxyConfig.ForwardProxyPass
+				}
+				if err := h.breaker.ProbeAndRecover(ch.ID, ch, testModel, proxyConfig.ProbeAPIKey, forwardURL, forwardUser, forwardPass, requestTimeout); err != nil {
+					log.Printf("[中转] 渠道 %s (%d) 探测失败，跳过: %v", ch.Name, ch.ID, err)
+					continue
+				}
+				// 探测通过，继续执行 tryForward
+			}
+		}
+
+		if err := h.tryForward(c, bodyBytes, matchedModel, ch, apiKeyID, requestTimeout); err == nil {
+			// 成功，清除熔断状态
+			h.breaker.RecordSuccess(ch.ID)
+			return
 		} else {
 			lastErr = err
+			h.breaker.RecordFailure(ch.ID)
 			log.Printf("[中转] 模型 %s 渠道 %s 失败，尝试下一渠道: %v", reqBody.Model, ch.Name, err)
 		}
 	}
@@ -266,7 +312,7 @@ func (h *ProxyHandler) recordUsage(reqBody, rawResp, convertedResp []byte, adapt
 }
 
 // tryForward 尝试将请求转发到指定渠道，成功返回 nil，失败返回 error
-func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64) error {
+func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, requestTimeout time.Duration) error {
 	// 根据渠道类型选择适配器
 	adapt := adapter.NewAdapter(ch.Type)
 
@@ -326,7 +372,7 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 	if client == nil {
 		client = upstream.NewHTTPClient()
 	}
-	client.Timeout = h.requestTimeout
+	client.Timeout = requestTimeout
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("上游请求失败: %w", err)

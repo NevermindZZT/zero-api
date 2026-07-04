@@ -13,6 +13,7 @@ import {
   FlashSharp,
   RocketSharp,
   ServerSharp,
+  SettingsSharp,
   CloseSharp,
 } from '@vicons/ionicons5'
 
@@ -55,6 +56,7 @@ const menuOptions = [
       { label: '代理设置', key: '/proxy', icon: renderIcon(ShieldCheckmarkSharp) },
       { label: '出站代理', key: '/forward-proxy', icon: renderIcon(RocketSharp) },
       { label: '数据库管理', key: '/database', icon: renderIcon(ServerSharp) },
+      { label: '系统设置', key: '/settings', icon: renderIcon(SettingsSharp) },
     ],
   },
 ]
