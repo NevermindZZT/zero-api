@@ -3,10 +3,24 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/never/zero-api/internal/store"
 )
+
+// normalizeBaseURL 规范化渠道 Base URL
+// 用户可能填写了带 /v1 或 /v1beta 的 URL（如 https://api.openai.com/v1），
+// 但适配器会自行追加 /v1/chat/completions，需要去除尾部版本号避免双份。
+func normalizeBaseURL(url string) string {
+	url = strings.TrimRight(url, "/")
+	if strings.HasSuffix(url, "/v1beta") {
+		url = url[:len(url)-7]
+	} else if strings.HasSuffix(url, "/v1") {
+		url = url[:len(url)-3]
+	}
+	return url
+}
 
 type ChannelHandler struct {
 	channelRepo *store.ChannelRepo
@@ -51,6 +65,7 @@ func (h *ChannelHandler) CreateChannel(c *gin.Context) {
 	if ch.Status == "" {
 		ch.Status = "active"
 	}
+	ch.BaseURL = normalizeBaseURL(ch.BaseURL)
 	id, err := h.channelRepo.Create(&ch)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -69,6 +84,7 @@ func (h *ChannelHandler) UpdateChannel(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	ch.BaseURL = normalizeBaseURL(ch.BaseURL)
 	ch.ID = id
 	if err := h.channelRepo.Update(&ch); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

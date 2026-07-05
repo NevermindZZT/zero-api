@@ -316,8 +316,8 @@ body {
   min-width: 100%;
 }
 
-/* 移动端：卡片内容不溢出 */
-.n-card {
+/* 卡片在页面布局内撑满宽度 */
+.main-area .n-card {
   overflow: hidden;
   align-self: stretch;
 }
