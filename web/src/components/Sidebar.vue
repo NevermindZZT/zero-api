@@ -61,7 +61,7 @@ const menuOptions = [
   },
 ]
 
-const appVersion = 'v1.1.0'
+const appVersion = 'v1.1.1'
 const projectUrl = 'https://github.com/NevermindZZT/zero-api'
 
 const activeKey = ref(route.path)
