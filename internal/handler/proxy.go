@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -25,7 +27,11 @@ type ProxyHandler struct {
 	apiKeyRepo        *store.APIKeyRepo
 	proxyConfigRepo   *store.ProxyConfigRepo
 	breaker           *CircuitBreaker
-	proxyConfigCache  *store.ProxyConfigData // 缓存 proxy_config，减少重复 DB 读取
+	proxyConfigCache  *store.ProxyConfigData
+	modelsCache       []byte          // /v1/models 响应缓存
+	modelsCacheTime   time.Time       // 缓存时间
+	modelsCacheMu     sync.RWMutex
+	modelsCacheTTL    time.Duration   // 缓存有效期
 }
 
 func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo, proxyConfigRepo *store.ProxyConfigRepo) *ProxyHandler {
@@ -36,13 +42,20 @@ func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo,
 		apiKeyRepo:      apiKeyRepo,
 		proxyConfigRepo: proxyConfigRepo,
 		breaker:         NewCircuitBreaker(),
+		modelsCacheTTL:  60 * time.Second,
 	}
-	// 预读取 proxyConfig 到缓存
 	cfg, err := proxyConfigRepo.Get()
 	if err == nil {
 		h.proxyConfigCache = cfg
 	}
 	return h
+}
+
+// InvalidateModelsCache 清除模型列表响应缓存（模型变更时调用）
+func (h *ProxyHandler) InvalidateModelsCache() {
+	h.modelsCacheMu.Lock()
+	h.modelsCache = nil
+	h.modelsCacheMu.Unlock()
 }
 
 // getProxyConfig 获取代理配置（优先使用缓存）
@@ -60,7 +73,18 @@ func (h *ProxyHandler) getProxyConfig() *store.ProxyConfigData {
 
 // ListLocalModels 返回本地启用的模型列表（兼容 OpenAI /v1/models）
 // 格式参考 OpenRouter /api/v1/models，返回丰富的模型元信息
+// 使用缓存避免频繁 JSON 编码
 func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
+	// 尝试使用缓存（TTL 60s）
+	h.modelsCacheMu.RLock()
+	if h.modelsCache != nil && time.Since(h.modelsCacheTime) < h.modelsCacheTTL {
+		c.Header("Cache-Control", "public, max-age=60")
+		c.Data(http.StatusOK, "application/json", h.modelsCache)
+		h.modelsCacheMu.RUnlock()
+		return
+	}
+	h.modelsCacheMu.RUnlock()
+
 	models, err := h.modelRepo.List(0)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -157,10 +181,16 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 		data = []gin.H{}
 	}
 	c.Header("Cache-Control", "public, max-age=60")
-	c.JSON(http.StatusOK, gin.H{
+	body, _ := json.Marshal(gin.H{
 		"object": "list",
 		"data":   data,
 	})
+	// 写入缓存
+	h.modelsCacheMu.Lock()
+	h.modelsCache = body
+	h.modelsCacheTime = time.Now()
+	h.modelsCacheMu.Unlock()
+	c.Data(http.StatusOK, "application/json", body)
 }
 
 // ChatCompletion 处理聊天补全请求（核心中转）
@@ -285,9 +315,10 @@ func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 	c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("所有渠道均失败: %v", lastErr)})
 }
 
-// InvalidateProxyConfig 清除代理配置缓存（设置页面保存后调用）
+// InvalidateProxyConfig 清除代理配置缓存和模型列表缓存（设置页面保存后调用）
 func (h *ProxyHandler) InvalidateProxyConfig() {
 	h.proxyConfigCache = nil
+	h.InvalidateModelsCache()
 }
 
 // resolveAndValidateAPIKey 从请求中提取并验证 API Key
@@ -505,6 +536,11 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 	for {
 		line, err := reader.ReadBytes('\n')
 		if err != nil && err != io.EOF {
+			// 检查是否客户端断连（不触发熔断）
+			if errors.Is(err, io.ErrUnexpectedEOF) || c.Request.Context().Err() != nil {
+				log.Printf("[流式] 客户端断开连接 (模型=%s, 渠道=%s)", matchedModel.ModelID, ch.Name)
+				return nil
+			}
 			// 超时或连接断开，返回 error 触发熔断回落
 			return fmt.Errorf("流式读取失败: %w", err)
 		}
@@ -514,6 +550,11 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 
 		// 写入客户端
 		if _, werr := c.Writer.Write(line); werr != nil {
+			// 检查是否客户端断连（不触发熔断）
+			if c.Request.Context().Err() != nil {
+				log.Printf("[流式] 客户端断开连接 (模型=%s, 渠道=%s)", matchedModel.ModelID, ch.Name)
+				return nil
+			}
 			return fmt.Errorf("写入流式响应失败: %w", werr)
 		}
 		flusher.Flush()

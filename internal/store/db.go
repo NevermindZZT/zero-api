@@ -23,13 +23,17 @@ func Open(dbPath string) (*DB, error) {
 	// 启用 WAL 模式和设置 busy timeout
 	for _, pragma := range []string{
 		"PRAGMA journal_mode=WAL",
-		"PRAGMA busy_timeout=5000",
+		"PRAGMA busy_timeout=10000",
 		"PRAGMA foreign_keys=ON",
 	} {
 		if _, err := db.Exec(pragma); err != nil {
 			return nil, fmt.Errorf("设置 PRAGMA 失败: %w", err)
 		}
 	}
+
+	// 限制最大连接数，减少 WAL 模式下的写冲突
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
 
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("连接数据库失败: %w", err)

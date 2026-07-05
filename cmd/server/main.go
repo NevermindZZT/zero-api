@@ -70,7 +70,7 @@ func main() {
 	// --- API 路由 ---
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery(), middleware.CORS(), middleware.AuthMiddleware(cfg.Auth.Enabled, cfg.Auth.Secret))
+	r.Use(gin.Recovery(), middleware.CORS(), middleware.AuthMiddleware(cfg.Auth.Enabled, cfg.Auth.Secret))
 
 	api := r.Group("/api")
 	{
