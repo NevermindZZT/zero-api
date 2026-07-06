@@ -142,9 +142,9 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	tlsConn := tls.Server(clientConn, &tls.Config{
 		Certificates: []tls.Certificate{*tlsCert},
-		NextProtos:   []string{"http/1.1", "h2"},
+		NextProtos:   []string{"http/1.1"},
 	})
-	tlsConn.SetDeadline(time.Now().Add(10 * time.Second))
+	tlsConn.SetDeadline(time.Now().Add(30 * time.Second))
 	if err := tlsConn.Handshake(); err != nil {
 		log.Printf("[MITM] TLS 握手失败: %v", err)
 		return
@@ -154,97 +154,123 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[MITM] TLS 握手成功: %s (加密: %s, ALPN: %s, 版本: 0x%04X)",
 		hostname, tls.CipherSuiteName(cs.CipherSuite), cs.NegotiatedProtocol, cs.Version)
 
-	// ═══ 第五步：读取 HTTP 请求 ═══
-	req, err := http.ReadRequest(bufio.NewReader(tlsConn))
-	if err != nil {
-		log.Printf("[MITM] 读取解密请求失败: %v", err)
-		return
-	}
-
-	bodyBytes, err := io.ReadAll(req.Body)
-	req.Body.Close()
-	if err != nil {
-		log.Printf("[MITM] 读取请求体失败: %v", err)
-		return
-	}
-
-	headers := make(map[string]string)
-	for k, v := range req.Header {
-		headers[strings.ToLower(k)] = strings.Join(v, ", ")
-	}
-
-	log.Printf("")
-	log.Printf("=== [MITM] %s https://%s%s ===", req.Method, hostname, req.URL.Path)
-	if ct, ok := headers["content-type"]; ok {
-		log.Printf("  Content-Type: %s", ct)
-	}
-	if cl, ok := headers["content-length"]; ok {
-		log.Printf("  Content-Length: %s", cl)
-	}
-	if auth, ok := headers["authorization"]; ok {
-		short := auth
-		if len(auth) > 40 {
-			short = auth[:20] + "..." + auth[len(auth)-20:]
-		}
-		log.Printf("  Authorization: %s", short)
-	}
-	if len(bodyBytes) > 0 {
-		log.Printf("  Body: %d 字节", len(bodyBytes))
-		if len(bodyBytes) < 500 {
-			log.Printf("  Body内容: %s", string(bodyBytes))
-		}
-	}
-
-	// ═══ 第六步：处理请求 ═══
-	// 模型列表请求
-	if req.Method == "GET" && (req.URL.Path == "/v1/models" || req.URL.Path == "/models" || req.URL.Path == "/api/v1/models") {
-		log.Printf("[MITM] → 模型列表请求")
-		status, respHeaders, respBody, err := s.adapter.HandleModelsRequest(headers)
+	// ═══ 第五步：循环处理请求（HTTP Keep-Alive）═══
+	reader := bufio.NewReader(tlsConn)
+	for {
+		// 读取一个 HTTP 请求
+		req, err := http.ReadRequest(reader)
 		if err != nil {
-			log.Printf("[MITM] ✗ 模型列表请求失败: %v", err)
+			log.Printf("[MITM] 读取请求结束: %v", err)
+			break
+		}
+
+		bodyBytes, err := io.ReadAll(req.Body)
+		req.Body.Close()
+		if err != nil {
+			log.Printf("[MITM] 读取请求体失败: %v", err)
+			break
+		}
+
+		headers := make(map[string]string)
+		for k, v := range req.Header {
+			headers[strings.ToLower(k)] = strings.Join(v, ", ")
+		}
+
+		log.Printf("")
+		log.Printf("=== [MITM] %s https://%s%s ===", req.Method, hostname, req.URL.Path)
+		if ct, ok := headers["content-type"]; ok {
+			log.Printf("  Content-Type: %s", ct)
+		}
+		if cl, ok := headers["content-length"]; ok {
+			log.Printf("  Content-Length: %s", cl)
+		}
+		if auth, ok := headers["authorization"]; ok {
+			short := auth
+			if len(auth) > 40 {
+				short = auth[:20] + "..." + auth[len(auth)-20:]
+			}
+			log.Printf("  Authorization: %s", short)
+		}
+		if len(bodyBytes) > 0 {
+			log.Printf("  Body: %d 字节", len(bodyBytes))
+			if len(bodyBytes) < 500 {
+				log.Printf("  Body内容: %s", string(bodyBytes))
+			}
+		}
+
+		// 检查客户端是否要求关闭连接
+		wantClose := strings.EqualFold(headers["connection"], "close")
+
+		// ═══ 处理请求 ═══
+		// 模型列表请求
+		if req.Method == "GET" && isModelsPath(req.URL.Path) {
+			log.Printf("[MITM] → 模型列表请求")
+			status, respHeaders, respBody, err := s.adapter.HandleModelsRequest(headers)
+			if err != nil {
+				log.Printf("[MITM] ✗ 模型列表请求失败: %v", err)
+				if status > 0 {
+					writeHTTPResponse(tlsConn, status, err.Error())
+				} else {
+					writeHTTPResponse(tlsConn, 502, "Bad Gateway")
+				}
+				if wantClose {
+					break
+				}
+				continue
+			}
+			log.Printf("  → 响应: %d (%d 字节, %d 个模型)", status, len(respBody), countModels(respBody))
+			writeHTTPResponseWithHeaders(tlsConn, status, respHeaders, respBody)
+			if wantClose {
+				break
+			}
+			continue
+		}
+
+		// 非 LLM 请求透传
+		if !s.router.ShouldIntercept(hostname) && !IsLLMRequest(req.Method, req.URL.Path, headers, bodyBytes) {
+			log.Printf("➡️  [透传] 非 LLM 请求: %s %s", req.Method, req.URL.Path)
+			s.forwardDirect(tlsConn, req, bodyBytes)
+			break
+		}
+
+		// 检测是否为流式请求
+		isStream := isStreamingRequest(bodyBytes)
+
+		if isStream {
+			log.Printf("🎯 [MITM] 拦截流式 LLM 请求 (模型: %s)", extractModel(bodyBytes))
+			if err := s.adapter.HandleLLMStreamRequest(headers, bodyBytes, tlsConn); err != nil {
+				log.Printf("[MITM] ✗ 流式 LLM 转发失败: %v", err)
+			}
+			break // 流式响应结束后关闭连接
+		}
+
+		// 非流式 LLM 请求处理
+		log.Printf("🎯 [MITM] 拦截 LLM 请求 (模型: %s)", extractModel(bodyBytes))
+		status, respHeaders, respBody, err := s.adapter.HandleLLMRequest(req.Method, req.URL.Path, headers, bodyBytes)
+		if err != nil {
+			log.Printf("[MITM] ✗ LLM 转发失败: %v", err)
 			if status > 0 {
 				writeHTTPResponse(tlsConn, status, err.Error())
 			} else {
 				writeHTTPResponse(tlsConn, 502, "Bad Gateway")
 			}
-			tlsConn.Close()
-			return
+			if wantClose {
+				break
+			}
+			continue
 		}
-		log.Printf("  → 响应: %d (%d 字节, %d 个模型)", status, len(respBody), countModels(respBody))
+
+		log.Printf("  → 响应: %d (%d 字节)", status, len(respBody))
+		if respHeaders != nil {
+			if ct, ok := respHeaders["Content-Type"]; ok {
+				log.Printf("  Content-Type: %s", ct)
+			}
+		}
 		writeHTTPResponseWithHeaders(tlsConn, status, respHeaders, respBody)
-		tlsConn.Close()
-		return
-	}
-
-	// 非 LLM 请求透传
-	if !s.router.ShouldIntercept(hostname) && !IsLLMRequest(req.Method, req.URL.Path, headers, bodyBytes) {
-		log.Printf("➡️  [透传] 非 LLM 请求，转发到原始服务器: %s %s", req.Method, req.URL.Path)
-		s.forwardDirect(tlsConn, req, bodyBytes)
-		return
-	}
-
-	// LLM 请求处理
-	log.Printf("🎯 [MITM] 拦截 LLM 请求 (模型: %s)", extractModel(bodyBytes))
-	status, respHeaders, respBody, err := s.adapter.HandleLLMRequest(req.Method, req.URL.Path, headers, bodyBytes)
-	if err != nil {
-		log.Printf("[MITM] ✗ LLM 转发失败: %v", err)
-		if status > 0 {
-			writeHTTPResponse(tlsConn, status, err.Error())
-		} else {
-			writeHTTPResponse(tlsConn, 502, "Bad Gateway")
-		}
-		tlsConn.Close()
-		return
-	}
-
-	log.Printf("  → 响应: %d (%d 字节)", status, len(respBody))
-	if respHeaders != nil {
-		if ct, ok := respHeaders["Content-Type"]; ok {
-			log.Printf("  Content-Type: %s", ct)
+		if wantClose {
+			break
 		}
 	}
-	writeHTTPResponseWithHeaders(tlsConn, status, respHeaders, respBody)
-	tlsConn.Close()
 }
 
 // handleHTTP 处理普通 HTTP 请求
@@ -491,6 +517,27 @@ func writeHTTPResponseWithHeaders(conn net.Conn, statusCode int, headers map[str
 
 func bufioReader(conn net.Conn) *bufio.Reader {
 	return bufio.NewReader(conn)
+}
+
+// isModelsPath 判断是否为模型列表请求路径
+func isModelsPath(path string) bool {
+	return path == "/v1/models" || path == "/models" || path == "/api/v1/models"
+}
+
+// isStreamingRequest 判断请求体是否要求流式响应
+func isStreamingRequest(body []byte) bool {
+	var parsed struct {
+		Stream interface{} `json:"stream"`
+	}
+	if json.Unmarshal(body, &parsed) == nil && parsed.Stream != nil {
+		switch v := parsed.Stream.(type) {
+		case bool:
+			return v
+		case string:
+			return v == "true"
+		}
+	}
+	return false
 }
 
 // checkProxyBasicAuth 简单 Basic 认证验证

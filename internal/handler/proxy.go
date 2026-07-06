@@ -512,6 +512,9 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 	c.Header("Connection", "keep-alive")
 	c.Status(resp.StatusCode)
 
+	// 清除 http.Server.WriteTimeout（流式响应可能持续很长时间）
+	http.NewResponseController(c.Writer).SetWriteDeadline(time.Time{})
+
 	// 获取 Flusher
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {

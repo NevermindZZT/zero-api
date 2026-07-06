@@ -1,11 +1,13 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -561,4 +563,227 @@ func (pa *ProxyAdapter) recordUsage(requestModel string, rawResp, convertedResp 
 	}); err != nil {
 		log.Printf("[代理][Usage] 插入记录失败: %v", err)
 	}
+}
+
+// HandleLLMStreamRequest 处理流式 LLM 请求，SSE 数据直接写入 conn
+func (pa *ProxyAdapter) HandleLLMStreamRequest(headers map[string]string, body []byte, conn net.Conn) error {
+	// 解析请求体获取模型名
+	var reqModel string
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(body, &parsed); err == nil {
+		if m, ok := parsed["model"].(string); ok {
+			reqModel = m
+		}
+	}
+	if reqModel == "" {
+		writeJSONError(conn, 400, "请求中缺少 model 字段")
+		return fmt.Errorf("请求中缺少 model 字段")
+	}
+
+	originalModel := reqModel
+
+	// 检查模型映射
+	mapping, hasMapping := pa.modelMappings[originalModel]
+	targetModel := originalModel
+	if hasMapping && mapping.TargetModel != "" {
+		targetModel = mapping.TargetModel
+		log.Printf("[代理] 模型映射: %s → %s", originalModel, targetModel)
+	}
+
+	// 验证并解析 API Key
+	apiKeyID, err := pa.resolveAndValidateAPIKey(headers)
+	if err != nil {
+		writeJSONError(conn, 401, "API Key 验证失败: "+err.Error())
+		return fmt.Errorf("API Key 验证失败: %w", err)
+	}
+
+	// 查找所有启用的匹配模型
+	allModels, err := pa.modelRepo.List(0)
+	if err != nil {
+		writeJSONError(conn, 502, "查询模型失败")
+		return fmt.Errorf("查询模型失败: %w", err)
+	}
+
+	var candidates []*store.Model
+	for i, m := range allModels {
+		if m.ModelID == targetModel && m.Status == "active" {
+			candidates = append(candidates, &allModels[i])
+		}
+	}
+	if len(candidates) == 0 && targetModel != originalModel {
+		for i, m := range allModels {
+			if m.ModelID == originalModel && m.Status == "active" {
+				candidates = append(candidates, &allModels[i])
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		for i, m := range allModels {
+			if m.Status == "active" {
+				candidates = append(candidates, &allModels[i])
+				break
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		writeJSONError(conn, 404, fmt.Sprintf("模型 %s 未找到或未启用", originalModel))
+		return fmt.Errorf("模型 %s 未找到或未启用", originalModel)
+	}
+
+	// 按优先级依次尝试，失败时自动切换到下一渠道
+	var lastErr error
+	for _, matchedModel := range candidates {
+		ch, err := pa.channelRepo.GetByID(matchedModel.ChannelID)
+		if err != nil {
+			lastErr = fmt.Errorf("渠道 %d 获取失败: %w", matchedModel.ChannelID, err)
+			continue
+		}
+		if ch.Status != "active" {
+			continue
+		}
+
+		err = pa.tryForwardModelStream(conn, headers, body, originalModel, matchedModel, ch, apiKeyID)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		log.Printf("[代理] 模型 %s 渠道 %s 流式失败，尝试下一渠道: %v", originalModel, ch.Name, err)
+	}
+
+	writeJSONError(conn, 502, fmt.Sprintf("所有渠道均失败: %v", lastErr))
+	return lastErr
+}
+
+// tryForwardModelStream 流式转发到指定渠道，SSE 数据直接写入 conn
+func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]string, body []byte, originalModel string, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64) error {
+	// 检查模型映射
+	mapping, hasMapping := pa.modelMappings[originalModel]
+	targetModel := originalModel
+	if hasMapping && mapping.TargetModel != "" {
+		targetModel = mapping.TargetModel
+	}
+
+	// 选择适配器
+	adapt := adapter.NewAdapter(ch.Type)
+
+	// 转换请求体
+	convertedBody, err := adapt.ConvertRequest(matchedModel.ModelID, body)
+	if err != nil {
+		return fmt.Errorf("请求格式转换失败: %w", err)
+	}
+
+	// 参数注入
+	modifiedBody, err := pa.injectParams(convertedBody, targetModel, mapping)
+	if err != nil {
+		modifiedBody = convertedBody
+	}
+
+	// 构造上游请求
+	upstreamURL := adapt.GetChatURL(ch.BaseURL)
+	if ch.Type == "gemini" {
+		upstreamURL = fmt.Sprintf("%s/%s:generateContent", upstreamURL, matchedModel.ModelID)
+		if ch.APIKey != "" {
+			upstreamURL = fmt.Sprintf("%s?key=%s", upstreamURL, ch.APIKey)
+		}
+	}
+
+	req, err := http.NewRequest("POST", upstreamURL, bytes.NewReader(modifiedBody))
+	if err != nil {
+		return fmt.Errorf("构造上游请求失败: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// 设置认证头
+	switch ch.Type {
+	case "anthropic":
+		if ch.APIKey != "" {
+			req.Header.Set("x-api-key", ch.APIKey)
+			req.Header.Set("anthropic-version", "2023-06-01")
+		} else if key, ok := headers["x-api-key"]; ok {
+			req.Header.Set("x-api-key", key)
+			req.Header.Set("anthropic-version", "2023-06-01")
+		}
+	case "openai", "openrouter":
+		if ch.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+ch.APIKey)
+		} else if auth, ok := headers["authorization"]; ok {
+			req.Header.Set("Authorization", auth)
+		}
+	}
+
+	// 转发
+	startTime := time.Now()
+	client := upstream.NewHTTPClientWithTimeout(pa.requestTimeout)
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("上游请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if shouldFailoverStatus(resp.StatusCode) {
+		respBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("上游返回可切换错误状态 %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	// 构造 SSE 响应头（写回原始 TLS 连接）
+	var headerBuf strings.Builder
+	headerBuf.WriteString(fmt.Sprintf("HTTP/1.1 %d %s\r\n", resp.StatusCode, http.StatusText(resp.StatusCode)))
+	headerBuf.WriteString("Content-Type: text/event-stream\r\n")
+	headerBuf.WriteString("Cache-Control: no-cache\r\n")
+	headerBuf.WriteString("Connection: close\r\n")
+	// 透传原始上游响应头（过滤掉逐跳头和已设置的头）
+	for k := range resp.Header {
+		kl := strings.ToLower(k)
+		if kl == "transfer-encoding" || kl == "content-length" || kl == "connection" ||
+			kl == "content-type" || kl == "cache-control" {
+			continue
+		}
+		headerBuf.WriteString(fmt.Sprintf("%s: %s\r\n", k, resp.Header.Get(k)))
+	}
+	headerBuf.WriteString("\r\n")
+
+	if _, err := conn.Write([]byte(headerBuf.String())); err != nil {
+		return fmt.Errorf("写入 SSE 响应头失败: %w", err)
+	}
+
+	// 流式转发 SSE 数据块
+	var buf bytes.Buffer
+	streamReader := bufio.NewReaderSize(resp.Body, 64*1024)
+	done := false
+	for !done {
+		line, err := streamReader.ReadBytes('\n')
+		if err != nil {
+			if err == io.EOF {
+				done = true
+				if len(line) == 0 {
+					break
+				}
+			} else {
+				return fmt.Errorf("读取 SSE 流失败: %w", err)
+			}
+		}
+		if _, werr := conn.Write(line); werr != nil {
+			return fmt.Errorf("写入 SSE 数据失败: %w", werr)
+		}
+		buf.Write(line)
+	}
+
+	// 异步记录用量
+	latencyMs := int(time.Since(startTime).Milliseconds())
+	fullResp := buf.Bytes()
+	if len(fullResp) > 0 {
+		convertedResp, _ := adapt.ConvertResponse(fullResp)
+		go pa.recordUsage(originalModel, fullResp, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
+	}
+
+	return nil
+}
+
+// writeJSONError 向原始连接写入 JSON 错误响应
+func writeJSONError(conn net.Conn, statusCode int, msg string) {
+	body, _ := json.Marshal(map[string]string{"error": msg})
+	writeHTTPResponseWithHeaders(conn, statusCode, map[string]string{
+		"Content-Type": "application/json",
+		"Connection":   "close",
+	}, body)
 }
