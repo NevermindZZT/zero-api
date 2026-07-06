@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -301,14 +302,6 @@ func (pa *ProxyAdapter) resolveAndValidateAPIKey(headers map[string]string) (*in
 	return &k.ID, nil
 }
 
-func shouldFailoverStatus(statusCode int) bool {
-	switch statusCode {
-	case http.StatusUnauthorized, http.StatusForbidden, http.StatusRequestTimeout, http.StatusTooManyRequests:
-		return true
-	}
-	return statusCode >= 500
-}
-
 // tryForwardModel 尝试将请求转发到指定渠道，成功返回响应，失败返回 error
 func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, originalModel string, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64) (int, map[string]string, []byte, error) {
 	// 检查模型映射
@@ -384,7 +377,7 @@ func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, 
 		convertedResp = respBytes
 	}
 
-	if shouldFailoverStatus(resp.StatusCode) {
+	if upstream.ShouldFailoverStatus(resp.StatusCode) {
 		return resp.StatusCode, nil, nil, fmt.Errorf("上游返回可切换错误状态 %d: %s", resp.StatusCode, string(respBytes))
 	}
 
@@ -631,7 +624,10 @@ func (pa *ProxyAdapter) HandleLLMStreamRequest(headers map[string]string, body [
 	}
 
 	// 按优先级依次尝试，失败时自动切换到下一渠道
+	// 注意：一旦 tryForwardModelStream 向连接写入任何数据（SSE 响应头），
+	// 后续任何失败都不能再切换到下一渠道，否则会污染已发送的响应。
 	var lastErr error
+	var dataWritten bool
 	for _, matchedModel := range candidates {
 		ch, err := pa.channelRepo.GetByID(matchedModel.ChannelID)
 		if err != nil {
@@ -642,20 +638,33 @@ func (pa *ProxyAdapter) HandleLLMStreamRequest(headers map[string]string, body [
 			continue
 		}
 
-		err = pa.tryForwardModelStream(conn, headers, body, originalModel, matchedModel, ch, apiKeyID)
+		// 如果之前已有渠道开始写数据但失败了，禁止 failover
+		if dataWritten {
+			log.Printf("[代理] 模型 %s 渠道 %s 已在之前输出数据，跳过剩余渠道", originalModel, ch.Name)
+			break
+		}
+
+		wroteData, err := pa.tryForwardModelStream(conn, headers, body, originalModel, matchedModel, ch, apiKeyID)
 		if err == nil {
 			return nil
+		}
+		if wroteData {
+			dataWritten = true
 		}
 		lastErr = err
 		log.Printf("[代理] 模型 %s 渠道 %s 流式失败，尝试下一渠道: %v", originalModel, ch.Name, err)
 	}
 
-	writeJSONError(conn, 502, fmt.Sprintf("所有渠道均失败: %v", lastErr))
+	if !dataWritten {
+		writeJSONError(conn, 502, fmt.Sprintf("所有渠道均失败: %v", lastErr))
+	}
 	return lastErr
 }
 
 // tryForwardModelStream 流式转发到指定渠道，SSE 数据直接写入 conn
-func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]string, body []byte, originalModel string, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64) error {
+// 返回 (wroteData, error)
+//   wroteData=true 表示已向连接写入数据（此时调用方禁止 failover）
+func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]string, body []byte, originalModel string, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64) (bool, error) {
 	// 检查模型映射
 	mapping, hasMapping := pa.modelMappings[originalModel]
 	targetModel := originalModel
@@ -669,7 +678,7 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 	// 转换请求体
 	convertedBody, err := adapt.ConvertRequest(matchedModel.ModelID, body)
 	if err != nil {
-		return fmt.Errorf("请求格式转换失败: %w", err)
+		return false, fmt.Errorf("请求格式转换失败: %w", err)
 	}
 
 	// 参数注入
@@ -689,7 +698,7 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 
 	req, err := http.NewRequest("POST", upstreamURL, bytes.NewReader(modifiedBody))
 	if err != nil {
-		return fmt.Errorf("构造上游请求失败: %w", err)
+		return false, fmt.Errorf("构造上游请求失败: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
@@ -713,17 +722,25 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 
 	// 转发
 	startTime := time.Now()
-	client := upstream.NewHTTPClientWithTimeout(pa.requestTimeout)
+	client := upstream.NewStreamHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("上游请求失败: %w", err)
+		return false, fmt.Errorf("上游请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if shouldFailoverStatus(resp.StatusCode) {
+	if upstream.ShouldFailoverStatus(resp.StatusCode) {
 		respBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("上游返回可切换错误状态 %d: %s", resp.StatusCode, string(respBytes))
+		return false, fmt.Errorf("上游返回可切换错误状态 %d: %s", resp.StatusCode, string(respBytes))
 	}
+
+	// 上游读超时保护：超时后自动关闭 resp.Body，解除 ReadBytes 阻塞
+	streamCtx, streamCancel := context.WithTimeout(context.Background(), pa.requestTimeout)
+	defer streamCancel()
+	go func() {
+		<-streamCtx.Done()
+		resp.Body.Close()
+	}()
 
 	// 构造 SSE 响应头（写回原始 TLS 连接）
 	var headerBuf strings.Builder
@@ -743,7 +760,7 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 	headerBuf.WriteString("\r\n")
 
 	if _, err := conn.Write([]byte(headerBuf.String())); err != nil {
-		return fmt.Errorf("写入 SSE 响应头失败: %w", err)
+		return true, fmt.Errorf("写入 SSE 响应头失败: %w", err)
 	}
 
 	// 流式转发 SSE 数据块
@@ -759,11 +776,11 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 					break
 				}
 			} else {
-				return fmt.Errorf("读取 SSE 流失败: %w", err)
+				return true, fmt.Errorf("读取 SSE 流失败: %w", err)
 			}
 		}
 		if _, werr := conn.Write(line); werr != nil {
-			return fmt.Errorf("写入 SSE 数据失败: %w", werr)
+			return true, fmt.Errorf("写入 SSE 数据失败: %w", werr)
 		}
 		buf.Write(line)
 	}
@@ -776,7 +793,7 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 		go pa.recordUsage(originalModel, fullResp, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
 	}
 
-	return nil
+	return false, nil
 }
 
 // writeJSONError 向原始连接写入 JSON 错误响应

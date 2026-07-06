@@ -150,6 +150,8 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tlsConn.SetDeadline(time.Time{})
+	// 确保 TLS close_notify 在连接关闭前发送，避免客户端收到 TCP RST
+	defer tlsConn.Close()
 	cs := tlsConn.ConnectionState()
 	log.Printf("[MITM] TLS 握手成功: %s (加密: %s, ALPN: %s, 版本: 0x%04X)",
 		hostname, tls.CipherSuiteName(cs.CipherSuite), cs.NegotiatedProtocol, cs.Version)
@@ -209,9 +211,9 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				log.Printf("[MITM] ✗ 模型列表请求失败: %v", err)
 				if status > 0 {
-					writeHTTPResponse(tlsConn, status, err.Error())
+					writeHTTPResponse(tlsConn, status)
 				} else {
-					writeHTTPResponse(tlsConn, 502, "Bad Gateway")
+					writeHTTPResponse(tlsConn, 502)
 				}
 				if wantClose {
 					break
@@ -250,9 +252,9 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Printf("[MITM] ✗ LLM 转发失败: %v", err)
 			if status > 0 {
-				writeHTTPResponse(tlsConn, status, err.Error())
+				writeHTTPResponse(tlsConn, status)
 			} else {
-				writeHTTPResponse(tlsConn, 502, "Bad Gateway")
+				writeHTTPResponse(tlsConn, 502)
 			}
 			if wantClose {
 				break
@@ -378,8 +380,7 @@ func (s *Server) forwardDirect(tlsConn net.Conn, req *http.Request, body []byte)
 	destConn, err := net.DialTimeout("tcp", host, 10*time.Second)
 	if err != nil {
 		log.Printf("[代理] 连接上游 %s 失败: %v", host, err)
-		writeHTTPResponse(tlsConn, 502, "Bad Gateway")
-		tlsConn.Close()
+		writeHTTPResponse(tlsConn, 502)
 		return
 	}
 	defer destConn.Close()
@@ -389,8 +390,7 @@ func (s *Server) forwardDirect(tlsConn net.Conn, req *http.Request, body []byte)
 	})
 	if err := tlsDest.Handshake(); err != nil {
 		log.Printf("[代理] 上游 TLS 握手失败: %v", err)
-		writeHTTPResponse(tlsConn, 502, "Bad Gateway")
-		tlsConn.Close()
+		writeHTTPResponse(tlsConn, 502)
 		return
 	}
 
@@ -398,8 +398,7 @@ func (s *Server) forwardDirect(tlsConn net.Conn, req *http.Request, body []byte)
 	req.Body = io.NopCloser(bytes.NewReader(body))
 	if err := req.Write(tlsDest); err != nil {
 		log.Printf("[代理] 发送请求到上游失败: %v", err)
-		writeHTTPResponse(tlsConn, 502, "Bad Gateway")
-		tlsConn.Close()
+		writeHTTPResponse(tlsConn, 502)
 		return
 	}
 
@@ -407,8 +406,7 @@ func (s *Server) forwardDirect(tlsConn net.Conn, req *http.Request, body []byte)
 	resp, err := http.ReadResponse(bufio.NewReader(tlsDest), req)
 	if err != nil {
 		log.Printf("[代理] 读取上游响应失败: %v", err)
-		writeHTTPResponse(tlsConn, 502, "Bad Gateway")
-		tlsConn.Close()
+		writeHTTPResponse(tlsConn, 502)
 		return
 	}
 	defer resp.Body.Close()
@@ -416,8 +414,7 @@ func (s *Server) forwardDirect(tlsConn net.Conn, req *http.Request, body []byte)
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("[代理] 读取上游响应体失败: %v", err)
-		writeHTTPResponse(tlsConn, 502, "Bad Gateway")
-		tlsConn.Close()
+		writeHTTPResponse(tlsConn, 502)
 		return
 	}
 
@@ -439,8 +436,7 @@ func (s *Server) forwardDirect(tlsConn net.Conn, req *http.Request, body []byte)
 	tlsConn.Write([]byte(sb.String()))
 	tlsConn.Write(respBody)
 
-	// ★ 发送 TLS close_notify
-	tlsConn.Close()
+	// TLS close_notify 由 handleConnect 的 defer tlsConn.Close() 负责
 }
 
 // forwardHTTP 透传普通 HTTP 请求
@@ -497,7 +493,7 @@ func extractModel(body []byte) string {
 	return ""
 }
 
-func writeHTTPResponse(conn net.Conn, statusCode int, statusText string) {
+func writeHTTPResponse(conn net.Conn, statusCode int) {
 	resp := fmt.Sprintf("HTTP/1.1 %d %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
 		statusCode, http.StatusText(statusCode))
 	conn.Write([]byte(resp))
@@ -513,10 +509,6 @@ func writeHTTPResponseWithHeaders(conn net.Conn, statusCode int, headers map[str
 	sb.WriteString("\r\n")
 	conn.Write([]byte(sb.String()))
 	conn.Write(body)
-}
-
-func bufioReader(conn net.Conn) *bufio.Reader {
-	return bufio.NewReader(conn)
 }
 
 // isModelsPath 判断是否为模型列表请求路径

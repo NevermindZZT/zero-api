@@ -407,9 +407,18 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 		}
 	}
 
-	// 使用独立超时 context，避免客户端断开导致上游请求被取消
-	upstreamCtx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-	defer cancel()
+	// 创建 HTTP 客户端
+	// 流式请求使用无总超时的客户端（仅空闲超时），非流式请求使用有总超时的客户端
+	startTime := time.Now()
+
+	var upstreamCtx context.Context
+	if isStream {
+		upstreamCtx = context.Background()
+	} else {
+		var cancel context.CancelFunc
+		upstreamCtx, cancel = context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+	}
 	req, err := http.NewRequestWithContext(upstreamCtx, "POST", upstreamURL, bytes.NewReader(convertedBody))
 	if err != nil {
 		return fmt.Errorf("构造上游请求失败: %w", err)
@@ -432,22 +441,32 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 		}
 	}
 
-	// 创建 HTTP 客户端
-	startTime := time.Now()
 	var client *http.Client
 	if ch.UseProxy && proxyConfig.ForwardProxyURL != "" {
-		client, err = upstream.NewHTTPClientWithProxyAndTimeout(
-			proxyConfig.ForwardProxyURL,
-			proxyConfig.ForwardProxyUser,
-			proxyConfig.ForwardProxyPass,
-			requestTimeout,
-		)
+		if isStream {
+			client, err = upstream.NewStreamHTTPClientWithProxy(
+				proxyConfig.ForwardProxyURL,
+				proxyConfig.ForwardProxyUser,
+				proxyConfig.ForwardProxyPass,
+			)
+		} else {
+			client, err = upstream.NewHTTPClientWithProxyAndTimeout(
+				proxyConfig.ForwardProxyURL,
+				proxyConfig.ForwardProxyUser,
+				proxyConfig.ForwardProxyPass,
+				requestTimeout,
+			)
+		}
 		if err != nil {
 			log.Printf("[中转] 渠道 %s 代理配置错误，回退直连: %v", ch.Name, err)
 		}
 	}
 	if client == nil {
-		client = upstream.NewHTTPClientWithTimeout(requestTimeout)
+		if isStream {
+			client = upstream.NewStreamHTTPClient()
+		} else {
+			client = upstream.NewHTTPClientWithTimeout(requestTimeout)
+		}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -456,16 +475,22 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 	defer resp.Body.Close()
 
 	// 检查可切换错误状态
-	if shouldFailoverStatus(resp.StatusCode) {
+	if upstream.ShouldFailoverStatus(resp.StatusCode) {
 		respBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("上游返回可切换错误状态 %d: %s", resp.StatusCode, string(respBytes))
 	}
 
 	if isStream {
-		// 流式转发，错误会触发熔断回落
+		// 流式转发
 		err = h.streamResponse(c, resp, adapt, matchedModel, ch, apiKeyID, startTime, requestTimeout)
 		if err != nil {
 			log.Printf("[流式] 模型 %s 渠道 %s 流式转发错误: %v", matchedModel.ModelID, ch.Name, err)
+			// 如果已经向客户端写入任何数据（响应头或 body），
+			// 禁止 failover 切换到下一渠道，直接返回 nil
+			if c.Writer.Written() {
+				log.Printf("[流式] 已在渠道 %s 输出数据，跳过 failover", ch.Name)
+				return nil
+			}
 			return fmt.Errorf("流式转发失败: %w", err)
 		}
 		return nil
@@ -577,13 +602,7 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 	return nil
 }
 
-func shouldFailoverStatus(statusCode int) bool {
-	switch statusCode {
-	case http.StatusUnauthorized, http.StatusForbidden, http.StatusRequestTimeout, http.StatusTooManyRequests:
-		return true
-	}
-	return statusCode >= 500
-}
+
 
 // splitAuth 解析 Authorization 头
 func splitAuth(auth string) []string {

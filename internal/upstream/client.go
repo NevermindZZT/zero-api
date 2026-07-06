@@ -76,6 +76,35 @@ func NewHTTPClientWithTimeout(timeout time.Duration) *http.Client {
 	}
 }
 
+// NewStreamHTTPClient 创建流式专用 HTTP 客户端（无总超时，仅空闲超时）
+// 流式响应的总时长不可预测，http.Client.Timeout 会导致超时截断
+func NewStreamHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 0,
+		Transport: &http.Transport{
+			TLSClientConfig:       &tls.Config{},
+			TLSHandshakeTimeout:   15 * time.Second,
+			ResponseHeaderTimeout: 60 * time.Second,
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   10,
+			IdleConnTimeout:       120 * time.Second,
+			DisableCompression:    false,
+		},
+	}
+}
+
+// NewStreamHTTPClientWithProxy 创建流式专用带出站代理的 HTTP 客户端
+func NewStreamHTTPClientWithProxy(proxyURL, proxyUser, proxyPass string) (*http.Client, error) {
+	t, err := getProxyTransport(proxyURL, proxyUser, proxyPass)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{
+		Timeout:   0,
+		Transport: t,
+	}, nil
+}
+
 // NewHTTPClientWithProxy 创建支持出站代理的 HTTP 客户端
 func NewHTTPClientWithProxy(proxyURL, proxyUser, proxyPass string) (*http.Client, error) {
 	t, err := getProxyTransport(proxyURL, proxyUser, proxyPass)
@@ -98,4 +127,13 @@ func NewHTTPClientWithProxyAndTimeout(proxyURL, proxyUser, proxyPass string, tim
 		Timeout:   timeout,
 		Transport: t,
 	}, nil
+}
+
+// ShouldFailoverStatus 判断 HTTP 状态码是否应触发渠道切换
+func ShouldFailoverStatus(statusCode int) bool {
+	switch statusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusRequestTimeout, http.StatusTooManyRequests:
+		return true
+	}
+	return statusCode >= 500
 }
