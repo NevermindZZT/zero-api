@@ -67,6 +67,49 @@ export const chatTestApi = {
     headers: { Authorization: `Bearer ${apiKey}` },
     timeout: 120000,
   }),
+  chatStream: (apiKey: string, model: string, content: string, onData: (text: string) => void, onDone: () => void, onError: (err: string) => void): AbortController => {
+    const controller = new AbortController()
+    fetch('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ model, messages: [{ role: 'user', content }], stream: true }),
+      signal: controller.signal,
+    }).then(async (response) => {
+      if (!response.ok) {
+        const errBody = await response.text()
+        onError(`HTTP ${response.status}: ${errBody}`)
+        return
+      }
+      const reader = response.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const payload = line.slice(6).trim()
+          if (payload === '[DONE]') continue
+          try {
+            const parsed = JSON.parse(payload)
+            // OpenAI SSE: choices[0].delta.content
+            const delta = parsed?.choices?.[0]?.delta?.content
+            // Anthropic SSE: delta.text
+            const text = parsed?.delta?.text
+            const content = delta || text || ''
+            if (content) onData(content)
+          } catch { /* skip malformed SSE */ }
+        }
+      }
+      onDone()
+    }).catch((err) => {
+      if (err.name !== 'AbortError') onError(err.message || '流式请求失败')
+    })
+    return controller
+  },
 }
 
 // ===== Usage API =====
