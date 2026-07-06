@@ -152,6 +152,11 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	tlsConn.SetDeadline(time.Time{})
 	// 确保 TLS close_notify 在连接关闭前发送，避免客户端收到 TCP RST
 	defer tlsConn.Close()
+
+	// 设置 TCP_NODELAY 降低流式传输延迟
+	if tcpConn, ok := tlsConn.NetConn().(*net.TCPConn); ok {
+		tcpConn.SetNoDelay(true)
+	}
 	cs := tlsConn.ConnectionState()
 	log.Printf("[MITM] TLS 握手成功: %s (加密: %s, ALPN: %s, 版本: 0x%04X)",
 		hostname, tls.CipherSuiteName(cs.CipherSuite), cs.NegotiatedProtocol, cs.Version)
@@ -159,12 +164,20 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// ═══ 第五步：循环处理请求（HTTP Keep-Alive）═══
 	reader := bufio.NewReader(tlsConn)
 	for {
-		// 读取一个 HTTP 请求
+		// 设置读超时防止协程永久阻塞（空闲保持：120s）
+		tlsConn.SetReadDeadline(time.Now().Add(120 * time.Second))
 		req, err := http.ReadRequest(reader)
 		if err != nil {
-			log.Printf("[MITM] 读取请求结束: %v", err)
+			// 超时 = 客户端长时间无新请求，正常断开
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				log.Printf("[MITM] 读取请求超时 (hostname=%s): %v", hostname, err)
+			} else {
+				log.Printf("[MITM] 读取请求结束: %v", err)
+			}
 			break
 		}
+		// 有请求，清除读超时
+		tlsConn.SetReadDeadline(time.Time{})
 
 		bodyBytes, err := io.ReadAll(req.Body)
 		req.Body.Close()
@@ -296,6 +309,8 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if IsLLMRequest(r.Method, r.URL.Path, headers, bodyBytes) {
 		log.Printf("[代理] HTTP LLM 请求: %s (模型: %s)", r.URL.Path, extractModel(bodyBytes))
+		// 清除 WriteTimeout — LLM 请求可能耗时较长
+		http.NewResponseController(w).SetWriteDeadline(time.Time{})
 		status, respHeaders, respBody, err := s.adapter.HandleLLMRequest(r.Method, r.URL.Path, headers, bodyBytes)
 		if err != nil {
 			if status > 0 {
@@ -388,21 +403,24 @@ func (s *Server) forwardDirect(tlsConn net.Conn, req *http.Request, body []byte)
 	tlsDest := tls.Client(destConn, &tls.Config{
 		ServerName: extractHostname(host),
 	})
+	tlsDest.SetDeadline(time.Now().Add(30 * time.Second))
 	if err := tlsDest.Handshake(); err != nil {
 		log.Printf("[代理] 上游 TLS 握手失败: %v", err)
 		writeHTTPResponse(tlsConn, 502)
 		return
 	}
+	tlsDest.SetDeadline(time.Time{})
 
-	// 发送请求到上游
-	req.Body = io.NopCloser(bytes.NewReader(body))
+	// 发送请求到上游（15s 写入超时保护）
+	tlsDest.SetDeadline(time.Now().Add(15 * time.Second))
 	if err := req.Write(tlsDest); err != nil {
 		log.Printf("[代理] 发送请求到上游失败: %v", err)
 		writeHTTPResponse(tlsConn, 502)
 		return
 	}
 
-	// 读取完整的上游响应
+	// 读取完整的上游响应（60s 总超时保护）
+	tlsDest.SetDeadline(time.Now().Add(60 * time.Second))
 	resp, err := http.ReadResponse(bufio.NewReader(tlsDest), req)
 	if err != nil {
 		log.Printf("[代理] 读取上游响应失败: %v", err)
@@ -417,6 +435,7 @@ func (s *Server) forwardDirect(tlsConn net.Conn, req *http.Request, body []byte)
 		writeHTTPResponse(tlsConn, 502)
 		return
 	}
+	tlsDest.SetDeadline(time.Time{})
 
 	// 将响应写回客户端
 	var sb strings.Builder

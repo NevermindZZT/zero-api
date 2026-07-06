@@ -796,6 +796,13 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 			}
 		}
 		if _, werr := conn.Write(line); werr != nil {
+			// 检查客户端是否断连：尝试短读 1 字节
+			conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			if n, readErr := conn.Read(make([]byte, 1)); n == 0 && readErr != nil {
+				// 客户端已断开，正常返回而非错误
+				return true, nil
+			}
+			conn.SetReadDeadline(time.Time{})
 			return true, fmt.Errorf("写入 SSE 数据失败: %w", werr)
 		}
 		// 成功写入数据，重置空闲计时器
