@@ -3,7 +3,6 @@ package proxy
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -734,13 +733,30 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 		return false, fmt.Errorf("上游返回可切换错误状态 %d: %s", resp.StatusCode, string(respBytes))
 	}
 
-	// 上游读超时保护：超时后自动关闭 resp.Body，解除 ReadBytes 阻塞
-	streamCtx, streamCancel := context.WithTimeout(context.Background(), pa.requestTimeout)
-	defer streamCancel()
+	// 流式空闲超时：每次成功读取一行后重置计时器
+	// 防止上游停止推流后资源泄漏，但不限制正常的长时流式输出
+	idleTimer := time.NewTimer(pa.requestTimeout)
+	defer idleTimer.Stop()
+	idleDone := make(chan struct{})
+	defer close(idleDone)
 	go func() {
-		<-streamCtx.Done()
-		resp.Body.Close()
+		select {
+		case <-idleTimer.C:
+			resp.Body.Close()
+		case <-idleDone:
+		}
 	}()
+
+	// 安全重置计时器
+	safeResetIdle := func() {
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+		idleTimer.Reset(pa.requestTimeout)
+	}
 
 	// 构造 SSE 响应头（写回原始 TLS 连接）
 	var headerBuf strings.Builder
@@ -782,6 +798,8 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 		if _, werr := conn.Write(line); werr != nil {
 			return true, fmt.Errorf("写入 SSE 数据失败: %w", werr)
 		}
+		// 成功写入数据，重置空闲计时器
+		safeResetIdle()
 		buf.Write(line)
 	}
 

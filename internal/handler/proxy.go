@@ -546,16 +546,30 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 		return fmt.Errorf("ResponseWriter 不支持 Flusher")
 	}
 
-	// 创建流式读取的超时 context
-	// 防止上游中途停滞导致 reader 永久阻塞
-	streamCtx, streamCancel := context.WithTimeout(context.Background(), requestTimeout)
-	defer streamCancel()
-
-	// 超时后自动关闭 resp.Body，解除 ReadBytes 阻塞
+	// 流式空闲超时：每次成功读取一行后重置计时器
+	// 防止上游中途停滞导致资源泄漏，但不限制长时流式输出
+	idleTimer := time.NewTimer(requestTimeout)
+	defer idleTimer.Stop()
+	idleDone := make(chan struct{})
+	defer close(idleDone)
 	go func() {
-		<-streamCtx.Done()
-		resp.Body.Close()
+		select {
+		case <-idleTimer.C:
+			resp.Body.Close()
+		case <-idleDone:
+		}
 	}()
+
+	// 安全重置计时器：处理已过期未 drain 的 case
+	safeResetIdle := func() {
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+		idleTimer.Reset(requestTimeout)
+	}
 
 	// 使用 bufio.Reader 逐行读取
 	reader := bufio.NewReaderSize(resp.Body, 64*1024)
@@ -569,11 +583,12 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 				log.Printf("[流式] 客户端断开连接 (模型=%s, 渠道=%s)", matchedModel.ModelID, ch.Name)
 				return nil
 			}
-			// 超时或连接断开，返回 error 触发熔断回落
+			// 空闲超时或其他连接错误，返回 error 触发熔断回落
 			return fmt.Errorf("流式读取失败: %w", err)
 		}
 
-		// 累积完整响应用于后续用量记录
+		// 成功收到数据，重置空闲计时器
+		safeResetIdle()
 		buf.Write(line)
 
 		// 写入客户端
