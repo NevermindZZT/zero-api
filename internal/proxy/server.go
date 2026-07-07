@@ -246,8 +246,20 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		// 健康检查 /_ping 请求，直接返回 200（不连上游，避免网络问题放大）
+		if req.Method == "GET" && (req.URL.Path == "/api/_ping" || req.URL.Path == "/_ping") {
+			log.Printf("[MITM] → 健康检查: %s", req.URL.Path)
+			writeHTTPResponseWithHeaders(tlsConn, 200, map[string]string{
+				"Content-Type": "application/json",
+				"Connection":   "keep-alive",
+			}, []byte(`{"status":"ok"}`))
+			if wantClose {
+				break
+			}
+			continue
+		}
+
 		// 非 LLM 请求透传（无论是否为拦截域名）
-		// Android Studio Copilot 会发送 GET /api/_ping 健康检查，须透传而非拦截
 		if !IsLLMRequest(req.Method, req.URL.Path, headers, bodyBytes) {
 			log.Printf("➡️  [透传] 非 LLM 请求: %s %s", req.Method, req.URL.Path)
 			s.forwardDirect(tlsConn, req, bodyBytes)
@@ -406,6 +418,11 @@ func (s *Server) forwardDirect(tlsConn net.Conn, req *http.Request, body []byte)
 	host := req.Host
 	if host == "" {
 		host = req.URL.Host
+	}
+	// MITM 解密后的请求 Host 头可能不含端口（如 "openrouter.ai"），
+	// 但建立 TCP 连接时必须指定端口。走 TLS 隧道的一定是 HTTPS，默认 443。
+	if !strings.Contains(host, ":") {
+		host = host + ":443"
 	}
 
 	destConn, err := net.DialTimeout("tcp", host, 20*time.Second)
