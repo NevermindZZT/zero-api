@@ -103,7 +103,12 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	// ═══ 第二步：认证检查 ═══
 	if !s.checkAuth(r) {
-		log.Printf("[代理] 认证失败: %s (需要代理认证 %s:***)", clientAddr, s.proxyAuthUser)
+		hasAuth := r.Header.Get("Proxy-Authorization") != ""
+		if hasAuth {
+			log.Printf("[代理] 认证失败: %s (已携带 Proxy-Authorization 但凭据错误, 需要 %s:***)", clientAddr, s.proxyAuthUser)
+		} else {
+			log.Printf("[代理] 认证失败: %s (未携带 Proxy-Authorization, 需要代理认证 %s:***)", clientAddr, s.proxyAuthUser)
+		}
 		s.requireAuth(w)
 		return
 	}
@@ -241,8 +246,9 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// 非 LLM 请求透传
-		if !s.router.ShouldIntercept(hostname) && !IsLLMRequest(req.Method, req.URL.Path, headers, bodyBytes) {
+		// 非 LLM 请求透传（无论是否为拦截域名）
+		// Android Studio Copilot 会发送 GET /api/_ping 健康检查，须透传而非拦截
+		if !IsLLMRequest(req.Method, req.URL.Path, headers, bodyBytes) {
 			log.Printf("➡️  [透传] 非 LLM 请求: %s %s", req.Method, req.URL.Path)
 			s.forwardDirect(tlsConn, req, bodyBytes)
 			break
@@ -335,7 +341,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 // ★ 必须处理 Hijack 返回的 bufio.ReadWriter 中的缓冲数据（类似 ModelProxy 的 head）
 func (s *Server) tunnelDirect(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[隧道] 正在连接 %s ...", r.Host)
-	destConn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
+	destConn, err := net.DialTimeout("tcp", r.Host, 20*time.Second)
 	if err != nil {
 		log.Printf("[隧道] 连接目标 %s 失败: %v", r.Host, err)
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
@@ -370,6 +376,14 @@ func (s *Server) tunnelDirect(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[隧道] 开始双向数据传输: %s", r.Host)
 	var wg sync.WaitGroup
 	wg.Add(2)
+
+	// 120s 总超时防止网络停滞时 goroutine 泄漏
+	tunnelTimer := time.AfterFunc(120*time.Second, func() {
+		log.Printf("[隧道] 超时 %s 强制关闭连接", r.Host)
+		clientConn.Close()
+		destConn.Close()
+	})
+
 	go func() {
 		defer wg.Done()
 		written, _ := io.Copy(destConn, clientConn)
@@ -381,6 +395,8 @@ func (s *Server) tunnelDirect(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[隧道] 目标→客户端 传输完成: %d 字节", written)
 	}()
 	wg.Wait()
+
+	tunnelTimer.Stop()
 	log.Printf("[隧道] 连接关闭: %s", r.Host)
 }
 
@@ -392,7 +408,7 @@ func (s *Server) forwardDirect(tlsConn net.Conn, req *http.Request, body []byte)
 		host = req.URL.Host
 	}
 
-	destConn, err := net.DialTimeout("tcp", host, 10*time.Second)
+	destConn, err := net.DialTimeout("tcp", host, 20*time.Second)
 	if err != nil {
 		log.Printf("[代理] 连接上游 %s 失败: %v", host, err)
 		writeHTTPResponse(tlsConn, 502)
