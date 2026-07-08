@@ -109,7 +109,7 @@ async function loadData() {
   try {
     const { start, end } = getRangeParams(timeRange.value)
     const [overviewRes, dailyRes, recordsRes, modelRes] = await Promise.all([
-      usageApi.overview(),
+      usageApi.overview(undefined, start, end),
       usageApi.daily(start, end),
       usageApi.records(undefined, start, end, 200),
       usageApi.byModel(start, end),

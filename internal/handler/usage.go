@@ -20,7 +20,9 @@ func NewUsageHandler(usageRepo *store.UsageRepo) *UsageHandler {
 // GetOverview 获取总览统计
 func (h *UsageHandler) GetOverview(c *gin.Context) {
 	apiKeyID := c.Query("api_key_id")
-	stats, err := h.usageRepo.GetOverview(apiKeyID)
+	start := c.Query("start")
+	end := c.Query("end")
+	stats, err := h.usageRepo.GetOverview(apiKeyID, start, end)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -87,7 +89,9 @@ func (h *UsageHandler) GetModelStats(c *gin.Context) {
 // GetByAPIKey 按 API Key 统计
 func (h *UsageHandler) GetByAPIKey(c *gin.Context) {
 	apiKeyIDStr := c.Query("api_key_id")
-	stats, err := h.usageRepo.GetOverview(apiKeyIDStr)
+	start := c.Query("start")
+	end := c.Query("end")
+	stats, err := h.usageRepo.GetOverview(apiKeyIDStr, start, end)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

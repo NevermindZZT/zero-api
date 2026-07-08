@@ -212,13 +212,21 @@ func (r *UsageRepo) updateDailyAgg(u *UsageRecord) {
 }
 
 // GetOverview 获取总览统计（基于预聚合表 usage_daily，避免全表扫描）
-func (r *UsageRepo) GetOverview(apiKeyID ...string) (*OverviewStats, error) {
+func (r *UsageRepo) GetOverview(apiKeyID, startDate, endDate string) (*OverviewStats, error) {
 	stats := &OverviewStats{}
 	args := []interface{}{}
+	conditions := []string{}
+	if apiKeyID != "" {
+		conditions = append(conditions, "api_key_id = ?")
+		args = append(args, apiKeyID)
+	}
+	if startDate != "" && endDate != "" {
+		conditions = append(conditions, "date >= ? AND date <= ?")
+		args = append(args, startDate, endDate)
+	}
 	where := ""
-	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
-		where = " WHERE api_key_id = ?"
-		args = append(args, apiKeyID[0])
+	if len(conditions) > 0 {
+		where = " WHERE " + joinConditions(conditions)
 	}
 
 	// 从预聚合表查询：最多 365 行/年，远快于全表扫描 usage_records
@@ -232,7 +240,7 @@ func (r *UsageRepo) GetOverview(apiKeyID ...string) (*OverviewStats, error) {
 	)
 	if err != nil {
 		// 降级：表可能不存在（刚迁移），回退到 usage_records
-		return r.getOverviewFallback(apiKeyID...)
+		return r.getOverviewFallback(apiKeyID, startDate, endDate)
 	}
 
 	// 安全兜底：usage_daily 返回 0 但 usage_records 有数据时自动降级
@@ -242,7 +250,7 @@ func (r *UsageRepo) GetOverview(apiKeyID ...string) (*OverviewStats, error) {
 		if usageRecCount > 0 {
 			log.Printf("[Usage] usage_daily 为空但 usage_records 有 %d 条记录，自动触发回填+降级", usageRecCount)
 			go r.backfillDailyAgg()
-			return r.getOverviewFallback(apiKeyID...)
+			return r.getOverviewFallback(apiKeyID, startDate, endDate)
 		}
 	}
 
@@ -257,13 +265,13 @@ func (r *UsageRepo) GetOverview(apiKeyID ...string) (*OverviewStats, error) {
 			(SELECT COUNT(*) FROM models WHERE status = 'active')`,
 	).Scan(&stats.ActiveChannels, &stats.ActiveModels)
 
-	// 今日统计：从预聚合表查今天的数据
+	// 今日统计始终查今天（不受时间范围影响）
 	today := time.Now().Format("2006-01-02")
 	todayArgs := []interface{}{today}
 	todayWhere := " WHERE date = ?"
-	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
+	if apiKeyID != "" {
 		todayWhere += " AND api_key_id = ?"
-		todayArgs = append(todayArgs, apiKeyID[0])
+		todayArgs = append(todayArgs, apiKeyID)
 	}
 	err = r.db.QueryRow(
 		`SELECT COALESCE(SUM(requests), 0), COALESCE(SUM(total_tokens), 0) FROM usage_daily`+todayWhere,
@@ -279,13 +287,21 @@ func (r *UsageRepo) GetOverview(apiKeyID ...string) (*OverviewStats, error) {
 }
 
 // getOverviewFallback 降级方案：从 usage_records 全表查询（用于旧数据兼容）
-func (r *UsageRepo) getOverviewFallback(apiKeyID ...string) (*OverviewStats, error) {
+func (r *UsageRepo) getOverviewFallback(apiKeyID, startDate, endDate string) (*OverviewStats, error) {
 	stats := &OverviewStats{}
 	args := []interface{}{}
+	conditions := []string{}
+	if apiKeyID != "" {
+		conditions = append(conditions, "api_key_id = ?")
+		args = append(args, apiKeyID)
+	}
+	if startDate != "" && endDate != "" {
+		conditions = append(conditions, "created_at >= ? AND created_at < ?")
+		args = append(args, startDate, addDay(endDate))
+	}
 	where := ""
-	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
-		where = " WHERE api_key_id = ?"
-		args = append(args, apiKeyID[0])
+	if len(conditions) > 0 {
+		where = " WHERE " + joinConditions(conditions)
 	}
 
 	err := r.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost), 0), COALESCE(SUM(cache_hit_tokens), 0) FROM usage_records`+where, args...).Scan(
@@ -306,9 +322,9 @@ func (r *UsageRepo) getOverviewFallback(apiKeyID ...string) (*OverviewStats, err
 
 	todayArgs := []interface{}{}
 	todayWhere := ""
-	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
+	if apiKeyID != "" {
 		todayWhere = " AND api_key_id = ?"
-		todayArgs = append(todayArgs, apiKeyID[0])
+		todayArgs = append(todayArgs, apiKeyID)
 	}
 	todayStart := time.Now().Format("2006-01-02")
 	err = r.db.QueryRow(

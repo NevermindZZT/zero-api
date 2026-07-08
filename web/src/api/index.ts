@@ -114,7 +114,8 @@ export const chatTestApi = {
 
 // ===== Usage API =====
 export const usageApi = {
-  overview: (apiKeyId?: number) => api.get('/stats/overview', { params: { api_key_id: apiKeyId || undefined } }),
+  overview: (apiKeyId?: number, start?: string, end?: string) =>
+    api.get('/stats/overview', { params: { api_key_id: apiKeyId || undefined, start, end } }),
   daily: (start?: string, end?: string, apiKeyId?: number) =>
     api.get('/stats/daily', { params: { start, end, api_key_id: apiKeyId || undefined } }),
   byModel: (start?: string, end?: string, apiKeyId?: number) =>
