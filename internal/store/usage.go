@@ -603,3 +603,46 @@ func addDay(d string) string {
 	}
 	return t.AddDate(0, 0, 1).Format("2006-01-02")
 }
+
+// YearHeatmapItem 年度热力图数据（每日 total_tokens）
+type YearHeatmapItem struct {
+	Date        string `json:"date"`
+	TotalTokens int64  `json:"total_tokens"`
+}
+
+// GetYearHeatmapData 获取过去一年每日 Tokens 用量（GitHub-style 热力图，无数据的日期补 0）
+func (r *UsageRepo) GetYearHeatmapData() ([]YearHeatmapItem, error) {
+	end := time.Now()
+	start := end.AddDate(-1, 0, 0)
+	startStr := start.Format("2006-01-02")
+	endStr := end.Format("2006-01-02")
+
+	rows, err := r.db.Query(
+		`SELECT date, COALESCE(SUM(total_tokens), 0)
+		 FROM usage_daily
+		 WHERE date >= ? AND date <= ?
+		 GROUP BY date ORDER BY date`, startStr, endStr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// 先读到 map 中
+	dataMap := make(map[string]int64)
+	for rows.Next() {
+		var item YearHeatmapItem
+		if err := rows.Scan(&item.Date, &item.TotalTokens); err != nil {
+			return nil, err
+		}
+		dataMap[item.Date] = item.TotalTokens
+	}
+
+	// 生成完整 365 天序列，无数据的日期补 0
+	var items []YearHeatmapItem
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+		dateStr := d.Format("2006-01-02")
+		tokens := dataMap[dateStr]
+		items = append(items, YearHeatmapItem{Date: dateStr, TotalTokens: tokens})
+	}
+	return items, nil
+}

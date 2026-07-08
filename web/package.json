@@ -10,21 +10,23 @@
     "postbuild": "node -e \"fs=require('fs'),p=require('path');t=p.resolve('../cmd/server/web/dist');fs.rmSync(t,{recursive:true,force:true});fs.cpSync('dist',t,{recursive:true})\""
   },
   "dependencies": {
-    "vue": "^3.5.13",
-    "vue-router": "^4.5.0",
-    "pinia": "^3.0.2",
-    "naive-ui": "^2.41.0",
+    "@silverwind/vue3-calendar-heatmap": "^2.1.1",
     "@vicons/ionicons5": "^0.12.0",
+    "@vueuse/core": "^12.8.2",
     "axios": "^1.7.9",
     "echarts": "^5.6.0",
+    "naive-ui": "^2.41.0",
+    "pinia": "^3.0.2",
+    "tippy.js": "^6.3.7",
+    "vue": "^3.5.13",
     "vue-echarts": "^7.0.3",
-    "@vueuse/core": "^12.8.2"
+    "vue-router": "^4.5.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.3",
+    "copyfiles": "^2.4.1",
     "typescript": "~5.7.3",
     "vite": "^6.2.0",
-    "vue-tsc": "^2.2.0",
-    "copyfiles": "^2.4.1"
+    "vue-tsc": "^2.2.0"
   }
 }

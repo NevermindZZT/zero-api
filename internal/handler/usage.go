@@ -98,3 +98,16 @@ func (h *UsageHandler) GetByAPIKey(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, stats)
 }
+
+// GetYearHeatmap 获取年度热力图数据（GitHub-style）
+func (h *UsageHandler) GetYearHeatmap(c *gin.Context) {
+	data, err := h.usageRepo.GetYearHeatmapData()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if data == nil {
+		data = []store.YearHeatmapItem{}
+	}
+	c.JSON(http.StatusOK, data)
+}

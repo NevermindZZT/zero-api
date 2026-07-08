@@ -99,6 +99,7 @@ func main() {
 		api.GET("/stats/overview", usageH.GetOverview)
 		api.GET("/stats/daily", usageH.GetDailyStats)
 		api.GET("/stats/by-model", usageH.GetModelStats)
+		api.GET("/stats/year-heatmap", usageH.GetYearHeatmap)
 		api.GET("/usage/records", usageH.GetRecentRecords)
 
 		// 代理配置

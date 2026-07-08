@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { h, onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue'
+import { onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue'
 import { NCard, NGrid, NGi, NStatistic, NDataTable, NSpin, NSpace, NProgress, NIcon, NButton, NButtonGroup, NTag } from 'naive-ui'
 import {
   StatsChartSharp,
@@ -11,10 +11,13 @@ import {
   TrendingUpSharp,
   ClipboardSharp,
   RefreshSharp,
+  GridSharp,
 } from '@vicons/ionicons5'
 import { usageApi } from '@/api'
 import { formatDateTime } from '@/utils/format'
 import * as echarts from 'echarts'
+import { CalendarHeatmap } from '@silverwind/vue3-calendar-heatmap'
+import '@silverwind/vue3-calendar-heatmap/dist/style.css'
 
 const loading = ref(true)
 const refreshing = ref(false)
@@ -22,8 +25,10 @@ const overview = ref<any>({})
 const dailyStats = ref<any[]>([])
 const recentRecords = ref<any[]>([])
 const modelStats = ref<any[]>([])
+const yearHeatmap = ref<any[]>([])
 const chartContainer = ref<HTMLElement>()
 const pieContainer = ref<HTMLElement>()
+const heatmapContainer = ref<HTMLElement>()
 const lastUpdated = ref('')
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 let trendChart: echarts.ECharts | null = null
@@ -161,6 +166,11 @@ onMounted(async () => {
   mqListener = () => window.removeEventListener('resize', updateCols)
 
   await loadData()
+  // 加载年度热力图（不跟随时间范围）
+  try {
+    const res = await usageApi.yearHeatmap()
+    yearHeatmap.value = res.data
+  } catch (e) { console.error(e) }
   loading.value = false
   nextTick(renderCharts)
   // 智能轮询：每 15s 检查是否有新数据，有变化才全量刷新
@@ -237,6 +247,18 @@ function renderPieChart() {
     }],
   })
 }
+
+// 热力图数据格式化
+const heatmapValues = computed(() =>
+  yearHeatmap.value.map((d: any) => ({ date: d.date, count: d.total_tokens }))
+)
+const heatmapMax = computed(() =>
+  Math.max(...yearHeatmap.value.map((d: any) => d.total_tokens), 1)
+)
+const heatmapEndDate = computed(() => {
+  if (yearHeatmap.value.length === 0) return ''
+  return yearHeatmap.value[yearHeatmap.value.length - 1]?.date
+})
 
 function formatTokens(n: number) {
   if (!n) return '0'
@@ -348,6 +370,30 @@ function formatTokens(n: number) {
         </template>
         <div ref="chartContainer" style="height:300px"></div>
         <p v-if="dailyStats.length === 0" style="color:#94a3b8;text-align:center;padding:60px">暂无使用数据</p>
+      </NCard>
+
+      <NCard class="chart-card">
+        <template #header>
+          <div class="card-header-with-icon">
+            <NIcon size="18" color="#26a641"><GridSharp /></NIcon>
+            <span>年度 Token 热力图 <span style="font-size:12px;color:#64748b;font-weight:400">(过去一年每日 Tokens 用量)</span></span>
+          </div>
+        </template>
+        <div style="padding:12px 0">
+          <CalendarHeatmap
+            v-if="yearHeatmap.length > 0"
+            :values="heatmapValues"
+            :end-date="heatmapEndDate"
+            :range-color="['#161b22', '#161b22', '#0e4429', '#006d32', '#26a641', '#39d353']"
+            :max="heatmapMax"
+            tooltip-unit="tokens"
+            :tooltip-formatter="(v: any) => v.date + ': ' + formatTokens(v.count) + ' tokens'"
+            :round="2"
+            dark-mode
+            no-data-text="无数据"
+          />
+          <p v-else style="color:#94a3b8;text-align:center;padding:30px">暂无数据</p>
+        </div>
       </NCard>
 
       <NCard class="chart-card">
