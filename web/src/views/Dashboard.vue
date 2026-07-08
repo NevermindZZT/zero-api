@@ -200,7 +200,8 @@ function renderTrendChart() {
     grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
     xAxis: { type: 'category', data: dates, axisLabel: { color: '#94a3b8' } },
     yAxis: [
-      { type: 'value', name: 'Tokens', nameTextStyle: { color: '#94a3b8' }, axisLabel: { color: '#94a3b8' } },
+      { type: 'value', name: 'Tokens', nameTextStyle: { color: '#94a3b8' },
+        axisLabel: { color: '#94a3b8', formatter: (v: number) => formatTokens(v) } },
       { type: 'value', name: '请求数', nameTextStyle: { color: '#94a3b8' }, axisLabel: { color: '#94a3b8' } },
     ],
     series: [
