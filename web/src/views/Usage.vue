@@ -92,7 +92,7 @@ async function loadData() {
   const end = formatDate(dateRange.value[1])
   try {
     const [overviewRes, dailyRes, recordsRes] = await Promise.all([
-      usageApi.overview(ak),
+      usageApi.overview(ak, start, end),
       usageApi.daily(start, end, ak),
       usageApi.records(ak, start, end, 500),
     ])
@@ -104,15 +104,17 @@ async function loadData() {
   }
 }
 
-// 智能轮询：每 15s 仅刷新 overview 卡片数值（不重载 daily/records）
+// 智能轮询：每 15s 检查是否有新数据，有变化则全量刷新（使用当前日期范围）
 async function smartPoll() {
   try {
     const ak = selectedApiKeyId.value || undefined
-    const res = await usageApi.overview(ak)
+    const start = formatDate(dateRange.value[0])
+    const end = formatDate(dateRange.value[1])
+    const res = await usageApi.overview(ak, start, end)
     const newTotal = res.data?.total_requests || 0
     const oldTotal = overview.value?.total_requests
     if (oldTotal === undefined || newTotal !== oldTotal) {
-      overview.value = res.data
+      await loadData()
     }
   } catch (e) {
     console.error(e)

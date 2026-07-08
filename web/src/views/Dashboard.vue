@@ -129,14 +129,16 @@ async function loadData() {
   }
 }
 
-// 智能轮询：每 15s 只刷新 overview 卡片数值，不重载图表
+// 智能轮询：每 15s 检查是否有新数据，有变化则全量刷新（使用当前时间范围）
 async function smartPoll() {
   try {
-    const res = await usageApi.overview()
+    const { start, end } = getRangeParams(timeRange.value)
+    const res = await usageApi.overview(undefined, start, end)
     const newTotal = res.data?.total_requests || 0
     const oldTotal = overview.value?.total_requests
     if (oldTotal === undefined || newTotal !== oldTotal) {
-      overview.value = res.data
+      await loadData()
+      nextTick(renderCharts)
       lastUpdated.value = now()
     }
   } catch (e) {
