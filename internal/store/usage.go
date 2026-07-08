@@ -92,7 +92,7 @@ func flushUsageBatch(db *DB, batch []*UsageRecord) {
 	defer aggStmt.Close()
 
 	for _, u := range batch {
-		date := u.CreatedAt.Format("2006-01-02")
+		date := aggDate(u)
 		apiKeyID := interface{}(nil)
 		if u.APIKeyID != nil {
 			apiKeyID = *u.APIKeyID
@@ -106,6 +106,14 @@ func flushUsageBatch(db *DB, batch []*UsageRecord) {
 	if err := tx.Commit(); err != nil {
 		log.Printf("[Usage] 批量写入提交事务失败: %v", err)
 	}
+}
+
+// aggDate 获取预聚合用日期：优先用记录的 CreatedAt，为零值则用当前时间
+func aggDate(u *UsageRecord) string {
+	if u.CreatedAt.IsZero() {
+		return time.Now().Format("2006-01-02")
+	}
+	return u.CreatedAt.Format("2006-01-02")
 }
 
 // ===== UsageRecord & Repo =====
@@ -189,7 +197,7 @@ func (r *UsageRepo) insertDirect(u *UsageRecord) (int64, error) {
 
 // updateDailyAgg 更新 usage_daily 预聚合（单条记录）
 func (r *UsageRepo) updateDailyAgg(u *UsageRecord) {
-	date := u.CreatedAt.Format("2006-01-02")
+	date := aggDate(u)
 	apiKeyID := interface{}(nil)
 	if u.APIKeyID != nil {
 		apiKeyID = *u.APIKeyID

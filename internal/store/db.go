@@ -176,7 +176,10 @@ func (d *DB) migrate() error {
 		}
 	}
 
-	// 回填：将已有的 usage_records 数据聚合到 usage_daily（幂等，只插入不存在的行）
+	// 迁移：修复 usage_daily 日期为 0001-01-01 的错误数据（CreatedAt 为零值导致的 BUG）
+	d.Exec(`DELETE FROM usage_daily WHERE date = '0001-01-01'`)
+
+	// 从 usage_records 回填/修复 usage_daily（幂等 UPSERT，可安全重复执行）
 	d.backfillUsageDaily()
 
 	// 确保有默认代理配置
@@ -198,21 +201,8 @@ func (d *DB) migrate() error {
 // backfillUsageDaily 将已有 usage_records 数据回填到 usage_daily 预聚合表
 // 幂等操作：INSERT OR IGNORE 确保不会重复插入已有行
 func (d *DB) backfillUsageDaily() {
-	// 先检查 usage_daily 是否有数据，避免空表时反复回填
-	var existing int
-	err := d.QueryRow("SELECT COUNT(*) FROM usage_daily").Scan(&existing)
-	if err != nil {
-		log.Printf("[DB] 检查 usage_daily 数据失败: %v", err)
-		return
-	}
-	if existing > 0 {
-		log.Printf("[DB] usage_daily 已有 %d 行数据，跳过回填", existing)
-		return
-	}
-
-	// 检查 usage_records 是否有数据
-	var recordCount int
-	err = d.QueryRow("SELECT COUNT(*) FROM usage_records").Scan(&recordCount)
+	var recordCount int64
+	err := d.QueryRow("SELECT COUNT(*) FROM usage_records").Scan(&recordCount)
 	if err != nil {
 		log.Printf("[DB] 检查 usage_records 数据失败: %v", err)
 		return
@@ -224,12 +214,19 @@ func (d *DB) backfillUsageDaily() {
 
 	log.Printf("[DB] 开始回填 usage_daily，源数据 %d 条记录...", recordCount)
 	result, err := d.Exec(`
-		INSERT OR IGNORE INTO usage_daily (date, api_key_id, request_model, prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens, requests, cost)
+		INSERT INTO usage_daily (date, api_key_id, request_model, prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens, requests, cost)
 		SELECT date(created_at), api_key_id, request_model,
 		       SUM(prompt_tokens), SUM(completion_tokens), SUM(cache_hit_tokens), SUM(total_tokens),
 		       COUNT(*), SUM(cost)
 		FROM usage_records
-		GROUP BY date(created_at), api_key_id, request_model`)
+		GROUP BY date(created_at), api_key_id, request_model
+		ON CONFLICT(date, api_key_id, request_model) DO UPDATE SET
+			prompt_tokens = excluded.prompt_tokens,
+			completion_tokens = excluded.completion_tokens,
+			cache_hit_tokens = excluded.cache_hit_tokens,
+			total_tokens = excluded.total_tokens,
+			requests = excluded.requests,
+			cost = excluded.cost`)
 	if err != nil {
 		log.Printf("[DB] 回填 usage_daily 失败: %v", err)
 		return
