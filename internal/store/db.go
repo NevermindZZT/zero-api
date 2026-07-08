@@ -115,6 +115,20 @@ func (d *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_usage_channel ON usage_records(channel_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_records(model_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_models_channel ON models(channel_id)`,
+
+		// 预聚合表：按 (date, api_key_id, request_model) 维度聚合用量统计
+		`CREATE TABLE IF NOT EXISTS usage_daily (
+			date TEXT NOT NULL,
+			api_key_id INTEGER,
+			request_model TEXT NOT NULL DEFAULT '',
+			prompt_tokens INTEGER DEFAULT 0,
+			completion_tokens INTEGER DEFAULT 0,
+			cache_hit_tokens INTEGER DEFAULT 0,
+			total_tokens INTEGER DEFAULT 0,
+			requests INTEGER DEFAULT 0,
+			cost REAL DEFAULT 0,
+			PRIMARY KEY (date, api_key_id, request_model)
+		)`,
 	}
 
 	// 迁移：添加 cache_hit_tokens 列（如果不存在）
@@ -162,6 +176,9 @@ func (d *DB) migrate() error {
 		}
 	}
 
+	// 回填：将已有的 usage_records 数据聚合到 usage_daily（幂等，只插入不存在的行）
+	d.backfillUsageDaily()
+
 	// 确保有默认代理配置
 	var count int
 	if err := d.QueryRow("SELECT COUNT(*) FROM proxy_config").Scan(&count); err != nil {
@@ -176,4 +193,47 @@ func (d *DB) migrate() error {
 
 	log.Println("[DB] 数据库迁移完成")
 	return nil
+}
+
+// backfillUsageDaily 将已有 usage_records 数据回填到 usage_daily 预聚合表
+// 幂等操作：INSERT OR IGNORE 确保不会重复插入已有行
+func (d *DB) backfillUsageDaily() {
+	// 先检查 usage_daily 是否有数据，避免空表时反复回填
+	var existing int
+	err := d.QueryRow("SELECT COUNT(*) FROM usage_daily").Scan(&existing)
+	if err != nil {
+		log.Printf("[DB] 检查 usage_daily 数据失败: %v", err)
+		return
+	}
+	if existing > 0 {
+		log.Printf("[DB] usage_daily 已有 %d 行数据，跳过回填", existing)
+		return
+	}
+
+	// 检查 usage_records 是否有数据
+	var recordCount int
+	err = d.QueryRow("SELECT COUNT(*) FROM usage_records").Scan(&recordCount)
+	if err != nil {
+		log.Printf("[DB] 检查 usage_records 数据失败: %v", err)
+		return
+	}
+	if recordCount == 0 {
+		log.Println("[DB] usage_records 无数据，跳过回填")
+		return
+	}
+
+	log.Printf("[DB] 开始回填 usage_daily，源数据 %d 条记录...", recordCount)
+	result, err := d.Exec(`
+		INSERT OR IGNORE INTO usage_daily (date, api_key_id, request_model, prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens, requests, cost)
+		SELECT date(created_at), api_key_id, request_model,
+		       SUM(prompt_tokens), SUM(completion_tokens), SUM(cache_hit_tokens), SUM(total_tokens),
+		       COUNT(*), SUM(cost)
+		FROM usage_records
+		GROUP BY date(created_at), api_key_id, request_model`)
+	if err != nil {
+		log.Printf("[DB] 回填 usage_daily 失败: %v", err)
+		return
+	}
+	affected, _ := result.RowsAffected()
+	log.Printf("[DB] usage_daily 回填完成，写入 %d 行聚合数据", affected)
 }

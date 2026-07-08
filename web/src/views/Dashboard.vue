@@ -21,6 +21,7 @@ const refreshing = ref(false)
 const overview = ref<any>({})
 const dailyStats = ref<any[]>([])
 const recentRecords = ref<any[]>([])
+const modelStats = ref<any[]>([])
 const chartContainer = ref<HTMLElement>()
 const pieContainer = ref<HTMLElement>()
 const lastUpdated = ref('')
@@ -58,26 +59,6 @@ function formatLocalDate(date: Date) {
   return `${year}-${month}-${day}`
 }
 
-function getRangeStartDate(range: 'total' | 'month' | 'week' | 'today') {
-  const today = new Date()
-  if (range === 'today') {
-    return new Date(today.getFullYear(), today.getMonth(), today.getDate())
-  }
-  if (range === 'month') {
-    return new Date(today.getFullYear(), today.getMonth(), 1)
-  }
-  if (range === 'week') {
-    const day = today.getDay()
-    const diff = day === 0 ? 6 : day - 1
-    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-    start.setDate(start.getDate() - diff)
-    return start
-  }
-  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-  start.setDate(start.getDate() - 90)
-  return start
-}
-
 function now() {
   const d = new Date()
   return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}`
@@ -92,40 +73,30 @@ const timeRangeOptions: { label: string; value: typeof timeRange.value }[] = [
   { label: '今日', value: 'today' },
 ]
 
-// 根据时间范围过滤 dailyStats 并聚合统计数据
+// 将时间范围转为 start/end 参数
+function getRangeParams(range: typeof timeRange.value) {
+  const today = new Date()
+  const end = formatLocalDate(today)
+  if (range === 'total') return { start: undefined, end: undefined }
+  if (range === 'today') return { start: end, end }
+  if (range === 'month') {
+    const start = formatLocalDate(new Date(today.getFullYear(), today.getMonth(), 1))
+    return { start, end }
+  }
+  if (range === 'week') {
+    const day = today.getDay()
+    const diff = day === 0 ? 6 : day - 1
+    const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+    monday.setDate(monday.getDate() - diff)
+    return { start: formatLocalDate(monday), end }
+  }
+  const start = formatLocalDate(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 90))
+  return { start, end }
+}
+
 const rangeLabel = computed(() => {
   const opt = timeRangeOptions.find(o => o.value === timeRange.value)
   return opt?.label || '全部'
-})
-
-// 根据时间范围过滤 dailyStats 并聚合统计数据
-const rangeOverview = computed(() => {
-  const ov = overview.value
-  if (timeRange.value === 'total') {
-    return ov // 原始总览数据
-  }
-  const start = formatLocalDate(getRangeStartDate(timeRange.value))
-
-  const filtered = (dailyStats.value || []).filter((d: any) => d.date >= start)
-  const sum = {
-    total_requests: 0,
-    total_tokens: 0,
-    total_cost: 0,
-    total_cache_hits: 0,
-  }
-  filtered.forEach((d: any) => {
-    sum.total_requests += d.requests || 0
-    sum.total_tokens += d.total_tokens || 0
-    sum.total_cost += d.cost || 0
-    sum.total_cache_hits += d.cache_hit_tokens || 0
-  })
-
-  return {
-    ...sum,
-    cache_hit_rate: sum.total_tokens > 0 ? (sum.total_cache_hits / sum.total_tokens) * 100 : 0,
-    active_channels: ov.active_channels,
-    active_models: ov.active_models,
-  }
 })
 
 // 时间范围切换时重新加载数据
@@ -134,48 +105,34 @@ watch(timeRange, async () => {
   nextTick(renderCharts)
 })
 
-function getFilteredCount() {
-  if (timeRange.value === 'total') return recentRecords.value.length
-  const start = formatLocalDate(getRangeStartDate(timeRange.value))
-  return (recentRecords.value || []).filter((r: any) => {
-    const d = r.created_at?.slice(0, 10) || ''
-    return d >= start
-  }).length
-}
-
 async function loadData() {
   try {
-    // 根据时间范围获取足够的 daily 数据
-    const today = new Date()
-    let start: string | undefined
-    let end: string | undefined
-    start = formatLocalDate(getRangeStartDate(timeRange.value))
-    end = formatLocalDate(today)
-
-    const [overviewRes, dailyRes, recordsRes] = await Promise.all([
+    const { start, end } = getRangeParams(timeRange.value)
+    const [overviewRes, dailyRes, recordsRes, modelRes] = await Promise.all([
       usageApi.overview(),
       usageApi.daily(start, end),
-      usageApi.records(undefined, undefined, undefined, 10000),  // 获取足够记录，前端按范围过滤
+      usageApi.records(undefined, start, end, 200),
+      usageApi.byModel(start, end),
     ])
     overview.value = overviewRes.data
     dailyStats.value = dailyRes.data
     recentRecords.value = recordsRes.data
+    modelStats.value = modelRes.data
     lastUpdated.value = now()
   } catch (e) {
     console.error(e)
   }
 }
 
-// 智能轮询：每 15s 只检查 overview，有变化才全量刷新
+// 智能轮询：每 15s 只刷新 overview 卡片数值，不重载图表
 async function smartPoll() {
   try {
     const res = await usageApi.overview()
     const newTotal = res.data?.total_requests || 0
     const oldTotal = overview.value?.total_requests
-    // oldTotal 为 undefined 说明还没加载过，不触发刷新（首次由 loadData 处理）
     if (oldTotal === undefined || newTotal !== oldTotal) {
-      await loadData()
-      nextTick(renderCharts)
+      overview.value = res.data
+      lastUpdated.value = now()
     }
   } catch (e) {
     console.error(e)
@@ -225,13 +182,8 @@ function renderCharts() {
 }
 
 function renderTrendChart() {
-  // 在函数内直接计算过滤后的数据
-  let stats = dailyStats.value
-  if (timeRange.value !== 'total') {
-    const start = formatLocalDate(getRangeStartDate(timeRange.value))
-    stats = (dailyStats.value || []).filter((d: any) => d.date >= start)
-  }
-  // 每次完全重新创建图表实例
+  // 服务端已根据时间范围过滤，直接使用 dailyStats
+  const stats = dailyStats.value
   if (trendChart) {
     trendChart.dispose()
     trendChart = null
@@ -265,28 +217,16 @@ function renderTrendChart() {
 }
 
 function renderPieChart() {
-  // 在函数内直接计算过滤后的数据，避免 computed 响应式时机问题
-  let records = recentRecords.value
-  if (timeRange.value !== 'total') {
-    const start = formatLocalDate(getRangeStartDate(timeRange.value))
-    records = (recentRecords.value || []).filter((r: any) => {
-      const d = r.created_at?.slice(0, 10) || ''
-      return d >= start
-    })
-  }
-  // 每次完全重新创建图表实例，确保数据强制刷新
+  // 使用服务端聚合数据，无需前端 groupBy
+  const stats = modelStats.value
   if (pieChart) {
     pieChart.dispose()
     pieChart = null
   }
-  if (!pieContainer.value || !records || records.length === 0) return
+  if (!pieContainer.value || !stats || stats.length === 0) return
 
   pieChart = echarts.init(pieContainer.value)
-  const modelMap = new Map<string, number>()
-  records.forEach((r: any) => {
-    modelMap.set(r.request_model, (modelMap.get(r.request_model) || 0) + r.total_tokens)
-  })
-  const data = Array.from(modelMap.entries()).map(([name, value]) => ({ name, value }))
+  const data = stats.map((s: any) => ({ name: s.request_model, value: s.total_tokens }))
   pieChart.setOption({
     tooltip: { trigger: 'item', formatter: '{b}: {c} tokens ({d}%)' },
     series: [{
@@ -339,9 +279,9 @@ function formatTokens(n: number) {
             </div>
             <p class="stat-label">{{ card.label }}</p>
             <p class="stat-value">
-              <template v-if="card.format === 'tokens'">{{ formatTokens(rangeOverview[card.value]) }}</template>
-              <template v-else-if="card.format === 'cost'">${{ (rangeOverview[card.value] || 0).toFixed(6) }}</template>
-              <template v-else>{{ rangeOverview[card.value] || 0 }}</template>
+              <template v-if="card.format === 'tokens'">{{ formatTokens(overview[card.value]) }}</template>
+              <template v-else-if="card.format === 'cost'">${{ (overview[card.value] || 0).toFixed(6) }}</template>
+              <template v-else>{{ overview[card.value] || 0 }}</template>
             </p>
           </NCard>
         </NGi>
@@ -359,14 +299,14 @@ function formatTokens(n: number) {
             <div class="chart-card-body">
               <div style="display:flex;align-items:center;gap:32px;padding:8px">
                 <div style="position:relative;width:120px;height:120px">
-                  <NProgress type="circle" :percentage="Math.round(rangeOverview.cache_hit_rate || 0)" :stroke-width="10" :size="120">
-                    <div style="text-align:center;white-space:nowrap"><span style="font-size:24px;font-weight:700">{{ (rangeOverview.cache_hit_rate || 0).toFixed(1) }}%</span></div>
+                  <NProgress type="circle" :percentage="Math.round(overview.cache_hit_rate || 0)" :stroke-width="10" :size="120">
+                    <div style="text-align:center;white-space:nowrap"><span style="font-size:24px;font-weight:700">{{ (overview.cache_hit_rate || 0).toFixed(1) }}%</span></div>
                   </NProgress>
                 </div>
                 <div>
                   <div class="cache-stat-row">
                     <span class="cache-stat-label">缓存命中</span>
-                    <span class="cache-stat-value">{{ formatTokens(rangeOverview.total_cache_hits) }} tokens</span>
+                    <span class="cache-stat-value">{{ formatTokens(overview.total_cache_hits) }} tokens</span>
                   </div>
                   <div class="cache-stat-row">
                     <span class="cache-stat-label">今日请求</span>
@@ -391,7 +331,7 @@ function formatTokens(n: number) {
               <p v-if="recentRecords.length === 0" style="color:#94a3b8;text-align:center;padding:40px">暂无数据</p>
               <div v-else style="display:flex;gap:16px;font-size:12px;color:#94a3b8;padding:4px 0 0">
                 <span>范围: <b style="color:#e2e8f0">{{ rangeLabel }}</b></span>
-                <span>统计记录: <b style="color:#e2e8f0">{{ getFilteredCount() }}</b> / {{ recentRecords.length }} 条</span>
+                <span>统计模型: <b style="color:#e2e8f0">{{ modelStats.length }}</b> 个</span>
               </div>
             </div>
           </NCard>

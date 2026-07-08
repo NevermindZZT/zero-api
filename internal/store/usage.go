@@ -73,6 +73,36 @@ func flushUsageBatch(db *DB, batch []*UsageRecord) {
 		}
 	}
 
+	// 更新预聚合表 usage_daily
+	aggStmt, err := tx.Prepare(`INSERT INTO usage_daily
+		(date, api_key_id, request_model, prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens, requests, cost)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+		ON CONFLICT(date, api_key_id, request_model) DO UPDATE SET
+			prompt_tokens = prompt_tokens + excluded.prompt_tokens,
+			completion_tokens = completion_tokens + excluded.completion_tokens,
+			cache_hit_tokens = cache_hit_tokens + excluded.cache_hit_tokens,
+			total_tokens = total_tokens + excluded.total_tokens,
+			requests = requests + 1,
+			cost = cost + excluded.cost`)
+	if err != nil {
+		tx.Rollback()
+		log.Printf("[Usage] 预聚合插入预编译失败: %v", err)
+		return
+	}
+	defer aggStmt.Close()
+
+	for _, u := range batch {
+		date := u.CreatedAt.Format("2006-01-02")
+		apiKeyID := interface{}(nil)
+		if u.APIKeyID != nil {
+			apiKeyID = *u.APIKeyID
+		}
+		if _, err := aggStmt.Exec(date, apiKeyID, u.RequestModel,
+			u.PromptTokens, u.CompletionTokens, u.CacheHitTokens, u.TotalTokens, u.Cost); err != nil {
+			log.Printf("[Usage] 预聚合更新失败 (date=%s, model=%s): %v", date, u.RequestModel, err)
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		log.Printf("[Usage] 批量写入提交事务失败: %v", err)
 	}
@@ -150,11 +180,106 @@ func (r *UsageRepo) insertDirect(u *UsageRecord) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+
+	// 同步更新预聚合表
+	r.updateDailyAgg(u)
+
 	return result.LastInsertId()
 }
 
-// GetOverview 获取总览统计
+// updateDailyAgg 更新 usage_daily 预聚合（单条记录）
+func (r *UsageRepo) updateDailyAgg(u *UsageRecord) {
+	date := u.CreatedAt.Format("2006-01-02")
+	apiKeyID := interface{}(nil)
+	if u.APIKeyID != nil {
+		apiKeyID = *u.APIKeyID
+	}
+	_, err := r.db.Exec(
+		`INSERT INTO usage_daily (date, api_key_id, request_model, prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens, requests, cost)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+		 ON CONFLICT(date, api_key_id, request_model) DO UPDATE SET
+			prompt_tokens = prompt_tokens + excluded.prompt_tokens,
+			completion_tokens = completion_tokens + excluded.completion_tokens,
+			cache_hit_tokens = cache_hit_tokens + excluded.cache_hit_tokens,
+			total_tokens = total_tokens + excluded.total_tokens,
+			requests = requests + 1,
+			cost = cost + excluded.cost`,
+		date, apiKeyID, u.RequestModel, u.PromptTokens, u.CompletionTokens, u.CacheHitTokens, u.TotalTokens, u.Cost,
+	)
+	if err != nil {
+		log.Printf("[Usage] 直接写入预聚合更新失败: %v", err)
+	}
+}
+
+// GetOverview 获取总览统计（基于预聚合表 usage_daily，避免全表扫描）
 func (r *UsageRepo) GetOverview(apiKeyID ...string) (*OverviewStats, error) {
+	stats := &OverviewStats{}
+	args := []interface{}{}
+	where := ""
+	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
+		where = " WHERE api_key_id = ?"
+		args = append(args, apiKeyID[0])
+	}
+
+	// 从预聚合表查询：最多 365 行/年，远快于全表扫描 usage_records
+	err := r.db.QueryRow(`SELECT
+		COALESCE(SUM(requests), 0),
+		COALESCE(SUM(total_tokens), 0),
+		COALESCE(SUM(cost), 0),
+		COALESCE(SUM(cache_hit_tokens), 0)
+		FROM usage_daily`+where, args...).Scan(
+		&stats.TotalRequests, &stats.TotalTokens, &stats.TotalCost, &stats.TotalCacheHits,
+	)
+	if err != nil {
+		// 降级：表可能不存在（刚迁移），回退到 usage_records
+		return r.getOverviewFallback(apiKeyID...)
+	}
+
+	// 安全兜底：usage_daily 返回 0 但 usage_records 有数据时自动降级
+	if stats.TotalRequests == 0 && stats.TotalTokens == 0 {
+		var usageRecCount int64
+		_ = r.db.QueryRow("SELECT COUNT(*) FROM usage_records").Scan(&usageRecCount)
+		if usageRecCount > 0 {
+			log.Printf("[Usage] usage_daily 为空但 usage_records 有 %d 条记录，自动触发回填+降级", usageRecCount)
+			go r.backfillDailyAgg()
+			return r.getOverviewFallback(apiKeyID...)
+		}
+	}
+
+	if stats.TotalTokens > 0 {
+		stats.CacheHitRate = float64(stats.TotalCacheHits) / float64(stats.TotalTokens) * 100
+	}
+
+	// 合并活跃渠道/模型数到一次查询
+	r.db.QueryRow(
+		`SELECT
+			(SELECT COUNT(*) FROM channels WHERE status = 'active'),
+			(SELECT COUNT(*) FROM models WHERE status = 'active')`,
+	).Scan(&stats.ActiveChannels, &stats.ActiveModels)
+
+	// 今日统计：从预聚合表查今天的数据
+	today := time.Now().Format("2006-01-02")
+	todayArgs := []interface{}{today}
+	todayWhere := " WHERE date = ?"
+	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
+		todayWhere += " AND api_key_id = ?"
+		todayArgs = append(todayArgs, apiKeyID[0])
+	}
+	err = r.db.QueryRow(
+		`SELECT COALESCE(SUM(requests), 0), COALESCE(SUM(total_tokens), 0) FROM usage_daily`+todayWhere,
+		todayArgs...,
+	).Scan(&stats.TodayRequests, &stats.TodayTokens)
+	if err != nil {
+		// 降级：可能是 usage_daily 表还不存在
+		stats.TodayRequests = 0
+		stats.TodayTokens = 0
+	}
+
+	return stats, nil
+}
+
+// getOverviewFallback 降级方案：从 usage_records 全表查询（用于旧数据兼容）
+func (r *UsageRepo) getOverviewFallback(apiKeyID ...string) (*OverviewStats, error) {
 	stats := &OverviewStats{}
 	args := []interface{}{}
 	where := ""
@@ -173,14 +298,12 @@ func (r *UsageRepo) GetOverview(apiKeyID ...string) (*OverviewStats, error) {
 		stats.CacheHitRate = float64(stats.TotalCacheHits) / float64(stats.TotalTokens) * 100
 	}
 
-	// 合并活跃渠道/模型数到一次查询
 	r.db.QueryRow(
 		`SELECT
 			(SELECT COUNT(*) FROM channels WHERE status = 'active'),
 			(SELECT COUNT(*) FROM models WHERE status = 'active')`,
 	).Scan(&stats.ActiveChannels, &stats.ActiveModels)
 
-	// 今日统计：使用 created_at >= 范围查询（可利用 idx_usage_created_at 索引）
 	todayArgs := []interface{}{}
 	todayWhere := ""
 	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
@@ -193,7 +316,6 @@ func (r *UsageRepo) GetOverview(apiKeyID ...string) (*OverviewStats, error) {
 		append([]interface{}{todayStart}, todayArgs...)...,
 	).Scan(&stats.TodayRequests, &stats.TodayTokens)
 	if err != nil {
-		// 静默处理：可能是旧版数据中没有 created_at
 		stats.TodayRequests = 0
 		stats.TodayTokens = 0
 	}
@@ -201,9 +323,55 @@ func (r *UsageRepo) GetOverview(apiKeyID ...string) (*OverviewStats, error) {
 	return stats, nil
 }
 
-// GetDailyStats 获取按日聚合统计
+// GetDailyStats 获取按日聚合统计（基于预聚合表 usage_daily）
 func (r *UsageRepo) GetDailyStats(start, end string, apiKeyID ...string) ([]DailyStats, error) {
-	// 使用 created_at >= ? AND created_at < ? 范围查询以利用 idx_usage_created_at 索引
+	whereDate := "WHERE date >= ? AND date <= ?"
+	args := []interface{}{start, end}
+	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
+		whereDate += " AND api_key_id = ?"
+		args = append(args, apiKeyID[0])
+	}
+	rows, err := r.db.Query(
+		`SELECT date,
+		        COALESCE(SUM(prompt_tokens), 0),
+		        COALESCE(SUM(completion_tokens), 0),
+		        COALESCE(SUM(cache_hit_tokens), 0),
+		        COALESCE(SUM(total_tokens), 0),
+		        COALESCE(SUM(requests), 0),
+		        COALESCE(SUM(cost), 0)
+		 FROM usage_daily `+whereDate+`
+		 GROUP BY date ORDER BY date DESC`, args...)
+	if err != nil {
+		// 降级：回退到 usage_records 查询
+		return r.getDailyStatsFallback(start, end, apiKeyID...)
+	}
+	defer rows.Close()
+
+	var stats []DailyStats
+	for rows.Next() {
+		var s DailyStats
+		if err := rows.Scan(&s.Date, &s.PromptTokens, &s.CompletionTokens, &s.CacheHitTokens, &s.TotalTokens, &s.Requests, &s.Cost); err != nil {
+			return nil, err
+		}
+		stats = append(stats, s)
+	}
+
+	// 安全兜底：usage_daily 无数据但 usage_records 有数据时自动降级
+	if len(stats) == 0 {
+		var usageRecCount int64
+		_ = r.db.QueryRow("SELECT COUNT(*) FROM usage_records").Scan(&usageRecCount)
+		if usageRecCount > 0 {
+			log.Printf("[Usage] GetDailyStats: usage_daily 为空但 usage_records 有 %d 条记录，自动触发回填+降级", usageRecCount)
+			go r.backfillDailyAgg()
+			return r.getDailyStatsFallback(start, end, apiKeyID...)
+		}
+	}
+
+	return stats, nil
+}
+
+// getDailyStatsFallback 降级方案：从 usage_records 实时聚合
+func (r *UsageRepo) getDailyStatsFallback(start, end string, apiKeyID ...string) ([]DailyStats, error) {
 	nextDay := addDay(end)
 	whereDate := "WHERE created_at >= ? AND created_at < ?"
 	args := []interface{}{start, nextDay}
@@ -230,6 +398,66 @@ func (r *UsageRepo) GetDailyStats(start, end string, apiKeyID ...string) ([]Dail
 	for rows.Next() {
 		var s DailyStats
 		if err := rows.Scan(&s.Date, &s.PromptTokens, &s.CompletionTokens, &s.CacheHitTokens, &s.TotalTokens, &s.Requests, &s.Cost); err != nil {
+			return nil, err
+		}
+		stats = append(stats, s)
+	}
+	return stats, nil
+}
+
+// ModelStats 按模型聚合统计
+type ModelStats struct {
+	RequestModel string  `json:"request_model"`
+	TotalTokens  int64   `json:"total_tokens"`
+	Requests     int64   `json:"requests"`
+	Cost         float64 `json:"cost"`
+}
+
+// GetModelStats 获取按模型聚合统计（饼图专用）
+func (r *UsageRepo) GetModelStats(start, end string, apiKeyID ...string) ([]ModelStats, error) {
+	// 先尝试从 usage_daily 查询
+	stats, err := r.getModelStatsFromDaily(start, end, apiKeyID...)
+	if err != nil {
+		return nil, err
+	}
+
+	// 安全兜底：usage_daily 无数据但 usage_records 有数据时自动降级
+	if len(stats) == 0 {
+		var usageRecCount int64
+		_ = r.db.QueryRow("SELECT COUNT(*) FROM usage_records").Scan(&usageRecCount)
+		if usageRecCount > 0 {
+			log.Printf("[Usage] GetModelStats: usage_daily 为空但 usage_records 有 %d 条记录，自动触发回填+降级", usageRecCount)
+			go r.backfillDailyAgg()
+			return r.getModelStatsFallback(start, end, apiKeyID...)
+		}
+	}
+
+	return stats, nil
+}
+
+func (r *UsageRepo) getModelStatsFromDaily(start, end string, apiKeyID ...string) ([]ModelStats, error) {
+	whereDate := "WHERE date >= ? AND date <= ?"
+	args := []interface{}{start, end}
+	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
+		whereDate += " AND api_key_id = ?"
+		args = append(args, apiKeyID[0])
+	}
+	rows, err := r.db.Query(
+		`SELECT request_model,
+		        COALESCE(SUM(total_tokens), 0),
+		        COALESCE(SUM(requests), 0),
+		        COALESCE(SUM(cost), 0)
+		 FROM usage_daily `+whereDate+`
+		 GROUP BY request_model ORDER BY total_tokens DESC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []ModelStats
+	for rows.Next() {
+		var s ModelStats
+		if err := rows.Scan(&s.RequestModel, &s.TotalTokens, &s.Requests, &s.Cost); err != nil {
 			return nil, err
 		}
 		stats = append(stats, s)
@@ -288,6 +516,55 @@ func (r *UsageRepo) GetRecentRecords(limit int, apiKeyID, startDate, endDate str
 		return nil, err
 	}
 	return records, nil
+}
+
+// backfillDailyAgg 异步回填 usage_daily（从 usage_records 聚合）
+func (r *UsageRepo) backfillDailyAgg() {
+	log.Println("[Usage] 开始异步回填 usage_daily...")
+	result, err := r.db.Exec(`
+		INSERT OR IGNORE INTO usage_daily (date, api_key_id, request_model, prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens, requests, cost)
+		SELECT date(created_at), api_key_id, request_model,
+		       SUM(prompt_tokens), SUM(completion_tokens), SUM(cache_hit_tokens), SUM(total_tokens),
+		       COUNT(*), SUM(cost)
+		FROM usage_records
+		GROUP BY date(created_at), api_key_id, request_model`)
+	if err != nil {
+		log.Printf("[Usage] 异步回填 usage_daily 失败: %v", err)
+		return
+	}
+	affected, _ := result.RowsAffected()
+	log.Printf("[Usage] 异步回填 usage_daily 完成，写入 %d 行聚合数据", affected)
+}
+
+// getModelStatsFallback 降级方案：从 usage_records 实时按模型聚合
+func (r *UsageRepo) getModelStatsFallback(start, end string, apiKeyID ...string) ([]ModelStats, error) {
+	whereDate := "WHERE created_at >= ? AND created_at < ?"
+	args := []interface{}{start, addDay(end)}
+	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
+		whereDate += " AND api_key_id = ?"
+		args = append(args, apiKeyID[0])
+	}
+	rows, err := r.db.Query(
+		`SELECT request_model,
+		        COALESCE(SUM(total_tokens), 0),
+		        COALESCE(COUNT(*), 0),
+		        COALESCE(SUM(cost), 0)
+		 FROM usage_records `+whereDate+`
+		 GROUP BY request_model ORDER BY total_tokens DESC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []ModelStats
+	for rows.Next() {
+		var s ModelStats
+		if err := rows.Scan(&s.RequestModel, &s.TotalTokens, &s.Requests, &s.Cost); err != nil {
+			return nil, err
+		}
+		stats = append(stats, s)
+	}
+	return stats, nil
 }
 
 // joinConditions 拼接 SQL WHERE 条件

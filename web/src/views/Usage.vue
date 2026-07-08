@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, computed } from 'vue'
+import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import {
   NCard, NDataTable, NSpin, NSpace, NDatePicker, NButton, NStatistic, NGrid, NGi, NIcon, NSelect,
 } from 'naive-ui'
@@ -88,11 +88,13 @@ onUnmounted(() => {
 async function loadData() {
   loading.value = true
   const ak = selectedApiKeyId.value || undefined
+  const start = formatDate(dateRange.value[0])
+  const end = formatDate(dateRange.value[1])
   try {
     const [overviewRes, dailyRes, recordsRes] = await Promise.all([
       usageApi.overview(ak),
-      usageApi.daily(undefined, undefined, ak),
-      usageApi.records(ak),
+      usageApi.daily(start, end, ak),
+      usageApi.records(ak, start, end, 500),
     ])
     overview.value = overviewRes.data
     dailyStats.value = dailyRes.data
@@ -102,16 +104,15 @@ async function loadData() {
   }
 }
 
-// 智能轮询：每 15s 只检查 overview，有变化才全量刷新
+// 智能轮询：每 15s 仅刷新 overview 卡片数值（不重载 daily/records）
 async function smartPoll() {
   try {
     const ak = selectedApiKeyId.value || undefined
     const res = await usageApi.overview(ak)
     const newTotal = res.data?.total_requests || 0
     const oldTotal = overview.value?.total_requests
-    // oldTotal 为 undefined 说明还没加载过，不触发刷新（首次由 loadData 处理）
     if (oldTotal === undefined || newTotal !== oldTotal) {
-      await loadData()
+      overview.value = res.data
     }
   } catch (e) {
     console.error(e)
@@ -126,18 +127,8 @@ function formatDate(ts: number) {
 async function refresh() {
   if (refreshing.value) return
   refreshing.value = true
-  const start = formatDate(dateRange.value[0])
-  const end = formatDate(dateRange.value[1])
-  const ak = selectedApiKeyId.value || undefined
   try {
-    const [overviewRes, dailyRes, recordsRes] = await Promise.all([
-      usageApi.overview(ak),
-      usageApi.daily(start, end, ak),
-      usageApi.records(ak),
-    ])
-    overview.value = overviewRes.data
-    dailyStats.value = dailyRes.data
-    records.value = recordsRes.data
+    await loadData()
   } finally {
     refreshing.value = false
   }
@@ -146,6 +137,13 @@ async function refresh() {
 function onApiKeyChange() {
   loadData()
 }
+
+// 日期范围变化时自动重新加载数据
+watch(dateRange, () => {
+  if (dateRange.value) {
+    loadData()
+  }
+})
 
 function now() {
   const d = new Date()

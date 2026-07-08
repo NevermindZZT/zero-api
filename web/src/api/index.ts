@@ -117,6 +117,8 @@ export const usageApi = {
   overview: (apiKeyId?: number) => api.get('/stats/overview', { params: { api_key_id: apiKeyId || undefined } }),
   daily: (start?: string, end?: string, apiKeyId?: number) =>
     api.get('/stats/daily', { params: { start, end, api_key_id: apiKeyId || undefined } }),
+  byModel: (start?: string, end?: string, apiKeyId?: number) =>
+    api.get('/stats/by-model', { params: { start, end, api_key_id: apiKeyId || undefined } }),
   records: (apiKeyId?: number, start?: string, end?: string, limit?: number) =>
     api.get('/usage/records', { params: { api_key_id: apiKeyId || undefined, start, end, limit } }),
 }

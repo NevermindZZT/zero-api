@@ -49,7 +49,7 @@ func (h *UsageHandler) GetDailyStats(c *gin.Context) {
 func (h *UsageHandler) GetRecentRecords(c *gin.Context) {
 	limit := 200
 	if limitStr := c.Query("limit"); limitStr != "" {
-		if v, err := strconv.Atoi(limitStr); err == nil && v > 0 && v <= 50000 {
+		if v, err := strconv.Atoi(limitStr); err == nil && v > 0 && v <= 2000 {
 			limit = v
 		}
 	}
@@ -65,6 +65,23 @@ func (h *UsageHandler) GetRecentRecords(c *gin.Context) {
 		records = []store.UsageRecord{}
 	}
 	c.JSON(http.StatusOK, records)
+}
+
+// GetModelStats 获取按模型聚合统计（饼图专用）
+func (h *UsageHandler) GetModelStats(c *gin.Context) {
+	start := c.DefaultQuery("start", time.Now().AddDate(0, -3, 0).Format("2006-01-02"))
+	end := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
+	apiKeyID := c.Query("api_key_id")
+
+	stats, err := h.usageRepo.GetModelStats(start, end, apiKeyID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if stats == nil {
+		stats = []store.ModelStats{}
+	}
+	c.JSON(http.StatusOK, stats)
 }
 
 // GetByAPIKey 按 API Key 统计
