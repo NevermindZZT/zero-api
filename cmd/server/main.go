@@ -71,7 +71,7 @@ func main() {
 
 	// 初始化技能管理
 	skillFS := store.NewSkillFS(cfg.MCP.SkillsDir)
-	skillH := handler.NewSkillHandler(svc.Skill, svc.SkillCombination, skillFS)
+	skillH := handler.NewSkillHandler(svc.Skill, svc.SkillCombination, svc.ProxyConfig, skillFS)
 	skillComboH := handler.NewSkillCombinationHandler(svc.Skill, svc.SkillCombination, skillFS)
 	mcpCfgH := handler.NewMCPConfigHandler(cfg.MCP, svc.ProxyConfig)
 

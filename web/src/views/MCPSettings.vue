@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import { NCard, NInputGroup, NInputGroupLabel, NInput, NButton, NSpace, NAlert, NIcon, useMessage } from 'naive-ui'
 import { CopySharp, CodeSlashSharp, SaveSharp } from '@vicons/ionicons5'
 import { mcpApi } from '@/api'
+import { copyToClipboard } from '@/utils/clipboard'
 
 const message = useMessage()
 
@@ -37,12 +38,18 @@ onMounted(async () => {
 })
 
 function copyUrl() {
-  navigator.clipboard.writeText(mcpUrl.value).then(() => message.success('已复制 MCP 连接 URL'))
+  copyToClipboard(mcpUrl.value).then((ok) => {
+    if (ok) message.success('已复制 MCP 连接 URL')
+    else message.error('复制失败')
+  })
 }
 
 function copyToken() {
   if (mcpToken.value) {
-    navigator.clipboard.writeText(mcpToken.value).then(() => message.success('已复制 Token'))
+    copyToClipboard(mcpToken.value).then((ok) => {
+      if (ok) message.success('已复制 Token')
+      else message.error('复制失败, 请手动复制')
+    })
   }
 }
 

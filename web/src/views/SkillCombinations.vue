@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted, h } from 'vue'
+import { ref, onMounted, computed, h } from 'vue'
 import {
   NCard, NGrid, NGi, NButton, NModal, NForm, NFormItem, NInput,
-  NSelect, NSpace, NTag, NIcon, NDrawer, NDrawerContent, NDataTable,
+  NSelect, NSpace, NTag, NIcon, NDrawer, NDrawerContent, NDataTable, NAlert,
   useMessage, useDialog,
 } from 'naive-ui'
 import { AddSharp } from '@vicons/ionicons5'
@@ -95,12 +95,16 @@ function confirmDelete(row: any) {
   })
 }
 
+
+
 async function showDetail(row: any) {
   editingCombo.value = row
   addSkillComboId.value = row.id
   try {
     const res = await skillCombinationApi.get(row.id)
     detailSkills.value = res.data?.skills || []
+    // 打开抽屉时刷新技能列表
+    await loadAllSkills()
     showDetailDrawer.value = true
   } catch { message.error('加载详情失败') }
 }
@@ -108,8 +112,6 @@ async function showDetail(row: any) {
 async function addSkill(comboId: number, skillId: number) {
   try {
     await skillCombinationApi.addSkill(comboId, skillId)
-    message.success('添加成功')
-    showDetail(combinations.value.find((c: any) => c.id === comboId))
     loadCombinations()
   } catch { message.error('添加失败') }
 }
@@ -117,27 +119,46 @@ async function addSkill(comboId: number, skillId: number) {
 async function removeSkill(comboId: number, skillId: number) {
   try {
     await skillCombinationApi.removeSkill(comboId, skillId)
-    message.success('移除成功')
-    showDetail(combinations.value.find((c: any) => c.id === comboId))
+    // 刷新详情
+    const res = await skillCombinationApi.get(comboId)
+    detailSkills.value = res.data?.skills || []
     loadCombinations()
   } catch { message.error('移除失败') }
 }
 
-// 添加技能到组合的对话框
+// 已有技能的 ID 集合（用于在添加对话框中标记已添加项）
+const addedSkillIds = computed(() => new Set(detailSkills.value.map((s: any) => s.id)))
+
+// 所有技能选项（已添加的标为 disabled）
+const availableSkillOptions = computed(() =>
+  allSkills.value.map((opt: any) => ({
+    ...opt,
+    disabled: addedSkillIds.value.has(opt.value),
+  }))
+)
+
+// 多选添加技能对话框
 const showAddSkillModal = ref(false)
 const addSkillComboId = ref(0)
-const addSkillSelected = ref<number | null>(null)
+const addSkillSelected = ref<number[]>([])
 
 function openAddSkill(comboId: number) {
   addSkillComboId.value = comboId
-  addSkillSelected.value = null
+  addSkillSelected.value = []
   showAddSkillModal.value = true
 }
 
 async function confirmAddSkill() {
-  if (!addSkillSelected.value) { message.error('请选择技能'); return }
-  await addSkill(addSkillComboId.value, addSkillSelected.value)
+  if (!addSkillSelected.value.length) { message.error('请选择至少一个技能'); return }
+  for (const sid of addSkillSelected.value) {
+    await addSkill(addSkillComboId.value, sid)
+  }
+  message.success(`成功添加 ${addSkillSelected.value.length} 个技能`)
   showAddSkillModal.value = false
+  // 刷新详情
+  const res = await skillCombinationApi.get(addSkillComboId.value)
+  detailSkills.value = res.data?.skills || []
+  addSkillSelected.value = []
 }
 </script>
 
@@ -190,10 +211,13 @@ async function confirmAddSkill() {
       <template #footer><NSpace justify="end"><NButton @click="showEditModal=false">取消</NButton><NButton type="primary" @click="handleUpdate">更新</NButton></NSpace></template>
     </NModal>
 
-    <!-- 添加技能 Modal -->
-    <NModal v-model:show="showAddSkillModal" title="添加技能" preset="card" style="width:450px;">
-      <NSelect v-model:value="addSkillSelected" :options="allSkills" placeholder="搜索并选择技能" filterable />
-      <template #footer><NSpace justify="end"><NButton @click="showAddSkillModal=false">取消</NButton><NButton type="primary" @click="confirmAddSkill">添加</NButton></NSpace></template>
+    <!-- 添加技能 Modal（支持多选，已添加的技能显示为灰色） -->
+    <NModal v-model:show="showAddSkillModal" title="添加技能" preset="card" style="width:550px;">
+      <NAlert type="info" :bordered="false" style="margin-bottom:12px;">
+        搜索并选择要添加到组合的技能，可多选。<strong>灰色项</strong>为已添加，不可重复选择。
+      </NAlert>
+      <NSelect v-model:value="addSkillSelected" :options="availableSkillOptions" placeholder="搜索技能..." multiple filterable :max-tag-count="10" />
+      <template #footer><NSpace justify="end"><NButton @click="showAddSkillModal=false">取消</NButton><NButton type="primary" :disabled="!addSkillSelected.length" @click="confirmAddSkill">添加 {{ addSkillSelected.length > 0 ? `(${addSkillSelected.length})` : '' }}</NButton></NSpace></template>
     </NModal>
 
     <!-- 详情 Drawer -->

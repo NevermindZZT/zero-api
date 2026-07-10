@@ -6,6 +6,7 @@ import {
 } from 'naive-ui'
 import { CloudDownloadSharp, CloudUploadSharp, DocumentTextSharp } from '@vicons/ionicons5'
 import { skillApi } from '@/api'
+import { formatDateTime } from '@/utils/format'
 
 const message = useMessage()
 const dialog = useDialog()
@@ -36,9 +37,6 @@ const importLoading = ref(false)
 // 仓库导入
 const repoUrl = ref('')
 const repoImportLoading = ref(false)
-
-// GitHub Token（可选，提升 API 速率限制）
-const githubToken = ref('')
 
 // 上传
 const uploadLoading = ref(false)
@@ -118,7 +116,7 @@ async function handleImport() {
   }
   importLoading.value = true
   try {
-    const res = await skillApi.importFromGitHub(importUrl.value, githubToken.value || undefined)
+    const res = await skillApi.importFromGitHub(importUrl.value)
     message.success(res.data?.message || '导入成功')
     showImportModal.value = false
     importUrl.value = ''
@@ -138,7 +136,7 @@ async function handleRepoImport() {
   }
   repoImportLoading.value = true
   try {
-    const res = await skillApi.importRepo(repoUrl.value, undefined, githubToken.value || undefined)
+    const res = await skillApi.importRepo(repoUrl.value)
     const msg = res.data?.message || ''
     const skills = res.data?.skills || []
     message.success(msg || `成功导入 ${skills.length} 个技能`)
@@ -240,17 +238,18 @@ const columns = [
   { title: '名称', key: 'name', width: 160 },
   { title: '描述', key: 'description', ellipsis: true },
   {
-    title: '来源', key: 'type', width: 80,
+    title: '来源', key: 'type', width: 70,
     render: (row: any) => h(NTag, { size: 'small', type: row.type === 'github' ? 'info' : 'default' }, { default: () => row.type === 'github' ? 'GitHub' : '本地' }),
   },
   {
-    title: '标签', key: 'tags', width: 160,
-    render: (row: any) => (row.tags || []).map((t: string) => h(NTag, { size: 'small', style: 'margin-right:4px' }, { default: () => t })),
+    title: '标签', key: 'tags', minWidth: 140,
+    ellipsis: { tooltip: true },
+    render: (row: any) => (row.tags || []).map((t: string) => h(NTag, { size: 'small', style: 'margin:2px 4px 2px 0;max-width:200px;overflow:hidden;text-overflow:ellipsis;' }, { default: () => t })),
   },
   { title: '文件数', key: 'files', width: 70, render: (row: any) => row.files?.length || 0 },
-  { title: '创建时间', key: 'created_at', width: 170 },
+  { title: '创建时间', key: 'created_at', width: 150, render: (r: any) => formatDateTime(r.created_at) },
   {
-    title: '操作', key: 'actions', width: 180,
+    title: '操作', key: 'actions', width: 130,
     render: (row: any) => h(NSpace, {}, {
       default: () => [
         h(NButton, { size: 'tiny', quaternary: true, onClick: () => openEdit(row) }, { default: () => '编辑' }),
@@ -373,14 +372,6 @@ my-skill/
           <template #icon><NIcon><CloudDownloadSharp /></NIcon></template>导入单个技能
         </NButton>
       </NSpace>
-
-      <!-- GitHub Token 输入 -->
-      <NDivider style="margin-top:16px;">可选：GitHub Token</NDivider>
-      <p style="font-size:12px;color:#888;margin-bottom:6px;">
-        未认证的 GitHub API 有 60次/小时 限制。提供 Token 可提升至 5000次/小时。
-        <a href="https://github.com/settings/tokens" target="_blank" style="color:#70b8ff;">创建 Token →</a>
-      </p>
-      <NInput v-model:value="githubToken" type="password" show-password-on="click" placeholder="可选：ghp_xxxxxxxxxxxxxxxxxxxx" />
 
       <template #footer>
         <NSpace justify="end">

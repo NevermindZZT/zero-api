@@ -20,14 +20,16 @@ import (
 type SkillHandler struct {
 	skillRepo           *store.SkillRepo
 	skillCombinationRepo *store.SkillCombinationRepo
+	proxyConfigRepo     *store.ProxyConfigRepo
 	skillFS             *store.SkillFS
 	ghClient            *upstream.GitHubClient
 }
 
-func NewSkillHandler(skillRepo *store.SkillRepo, skillCombinationRepo *store.SkillCombinationRepo, skillFS *store.SkillFS) *SkillHandler {
+func NewSkillHandler(skillRepo *store.SkillRepo, skillCombinationRepo *store.SkillCombinationRepo, proxyConfigRepo *store.ProxyConfigRepo, skillFS *store.SkillFS) *SkillHandler {
 	return &SkillHandler{
 		skillRepo:           skillRepo,
 		skillCombinationRepo: skillCombinationRepo,
+		proxyConfigRepo:     proxyConfigRepo,
 		skillFS:             skillFS,
 		ghClient:            upstream.NewGitHubClient(),
 	}
@@ -358,11 +360,17 @@ func (h *SkillHandler) ImportFromGitHub(c *gin.Context) {
 
 	log.Printf("[Skill] 从 GitHub 导入: %s", req.SourceURL)
 
-	// 使用提供的 Token 创建客户端（如果有），提升 API 速率限制
+	// 使用提供的 Token 或 DB 中的 GitHub Token
+	token := req.GitHubToken
+	if token == "" {
+		if pc, err := h.proxyConfigRepo.Get(); err == nil && pc.GitHubToken != "" {
+			token = pc.GitHubToken
+		}
+	}
 	client := h.ghClient
-	if req.GitHubToken != "" {
+	if token != "" {
 		client = upstream.NewGitHubClient()
-		client.SetToken(req.GitHubToken)
+		client.SetToken(token)
 	}
 
 	// 从 GitHub 获取文件
@@ -500,6 +508,17 @@ func (h *SkillHandler) UploadSkill(c *gin.Context) {
 		}
 	}
 
+	// 同名覆盖：如果已存在同名技能，先删除
+	if existing, _ := h.skillRepo.List("", ""); existing != nil {
+		for _, s := range existing {
+			if s.Name == skillName {
+				h.skillFS.DeleteSkillDir(s.ID, s.Name)
+				h.skillRepo.Delete(s.ID)
+				break
+			}
+		}
+	}
+
 	// 创建技能 DB 记录
 	skill := &store.Skill{
 		Name:        skillName,
@@ -615,6 +634,17 @@ func (h *SkillHandler) UploadFolder(c *gin.Context) {
 
 	log.Printf("[Skill] 收到文件夹上传: %d 个文件, 名称=%s", len(files), skillName)
 
+	// 同名覆盖：如果已存在同名技能，先删除
+	if existing, _ := h.skillRepo.List("", ""); existing != nil {
+		for _, s := range existing {
+			if s.Name == skillName {
+				h.skillFS.DeleteSkillDir(s.ID, s.Name)
+				h.skillRepo.Delete(s.ID)
+				break
+			}
+		}
+	}
+
 	// 创建技能 DB 记录
 	skill := &store.Skill{
 		Name:        skillName,
@@ -714,11 +744,17 @@ func (h *SkillHandler) ImportRepo(c *gin.Context) {
 		return
 	}
 
-	// 如果提供了 GitHub Token，创建认证客户端
+	// 优先使用请求中的 Token，否则从 DB 配置读取全局 GitHub Token
+	token := req.GitHubToken
+	if token == "" {
+		if pc, err := h.proxyConfigRepo.Get(); err == nil && pc.GitHubToken != "" {
+			token = pc.GitHubToken
+		}
+	}
 	client := h.ghClient
-	if req.GitHubToken != "" {
+	if token != "" {
 		client = upstream.NewGitHubClient()
-		client.SetToken(req.GitHubToken)
+		client.SetToken(token)
 	}
 
 	branch := info.Branch
@@ -750,7 +786,7 @@ func (h *SkillHandler) ImportRepo(c *gin.Context) {
 		h.skillRepo.Delete(s.ID)
 	}
 
-	// 检查是否已存在同名的组合，存在则更新
+	// 检查是否已存在同名的组合
 	existingCombos, _ := h.skillCombinationRepo.List()
 	comboID := int64(0)
 	comboName := info.Repo
@@ -762,12 +798,14 @@ func (h *SkillHandler) ImportRepo(c *gin.Context) {
 		}
 	}
 
-	// 创建组合
-	comboDesc := fmt.Sprintf("从 %s 导入的技能组合", repoURL)
-	comboID, err = h.skillCombinationRepo.Create(comboName, comboDesc)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建技能组合失败: " + err.Error()})
-		return
+	// 单个技能不创建组合
+	if len(discovered) > 1 {
+		comboDesc := fmt.Sprintf("从 %s 导入的技能组合", repoURL)
+		comboID, err = h.skillCombinationRepo.Create(comboName, comboDesc)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建技能组合失败: " + err.Error()})
+			return
+		}
 	}
 
 	type importResult struct {
@@ -812,8 +850,10 @@ func (h *SkillHandler) ImportRepo(c *gin.Context) {
 			fileCount++
 		}
 
-		// 添加到组合
-		h.skillCombinationRepo.AddSkill(comboID, id)
+		// 添加到组合（只在多技能时）
+		if comboID > 0 {
+			h.skillCombinationRepo.AddSkill(comboID, id)
+		}
 
 		results = append(results, importResult{
 			SkillID: id,
@@ -822,14 +862,22 @@ func (h *SkillHandler) ImportRepo(c *gin.Context) {
 		})
 	}
 
-	log.Printf("[Skill] 仓库导入成功: %s, %d 个技能, 组合 ID=%d", repoURL, len(results), comboID)
+	log.Printf("[Skill] 仓库导入成功: %s, %d 个技能, 组合=%d", repoURL, len(results), comboID)
 
-	c.JSON(http.StatusCreated, gin.H{
-		"repo_url":      repoURL,
-		"skills":        results,
-		"combination":   gin.H{"id": comboID, "name": comboName},
-		"message":       fmt.Sprintf("成功导入 %d 个技能，并创建了组合「%s」", len(results), comboName),
-	})
+	if len(discovered) > 1 {
+		c.JSON(http.StatusCreated, gin.H{
+			"repo_url":    repoURL,
+			"skills":      results,
+			"combination": gin.H{"id": comboID, "name": comboName},
+			"message":     fmt.Sprintf("成功导入 %d 个技能，并创建了组合「%s」", len(results), comboName),
+		})
+	} else {
+		c.JSON(http.StatusCreated, gin.H{
+			"repo_url": repoURL,
+			"skills":   results,
+			"message":  fmt.Sprintf("成功导入 %d 个技能", len(results)),
+		})
+	}
 }
 
 // SyncRepo 同步仓库中所有技能的更新
@@ -847,18 +895,24 @@ func (h *SkillHandler) SyncRepo(c *gin.Context) {
 		return
 	}
 
+	// 从 DB 读取 GitHub Token
+	token := req.GitHubToken
+	if token == "" {
+		if pc, err := h.proxyConfigRepo.Get(); err == nil && pc.GitHubToken != "" {
+			token = pc.GitHubToken
+		}
+	}
+	client := h.ghClient
+	if token != "" {
+		client = upstream.NewGitHubClient()
+		client.SetToken(token)
+	}
+
 	repoTag := "repo:" + info.Owner + "/" + info.Repo
 	existingSkills, err := h.skillRepo.List("", repoTag)
 	if err != nil || len(existingSkills) == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "未找到来自该仓库的技能，请先使用导入功能"})
 		return
-	}
-
-	// 如果提供了 GitHub Token，创建认证客户端
-	client := h.ghClient
-	if req.GitHubToken != "" {
-		client = upstream.NewGitHubClient()
-		client.SetToken(req.GitHubToken)
 	}
 
 	branch := info.Branch
