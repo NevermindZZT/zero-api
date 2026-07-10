@@ -32,6 +32,7 @@ type ProxyConfigData struct {
 	ProbeAPIKey           string                 `json:"probe_api_key"`
 	RequestTimeoutSeconds int                    `json:"request_timeout_seconds"`
 	FailoverEnabled       bool                   `json:"failover_enabled"` // 全局熔断开关
+	GitHubToken           string                 `json:"github_token"`
 	CreatedAt             time.Time              `json:"created_at"`
 	UpdatedAt             time.Time              `json:"updated_at"`
 }
@@ -49,8 +50,8 @@ func (r *ProxyConfigRepo) Get() (*ProxyConfigData, error) {
 	c := &ProxyConfigData{}
 	var interceptJSON, smartJSON, mappingsJSON string
 	err := r.db.QueryRow(
-		`SELECT id, intercept_domains, smart_intercept_domains, default_channel_id, model_mappings, mitm_all, proxy_username, proxy_password, forward_proxy_url, forward_proxy_user, forward_proxy_pass, probe_api_key, request_timeout_seconds, failover_enabled, created_at, updated_at FROM proxy_config LIMIT 1`,
-	).Scan(&c.ID, &interceptJSON, &smartJSON, &c.DefaultChannelID, &mappingsJSON, &c.MitmAll, &c.ProxyUsername, &c.ProxyPassword, &c.ForwardProxyURL, &c.ForwardProxyUser, &c.ForwardProxyPass, &c.ProbeAPIKey, &c.RequestTimeoutSeconds, &c.FailoverEnabled, &c.CreatedAt, &c.UpdatedAt)
+		`SELECT id, intercept_domains, smart_intercept_domains, default_channel_id, model_mappings, mitm_all, proxy_username, proxy_password, forward_proxy_url, forward_proxy_user, forward_proxy_pass, probe_api_key, request_timeout_seconds, failover_enabled, github_token, created_at, updated_at FROM proxy_config LIMIT 1`,
+	).Scan(&c.ID, &interceptJSON, &smartJSON, &c.DefaultChannelID, &mappingsJSON, &c.MitmAll, &c.ProxyUsername, &c.ProxyPassword, &c.ForwardProxyURL, &c.ForwardProxyUser, &c.ForwardProxyPass, &c.ProbeAPIKey, &c.RequestTimeoutSeconds, &c.FailoverEnabled, &c.GitHubToken, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

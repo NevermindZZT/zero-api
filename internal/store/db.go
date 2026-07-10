@@ -116,6 +116,50 @@ func (d *DB) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_usage_model ON usage_records(model_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_models_channel ON models(channel_id)`,
 
+		// 技能管理
+		`CREATE TABLE IF NOT EXISTS skills (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			type TEXT NOT NULL DEFAULT 'manual',
+			source_url TEXT DEFAULT '',
+			base_path TEXT DEFAULT '',
+			enabled INTEGER DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS skill_tags (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			skill_id INTEGER NOT NULL,
+			tag TEXT NOT NULL,
+			FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS skill_files (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			skill_id INTEGER NOT NULL,
+			file_path TEXT NOT NULL,
+			file_size INTEGER DEFAULT 0,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE,
+			UNIQUE(skill_id, file_path)
+		)`,
+		`CREATE TABLE IF NOT EXISTS skill_combinations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS skill_combination_items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			combination_id INTEGER NOT NULL,
+			skill_id INTEGER NOT NULL,
+			sort_order INTEGER DEFAULT 0,
+			FOREIGN KEY (combination_id) REFERENCES skill_combinations(id) ON DELETE CASCADE,
+			FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE,
+			UNIQUE(combination_id, skill_id)
+		)`,
+
 		// 预聚合表：按 (date, api_key_id, request_model) 维度聚合用量统计
 		`CREATE TABLE IF NOT EXISTS usage_daily (
 			date TEXT NOT NULL,
@@ -168,6 +212,16 @@ func (d *DB) migrate() error {
 	d.Exec(`CREATE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(key)`)
 	// 索引：加速按 API Key 过滤的统计查询
 	d.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_api_key ON usage_records(api_key_id)`)
+	// 迁移：添加 github_token 字段到 proxy_config（用于 MCP GitHub 导入认证）
+	d.Exec(`ALTER TABLE proxy_config ADD COLUMN github_token TEXT DEFAULT ''`)
+	// 索引：Skill 标签查询
+	d.Exec(`CREATE INDEX IF NOT EXISTS idx_skill_tags_skill ON skill_tags(skill_id)`)
+	d.Exec(`CREATE INDEX IF NOT EXISTS idx_skill_tags_tag ON skill_tags(tag)`)
+	// 索引：Skill 文件查询
+	d.Exec(`CREATE INDEX IF NOT EXISTS idx_skill_files_skill ON skill_files(skill_id)`)
+	// 索引：组合关联查询
+	d.Exec(`CREATE INDEX IF NOT EXISTS idx_combo_items_combo ON skill_combination_items(combination_id)`)
+	d.Exec(`CREATE INDEX IF NOT EXISTS idx_combo_items_skill ON skill_combination_items(skill_id)`)
 
 	for _, q := range queries {
 		if _, err := d.Exec(q); err != nil {

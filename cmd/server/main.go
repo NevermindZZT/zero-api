@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/never/zero-api/internal/config"
 	"github.com/never/zero-api/internal/handler"
+	"github.com/never/zero-api/internal/mcp"
 	"github.com/never/zero-api/internal/middleware"
 	"github.com/never/zero-api/internal/proxy"
 	"github.com/never/zero-api/internal/store"
@@ -38,6 +39,7 @@ func main() {
 	// 确保数据目录
 	os.MkdirAll(filepath.Dir(cfg.Database.Path), 0755)
 	os.MkdirAll("certs", 0755)
+	os.MkdirAll(cfg.MCP.SkillsDir, 0755)
 
 	// 初始化数据库
 	db, err := store.Open(cfg.Database.Path)
@@ -66,6 +68,12 @@ func main() {
 	authH := handler.NewAuthHandler(cfg.Auth.Username, cfg.Auth.Password, cfg.Auth.Secret)
 	apiKeyH := handler.NewAPIKeyHandler(svc.APIKey)
 	dbH := handler.NewDatabaseHandler(db, cfg.Database.Path)
+
+	// 初始化技能管理
+	skillFS := store.NewSkillFS(cfg.MCP.SkillsDir)
+	skillH := handler.NewSkillHandler(svc.Skill, svc.SkillCombination, skillFS)
+	skillComboH := handler.NewSkillCombinationHandler(svc.Skill, svc.SkillCombination, skillFS)
+	mcpCfgH := handler.NewMCPConfigHandler(cfg.MCP, svc.ProxyConfig)
 
 	// --- API 路由 ---
 	gin.SetMode(gin.ReleaseMode)
@@ -116,6 +124,34 @@ func main() {
 		// 数据库管理
 		api.GET("/database/backup", dbH.Backup)
 		api.POST("/database/restore", dbH.Restore)
+
+		// MCP 配置
+		api.GET("/mcp/status", mcpCfgH.GetMCPStatus)
+		api.PUT("/mcp/github-token", mcpCfgH.UpdateGitHubToken)
+
+		// 技能管理
+		api.GET("/skills", skillH.ListSkills)
+		api.GET("/skills/tags", skillH.ListSkillTags)
+		api.GET("/skills/:id", skillH.GetSkill)
+		api.GET("/skills/:id/files/*filePath", skillH.GetSkillFile)
+		api.POST("/skills", skillH.CreateSkill)
+		api.PUT("/skills/:id", skillH.UpdateSkill)
+		api.DELETE("/skills/:id", skillH.DeleteSkill)
+		api.POST("/skills/import-github", skillH.ImportFromGitHub)
+		api.POST("/skills/upload", skillH.UploadSkill)
+		api.POST("/skills/upload-folder", skillH.UploadFolder)
+		api.POST("/skills/import-repo", skillH.ImportRepo)
+		api.POST("/skills/sync-repo", skillH.SyncRepo)
+
+		// 技能组合管理
+		api.GET("/skill-combinations", skillComboH.ListCombinations)
+		api.GET("/skill-combinations/:id", skillComboH.GetCombination)
+		api.POST("/skill-combinations", skillComboH.CreateCombination)
+		api.PUT("/skill-combinations/:id", skillComboH.UpdateCombination)
+		api.DELETE("/skill-combinations/:id", skillComboH.DeleteCombination)
+		api.POST("/skill-combinations/:id/skills", skillComboH.AddSkillToCombination)
+		api.DELETE("/skill-combinations/:id/skills/:skillId", skillComboH.RemoveSkillFromCombination)
+		api.GET("/skill-combinations/:id/skills", skillComboH.GetCombinationSkills)
 	}
 
 	// OpenAI 兼容 API
@@ -263,6 +299,31 @@ func main() {
 				log.Fatalf("代理服务启动失败: %v", err)
 			}
 		}()
+	}
+
+	// 启动 MCP 服务（挂载到主 API 端口 /mcp 路径）
+	if cfg.MCP.Enabled {
+		mcpHandler := mcp.NewMCPServer(svc.Skill, svc.SkillCombination, skillFS, cfg.MCP.Token).Build()
+
+		// 如果配置了 token，添加 Bearer 认证中间件
+		if cfg.MCP.Token != "" {
+			log.Printf("[MCP] Token 认证已启用")
+			mcpGroup := r.Group("/mcp")
+			mcpGroup.Use(func(c *gin.Context) {
+				auth := c.GetHeader("Authorization")
+				if auth != "Bearer "+cfg.MCP.Token {
+					c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "未授权：请在 Authorization header 中提供 Bearer token"})
+					return
+				}
+				c.Next()
+			})
+			mcpGroup.Any("", gin.WrapH(mcpHandler))
+			mcpGroup.Any("/*any", gin.WrapH(mcpHandler))
+		} else {
+			r.Any("/mcp", gin.WrapH(mcpHandler))
+			r.Any("/mcp/", gin.WrapH(mcpHandler))
+		}
+		log.Printf("MCP 服务已挂载到 /mcp")
 	}
 
 	// 等待退出信号

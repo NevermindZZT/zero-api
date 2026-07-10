@@ -23,6 +23,11 @@ upstream:
 database:
   path: "data/zero-api.db"
 
+mcp:
+  enabled: true
+  token: ""
+  skills_dir: "data/skills"
+
 auth:
   enabled: true
   username: "admin"

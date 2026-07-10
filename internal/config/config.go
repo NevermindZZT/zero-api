@@ -28,6 +28,7 @@ type Config struct {
 	Upstream      UpstreamConfig         `yaml:"upstream"`
 	Database      DatabaseConfig          `yaml:"database"`
 	Auth          AuthConfig              `yaml:"auth"`
+	MCP           MCPConfig              `yaml:"mcp"`
 	ModelDefaults map[string]ModelDefault `yaml:"model_defaults"`
 	LogLevel      string                  `yaml:"log_level"`
 }
@@ -58,6 +59,12 @@ type ProxyConfig struct {
 
 type UpstreamConfig struct {
 	RequestTimeoutSeconds int `yaml:"request_timeout_seconds"`
+}
+
+type MCPConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	Token     string `yaml:"token"`
+	SkillsDir string `yaml:"skills_dir"`
 }
 
 func (p ProxyConfig) Addr() string {
@@ -139,5 +146,11 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Auth.Secret == "" {
 		c.Auth.Secret = "zero-api-default-secret"
+	}
+	if !c.MCP.Enabled {
+		c.MCP.Enabled = true
+	}
+	if c.MCP.SkillsDir == "" {
+		c.MCP.SkillsDir = "data/skills"
 	}
 }

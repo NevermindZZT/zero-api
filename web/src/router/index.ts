@@ -69,6 +69,24 @@ const router = createRouter({
       component: () => import('@/views/ChatTest.vue'),
       meta: { requiresAuth: true },
     },
+    {
+      path: '/skills',
+      name: 'skills',
+      component: () => import('@/views/Skills.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/skill-combinations',
+      name: 'skill-combinations',
+      component: () => import('@/views/SkillCombinations.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/mcp-settings',
+      name: 'mcp-settings',
+      component: () => import('@/views/MCPSettings.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 

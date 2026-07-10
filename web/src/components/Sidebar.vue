@@ -15,6 +15,9 @@ import {
   ServerSharp,
   SettingsSharp,
   CloseSharp,
+  DocumentTextSharp,
+  LayersSharp,
+  CodeSlashSharp,
 } from '@vicons/ionicons5'
 
 const props = defineProps<{
@@ -50,6 +53,15 @@ const menuOptions = [
   },
   {
     type: 'group' as const,
+    label: '技能管理',
+    key: 'group-skills',
+    children: [
+      { label: '技能管理', key: '/skills', icon: renderIcon(DocumentTextSharp) },
+      { label: '技能组合', key: '/skill-combinations', icon: renderIcon(LayersSharp) },
+    ],
+  },
+  {
+    type: 'group' as const,
     label: '设置',
     key: 'group-settings',
     children: [
@@ -57,11 +69,12 @@ const menuOptions = [
       { label: '出站代理', key: '/forward-proxy', icon: renderIcon(RocketSharp) },
       { label: '数据库管理', key: '/database', icon: renderIcon(ServerSharp) },
       { label: '系统设置', key: '/settings', icon: renderIcon(SettingsSharp) },
+      { label: 'MCP 设置', key: '/mcp-settings', icon: renderIcon(CodeSlashSharp) },
     ],
   },
 ]
 
-const appVersion = 'v1.1.6'
+const appVersion = 'v1.2.0'
 const projectUrl = 'https://github.com/NevermindZZT/zero-api'
 
 const activeKey = ref(route.path)

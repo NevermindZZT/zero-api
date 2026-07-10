@@ -134,3 +134,68 @@ export const proxyApi = {
     responseType: 'blob',
   }),
 }
+
+// ===== Skill API =====
+export interface SkillFileEntry {
+  path: string
+  content?: string
+  size?: number
+}
+
+export interface SkillData {
+  id?: number
+  name: string
+  description?: string
+  type?: string
+  source_url?: string
+  tags?: string[]
+  files?: SkillFileEntry[]
+  enabled?: boolean
+}
+
+export const skillApi = {
+  list: (params?: { q?: string; tag?: string }) => api.get('/skills', { params }),
+  getTags: () => api.get('/skills/tags'),
+  get: (id: number) => api.get(`/skills/${id}`),
+  getFile: (id: number, path: string) => api.get(`/skills/${id}/files/${encodeURIComponent(path)}`),
+  create: (data: SkillData) => api.post('/skills', data),
+  update: (id: number, data: SkillData) => api.put(`/skills/${id}`, data),
+  delete: (id: number) => api.delete(`/skills/${id}`),
+  importFromGitHub: (url: string, githubToken?: string) => api.post('/skills/import-github', {
+    source_url: url,
+    ...(githubToken ? { github_token: githubToken } : {}),
+  }),
+  upload: (formData: FormData) => api.post('/skills/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+  uploadFolder: (formData: FormData) => api.post('/skills/upload-folder', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
+  importRepo: (repoUrl: string, path?: string, githubToken?: string) => api.post('/skills/import-repo', {
+    repo_url: repoUrl,
+    ...(path ? { path } : {}),
+    ...(githubToken ? { github_token: githubToken } : {}),
+  }),
+  syncRepo: (repoUrl: string, path?: string, githubToken?: string) => api.post('/skills/sync-repo', {
+    repo_url: repoUrl,
+    ...(path ? { path } : {}),
+    ...(githubToken ? { github_token: githubToken } : {}),
+  }),
+}
+
+export const skillCombinationApi = {
+  list: () => api.get('/skill-combinations'),
+  get: (id: number) => api.get(`/skill-combinations/${id}`),
+  create: (data: { name: string; description?: string }) => api.post('/skill-combinations', data),
+  update: (id: number, data: { name?: string; description?: string }) => api.put(`/skill-combinations/${id}`, data),
+  delete: (id: number) => api.delete(`/skill-combinations/${id}`),
+  addSkill: (id: number, skillId: number) => api.post(`/skill-combinations/${id}/skills`, { skill_id: skillId }),
+  removeSkill: (id: number, skillId: number) => api.delete(`/skill-combinations/${id}/skills/${skillId}`),
+  getSkills: (id: number) => api.get(`/skill-combinations/${id}/skills`),
+}
+
+// ===== MCP Config API =====
+export const mcpApi = {
+  status: () => api.get('/mcp/status'),
+  updateGitHubToken: (token: string) => api.put('/mcp/github-token', { github_token: token }),
+}
