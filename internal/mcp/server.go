@@ -43,7 +43,8 @@ func (s *MCPServer) Build() http.Handler {
 	s.registerTools(mcpServer)
 
 	s.httpServer = server.NewStreamableHTTPServer(mcpServer,
-		server.WithEndpointPath("/mcp"),
+		server.WithEndpointPath(""),
+		server.WithStateLess(true),
 		server.WithHeartbeatInterval(30*time.Second),
 		server.WithSessionIdleTTL(5*time.Minute),
 		server.WithStreamableHTTPCORS(

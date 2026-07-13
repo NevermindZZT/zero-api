@@ -84,6 +84,34 @@ const configWithToken = computed(() => `{
   }
 }`)
 
+const configCopilotNoToken = computed(() => `{
+  "github.copilot.mcp": {
+    "inputs": [],
+    "servers": {
+      "zero-api-skills": {
+        "type": "http",
+        "url": "${mcpUrl.value}",
+        "headers": {}
+      }
+    }
+  }
+}`)
+
+const configCopilotWithToken = computed(() => `{
+  "github.copilot.mcp": {
+    "inputs": [],
+    "servers": {
+      "zero-api-skills": {
+        "type": "http",
+        "url": "${mcpUrl.value}",
+        "headers": {
+          "Authorization": "Bearer ${mcpToken.value || 'your-token-here'}"
+        }
+      }
+    }
+  }
+}`)
+
 const curlNoToken = computed(() => `curl -X POST ${mcpUrl.value} \\
   -H "Content-Type: application/json" \\
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`)
@@ -151,6 +179,9 @@ const curlWithToken = computed(() => `curl -X POST ${mcpUrl.value} \\
 
         <h4 style="margin-bottom:8px;">Claude Desktop / Cursor 配置</h4>
         <pre style="background:#1a1a2e;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto;white-space:pre-wrap;">{{ hasToken ? configWithToken : configNoToken }}</pre>
+
+        <h4 style="margin:16px 0 8px;">GitHub Copilot (VS Code 设置)</h4>
+        <pre style="background:#1a1a2e;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto;white-space:pre-wrap;">{{ hasToken ? configCopilotWithToken : configCopilotNoToken }}</pre>
 
         <h4 style="margin:16px 0 8px;">curl 测试命令</h4>
         <pre style="background:#1a1a2e;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto;white-space:pre-wrap;">{{ hasToken ? curlWithToken : curlNoToken }}</pre>
