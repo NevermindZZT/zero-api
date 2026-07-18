@@ -386,7 +386,7 @@ function formatTokens(n: number) {
             v-if="yearHeatmap.length > 0"
             :values="heatmapValues"
             :end-date="heatmapEndDate"
-            :range-color="['#161b22', '#161b22', '#0e4429', '#006d32', '#26a641', '#39d353']"
+            :range-color="['#00000000', '#161b22', '#0e4429', '#006d32', '#26a641', '#39d353']"
             :max="heatmapMax"
             tooltip-unit="tokens"
             :tooltip-formatter="(v: any) => v.date + ': ' + formatTokens(v.count) + ' tokens'"
