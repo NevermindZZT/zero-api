@@ -142,6 +142,7 @@ func main() {
 		api.POST("/skills/upload-folder", skillH.UploadFolder)
 		api.POST("/skills/import-repo", skillH.ImportRepo)
 		api.POST("/skills/sync-repo", skillH.SyncRepo)
+		api.GET("/skills/check-updates", skillH.CheckSkillUpdates)
 
 		// 技能组合管理
 		api.GET("/skill-combinations", skillComboH.ListCombinations)

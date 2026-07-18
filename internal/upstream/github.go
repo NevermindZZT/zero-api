@@ -298,6 +298,57 @@ func (c *GitHubClient) BuildRepoURL(owner, repo string) string {
 	return fmt.Sprintf("https://github.com/%s/%s", owner, repo)
 }
 
+// GetLatestCommitSHA 获取指定分支最新 commit 的 SHA（1 次 API 调用）
+// 用于轻量检查是否有更新，不下任何文件内容
+func (c *GitHubClient) GetLatestCommitSHA(owner, repo, branch string) (string, error) {
+	candidates := []string{branch}
+	if branch != "main" {
+		candidates = append(candidates, "main")
+		_ = "master" // 不支持 master，只尝试 main
+	}
+
+	var lastErr error
+	for _, b := range candidates {
+		url := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits?sha=%s&per_page=1", owner, repo, b)
+		req, err := c.newGitHubRequest("GET", url, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode == 404 {
+			lastErr = fmt.Errorf("分支 %s 不存在", b)
+			continue
+		}
+		if resp.StatusCode != 200 {
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			continue
+		}
+
+		body, _ := io.ReadAll(resp.Body)
+		var commits []struct {
+			SHA string `json:"sha"`
+		}
+		if err := json.Unmarshal(body, &commits); err != nil {
+			lastErr = fmt.Errorf("解析 commits 响应失败: %w", err)
+			continue
+		}
+		if len(commits) == 0 {
+			lastErr = fmt.Errorf("分支 %s 没有 commit", b)
+			continue
+		}
+		return commits[0].SHA, nil
+	}
+	return "", fmt.Errorf("获取最新 commit SHA 失败: %v", lastErr)
+}
+
 // ====== Git Trees API: 全量文件树发现（1 次 API 调用替代 N 次） ======
 
 // gitTreeEntry GitHub Git Trees API 的单个条目
@@ -382,7 +433,7 @@ func (c *GitHubClient) getLatestTreeSHA(owner, repo, branch string) (string, err
 		return "", fmt.Errorf("分支 %s 不存在", branch)
 	}
 	if resp.StatusCode == 409 {
-		return "", fmt.Errorf("仓库为空", branch)
+		return "", fmt.Errorf("仓库为空")
 	}
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))

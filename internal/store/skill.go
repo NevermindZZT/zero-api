@@ -19,6 +19,7 @@ type Skill struct {
 	BasePath    string    `json:"base_path"` // 相对路径: "{id}-{name}/"
 	Enabled     bool      `json:"enabled"`
 	Tags        []string  `json:"tags,omitempty"`
+	CommitSHA   string    `json:"commit_sha,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -108,7 +109,7 @@ func (r *SkillRepo) List(q, tag string) ([]Skill, error) {
 		skillCacheMu.RUnlock()
 	}
 
-	query := `SELECT s.id, s.name, s.description, s.type, s.source_url, s.base_path, s.enabled, s.created_at, s.updated_at
+	query := `SELECT s.id, s.name, s.description, s.type, s.source_url, s.base_path, s.enabled, s.commit_sha, s.created_at, s.updated_at
 		FROM skills s WHERE 1=1`
 	args := []interface{}{}
 
@@ -132,7 +133,7 @@ func (r *SkillRepo) List(q, tag string) ([]Skill, error) {
 	var skills []Skill
 	for rows.Next() {
 		var s Skill
-		if err := rows.Scan(&s.ID, &s.Name, &s.Description, &s.Type, &s.SourceURL, &s.BasePath, &s.Enabled, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.Name, &s.Description, &s.Type, &s.SourceURL, &s.BasePath, &s.Enabled, &s.CommitSHA, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, err
 		}
 		// 加载标签
@@ -163,8 +164,8 @@ func (r *SkillRepo) GetByID(id int64) (*Skill, error) {
 
 	s := &Skill{}
 	err := r.db.QueryRow(
-		`SELECT id, name, description, type, source_url, base_path, enabled, created_at, updated_at FROM skills WHERE id = ?`, id,
-	).Scan(&s.ID, &s.Name, &s.Description, &s.Type, &s.SourceURL, &s.BasePath, &s.Enabled, &s.CreatedAt, &s.UpdatedAt)
+		`SELECT id, name, description, type, source_url, base_path, enabled, commit_sha, created_at, updated_at FROM skills WHERE id = ?`, id,
+	).Scan(&s.ID, &s.Name, &s.Description, &s.Type, &s.SourceURL, &s.BasePath, &s.Enabled, &s.CommitSHA, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -185,8 +186,8 @@ func (r *SkillRepo) GetByID(id int64) (*Skill, error) {
 // Create 创建技能
 func (r *SkillRepo) Create(s *Skill) (int64, error) {
 	result, err := r.db.Exec(
-		`INSERT INTO skills (name, description, type, source_url, base_path, enabled) VALUES (?, ?, ?, ?, ?, ?)`,
-		s.Name, s.Description, s.Type, s.SourceURL, s.BasePath, s.Enabled,
+		`INSERT INTO skills (name, description, type, source_url, base_path, enabled, commit_sha) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		s.Name, s.Description, s.Type, s.SourceURL, s.BasePath, s.Enabled, s.CommitSHA,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("创建技能失败: %w", err)
@@ -208,8 +209,8 @@ func (r *SkillRepo) Create(s *Skill) (int64, error) {
 // Update 更新技能元数据
 func (r *SkillRepo) Update(s *Skill) error {
 	_, err := r.db.Exec(
-		`UPDATE skills SET name=?, description=?, type=?, source_url=?, base_path=?, enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
-		s.Name, s.Description, s.Type, s.SourceURL, s.BasePath, s.Enabled, s.ID,
+		`UPDATE skills SET name=?, description=?, type=?, source_url=?, base_path=?, enabled=?, commit_sha=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		s.Name, s.Description, s.Type, s.SourceURL, s.BasePath, s.Enabled, s.CommitSHA, s.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("更新技能失败: %w", err)
@@ -451,7 +452,7 @@ func (r *SkillCombinationRepo) RemoveSkill(combinationID, skillID int64) error {
 // GetSkills 返回组合下所有技能（不含文件内容）
 func (r *SkillCombinationRepo) GetSkills(combinationID int64) ([]Skill, error) {
 	rows, err := r.db.Query(`
-		SELECT s.id, s.name, s.description, s.type, s.source_url, s.base_path, s.enabled, s.created_at, s.updated_at
+		SELECT s.id, s.name, s.description, s.type, s.source_url, s.base_path, s.enabled, s.commit_sha, s.created_at, s.updated_at
 		FROM skills s
 		JOIN skill_combination_items sci ON sci.skill_id = s.id
 		WHERE sci.combination_id = ?
@@ -464,7 +465,7 @@ func (r *SkillCombinationRepo) GetSkills(combinationID int64) ([]Skill, error) {
 	var skills []Skill
 	for rows.Next() {
 		var s Skill
-		if err := rows.Scan(&s.ID, &s.Name, &s.Description, &s.Type, &s.SourceURL, &s.BasePath, &s.Enabled, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.Name, &s.Description, &s.Type, &s.SourceURL, &s.BasePath, &s.Enabled, &s.CommitSHA, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, err
 		}
 		s.Tags = r.loadTagsForSkill(s.ID)

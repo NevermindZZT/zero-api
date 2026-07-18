@@ -4,7 +4,7 @@ import {
   NDataTable, NButton, NModal, NForm, NFormItem, NInput, NSelect,
   NTag, NSpace, NIcon, NTree, NDrawer, NDrawerContent, NAlert, NDivider, useMessage, useDialog,
 } from 'naive-ui'
-import { CloudDownloadSharp, CloudUploadSharp, DocumentTextSharp } from '@vicons/ionicons5'
+import { CloudDownloadSharp, CloudUploadSharp, DocumentTextSharp, RefreshSharp } from '@vicons/ionicons5'
 import { skillApi } from '@/api'
 import { formatDateTime } from '@/utils/format'
 
@@ -40,6 +40,11 @@ const repoImportLoading = ref(false)
 
 // 上传
 const uploadLoading = ref(false)
+
+// 更新检查
+const updateMap = ref<Record<number, { hasUpdate: boolean; repoUrl: string }>>({})
+const checkingUpdates = ref(false)
+const syncingSkills = ref<Set<number>>(new Set())
 
 onMounted(() => {
   loadSkills()
@@ -207,6 +212,51 @@ async function previewFileContent(row: any, filePath: string) {
   }
 }
 
+async function handleCheckUpdates() {
+  checkingUpdates.value = true
+  try {
+    const res = await skillApi.checkUpdates()
+    const repos = res.data?.repos || []
+    const newMap: Record<number, { hasUpdate: boolean; repoUrl: string }> = {}
+    for (const repo of repos) {
+      for (const sk of repo.skills) {
+        newMap[sk.id] = { hasUpdate: sk.has_update, repoUrl: repo.repo_url }
+      }
+    }
+    updateMap.value = newMap
+    const updatable = Object.values(newMap).filter(v => v.hasUpdate).length
+    if (updatable > 0) {
+      message.success(`检查完成，${updatable} 个技能有可用更新`)
+    } else {
+      message.info('所有技能已是最新')
+    }
+  } catch (e: any) {
+    message.error('检查更新失败: ' + (e.response?.data?.error || e.message))
+  } finally {
+    checkingUpdates.value = false
+  }
+}
+
+async function handleSyncGithubSkill(row: any) {
+  syncingSkills.value = new Set([...syncingSkills.value, row.id])
+  try {
+    const repoTag = (row.tags || []).find((t: string) => t.startsWith('repo:'))
+    const repoUrl = repoTag ? `https://github.com/${repoTag.slice(5)}` : row.source_url
+    if (!repoUrl) { message.error('无法确定仓库地址'); return }
+    await skillApi.syncRepo(repoUrl)
+    message.success(`技能「${row.name}」同步完成`)
+    // 刷新列表和更新状态
+    await loadSkills()
+    updateMap.value = { ...updateMap.value, [row.id]: { hasUpdate: false, repoUrl } }
+  } catch (e: any) {
+    message.error('同步失败: ' + (e.response?.data?.error || e.message))
+  } finally {
+    const next = new Set(syncingSkills.value)
+    next.delete(row.id)
+    syncingSkills.value = next
+  }
+}
+
 function getFileTree(files: any[]) {
   if (!files) return []
   const sorted = [...files].sort((a, b) => {
@@ -238,8 +288,21 @@ const columns = [
   { title: '名称', key: 'name', width: 160 },
   { title: '描述', key: 'description', ellipsis: true },
   {
-    title: '来源', key: 'type', width: 70,
-    render: (row: any) => h(NTag, { size: 'small', type: row.type === 'github' ? 'info' : 'default' }, { default: () => row.type === 'github' ? 'GitHub' : '本地' }),
+    title: '来源', key: 'type', width: 100,
+    render: (row: any) => {
+      if (row.type !== 'github') return h(NTag, { size: 'small', type: 'default' }, { default: () => '本地' })
+      const status = updateMap.value[row.id]
+      const isUpdating = syncingSkills.value.has(row.id)
+      if (isUpdating) return h(NSpace, { align: 'center', size: 'small' }, { default: () => [
+        h(NTag, { size: 'small', type: 'info' }, { default: () => 'GitHub' }),
+        h('span', { style: 'color:#888;font-size:12px;' }, '同步中...'),
+      ]})
+      if (status?.hasUpdate) return h(NSpace, { align: 'center', size: 'small' }, { default: () => [
+        h(NTag, { size: 'small', type: 'info' }, { default: () => 'GitHub' }),
+        h('span', { style: 'color:#e6a23c;font-size:14px;' }, '●'),
+      ]})
+      return h(NTag, { size: 'small', type: 'info' }, { default: () => 'GitHub' })
+    },
   },
   {
     title: '标签', key: 'tags', minWidth: 140,
@@ -249,12 +312,23 @@ const columns = [
   { title: '文件数', key: 'files', width: 70, render: (row: any) => row.files?.length || 0 },
   { title: '创建时间', key: 'created_at', width: 150, render: (r: any) => formatDateTime(r.created_at) },
   {
-    title: '操作', key: 'actions', width: 130,
-    render: (row: any) => h(NSpace, {}, {
-      default: () => [
-        h(NButton, { size: 'tiny', quaternary: true, onClick: () => openEdit(row) }, { default: () => '编辑' }),
-        h(NButton, { size: 'tiny', type: 'error', quaternary: true, onClick: () => confirmDelete(row) }, { default: () => '删除' }),
-      ],
+    title: '操作', key: 'actions', width: 200,
+    render: (row: any) => h(NSpace, { size: 'small' }, {
+      default: () => {
+        const btns = [
+          h(NButton, { size: 'tiny', quaternary: true, onClick: () => openEdit(row) }, { default: () => '编辑' }),
+          h(NButton, { size: 'tiny', type: 'error', quaternary: true, onClick: () => confirmDelete(row) }, { default: () => '删除' }),
+        ]
+        if (row.type === 'github') {
+          const hasUpdate = updateMap.value[row.id]?.hasUpdate
+          btns.push(h(NButton, {
+            size: 'tiny', type: hasUpdate ? 'warning' : 'default', quaternary: true,
+            loading: syncingSkills.value.has(row.id),
+            onClick: () => handleSyncGithubSkill(row),
+          }, { default: () => hasUpdate ? '同步' : '已最新' }))
+        }
+        return btns
+      },
     }),
   },
 ]
@@ -301,6 +375,10 @@ function expandRow(row: any) {
       <NInput v-model:value="searchQuery" placeholder="搜索技能名称/描述" clearable style="max-width:300px;" @keyup.enter="loadSkills" />
       <NSelect v-model:value="selectedTag" :options="allTags.map(t => ({ label: t, value: t }))" placeholder="按标签筛选" clearable style="max-width:200px;" @update:value="loadSkills" />
       <NButton @click="loadSkills">搜索</NButton>
+      <NButton @click="handleCheckUpdates" :loading="checkingUpdates" :disabled="checkingUpdates" style="margin-left:auto;">
+        <template #icon><NIcon><RefreshSharp /></NIcon></template>
+        检查更新
+      </NButton>
     </div>
 
     <NCard style="width:100%">

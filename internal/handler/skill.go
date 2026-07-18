@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -408,6 +409,14 @@ func (h *SkillHandler) ImportFromGitHub(c *gin.Context) {
 	}
 
 	// 准备技能元数据
+	// 尝试获取最新 commit SHA 用于版本追踪
+	commitSHA := ""
+	if repoInfo, err := client.ParseGitHubURL(req.SourceURL); err == nil {
+		if sha, err := client.GetLatestCommitSHA(repoInfo.Owner, repoInfo.Repo, repoInfo.Branch); err == nil {
+			commitSHA = sha
+		}
+	}
+
 	skill := &store.Skill{
 		Name:        skillName,
 		Description: skillDesc,
@@ -415,6 +424,7 @@ func (h *SkillHandler) ImportFromGitHub(c *gin.Context) {
 		SourceURL:   req.SourceURL,
 		Tags:        []string{},
 		Enabled:     true,
+		CommitSHA:   commitSHA,
 	}
 
 	var id int64
@@ -854,6 +864,9 @@ func (h *SkillHandler) ImportRepo(c *gin.Context) {
 		}
 	}
 
+	// 获取最新 commit SHA 用于版本追踪
+	commitSHA, _ := client.GetLatestCommitSHA(info.Owner, info.Repo, branch)
+
 	type importResult struct {
 		SkillID int64  `json:"skill_id"`
 		Name    string `json:"name"`
@@ -873,6 +886,7 @@ func (h *SkillHandler) ImportRepo(c *gin.Context) {
 			SourceURL:   sk.SkillURL,
 			Tags:        []string{repoTag},
 			Enabled:     true,
+			CommitSHA:   commitSHA,
 		}
 
 		var id int64
@@ -1023,9 +1037,111 @@ func (h *SkillHandler) SyncRepo(c *gin.Context) {
 
 	log.Printf("[Skill] 仓库同步完成: %s, %d/%d 个技能已更新", client.BuildRepoURL(info.Owner, info.Repo), updated, len(existingSkills))
 
+	// 同步后更新所有技能的 commit_sha
+	if commitSHA, err := client.GetLatestCommitSHA(info.Owner, info.Repo, branch); err == nil {
+		for _, existing := range existingSkills {
+			existing.CommitSHA = commitSHA
+			h.skillRepo.Update(&existing)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"message":    fmt.Sprintf("同步完成，%d/%d 个技能已更新", updated, len(existingSkills)),
 		"updated":    updated,
 		"total":      len(existingSkills),
 	})
+}
+
+// checkUpdateRepo 单个仓库的更新检查结果
+type checkUpdateRepo struct {
+	RepoURL   string              `json:"repo_url"`
+	Owner     string              `json:"owner"`
+	Repo      string              `json:"repo"`
+	HasUpdate bool                `json:"has_update"`
+	Branch    string              `json:"branch"`
+	Skills    []checkUpdateSkill  `json:"skills"`
+}
+
+type checkUpdateSkill struct {
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	CommitSHA  string `json:"commit_sha"`
+	HasUpdate  bool   `json:"has_update"`
+}
+
+// CheckSkillUpdates 检查所有 GitHub 技能的更新状态
+// GET /api/skills/check-updates
+func (h *SkillHandler) CheckSkillUpdates(c *gin.Context) {
+	all, err := h.skillRepo.List("", "")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 收集所有 type=github 的技能，按 owner/repo 分组
+	type repoKey struct {
+		Owner  string
+		Repo   string
+		Branch string
+	}
+	type repoGroup struct {
+		Key    repoKey
+		Skills []store.Skill
+	}
+	groups := make(map[repoKey]*repoGroup)
+
+	for _, s := range all {
+		if s.Type != "github" || s.SourceURL == "" {
+			continue
+		}
+		info, err := h.ghClient.ParseGitHubURL(s.SourceURL)
+		if err != nil {
+			continue
+		}
+		key := repoKey{Owner: info.Owner, Repo: info.Repo, Branch: info.Branch}
+		if _, ok := groups[key]; !ok {
+			groups[key] = &repoGroup{Key: key}
+		}
+		groups[key].Skills = append(groups[key].Skills, s)
+	}
+
+	var repos []checkUpdateRepo
+	for _, group := range groups {
+		latestSHA, err := h.ghClient.GetLatestCommitSHA(group.Key.Owner, group.Key.Repo, group.Key.Branch)
+		hasError := err != nil
+
+		repoHasUpdate := false
+		repoURL := h.ghClient.BuildRepoURL(group.Key.Owner, group.Key.Repo)
+
+		var skills []checkUpdateSkill
+		for _, s := range group.Skills {
+			skillHasUpdate := false
+			if !hasError && s.CommitSHA != "" && latestSHA != "" && s.CommitSHA != latestSHA {
+				skillHasUpdate = true
+				repoHasUpdate = true
+			}
+			skills = append(skills, checkUpdateSkill{
+				ID:        s.ID,
+				Name:      s.Name,
+				CommitSHA: s.CommitSHA,
+				HasUpdate: skillHasUpdate,
+			})
+		}
+		_ = hasError // 忽略 API 错误，只把技能标记为无更新
+
+		repos = append(repos, checkUpdateRepo{
+			RepoURL:   repoURL,
+			Owner:     group.Key.Owner,
+			Repo:      group.Key.Repo,
+			HasUpdate: repoHasUpdate,
+			Branch:    group.Key.Branch,
+			Skills:    skills,
+		})
+	}
+
+	sort.Slice(repos, func(i, j int) bool {
+		return repos[i].RepoURL < repos[j].RepoURL
+	})
+
+	c.JSON(http.StatusOK, gin.H{"repos": repos})
 }

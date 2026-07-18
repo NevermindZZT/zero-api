@@ -181,6 +181,7 @@ export const skillApi = {
     ...(path ? { path } : {}),
     ...(githubToken ? { github_token: githubToken } : {}),
   }),
+  checkUpdates: () => api.get('/skills/check-updates'),
 }
 
 export const skillCombinationApi = {
