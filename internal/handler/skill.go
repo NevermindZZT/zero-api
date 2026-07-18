@@ -346,15 +346,18 @@ func (h *SkillHandler) ImportFromGitHub(c *gin.Context) {
 		return
 	}
 
-	// 检查是否已存在同名同源技能
-	existing, _ := h.skillRepo.List("", "")
-
-	// 如果已存在，先删除旧数据
-	for _, s := range existing {
-		if s.SourceURL == req.SourceURL {
-			h.skillFS.DeleteSkillDir(s.ID, s.Name)
-			h.skillRepo.Delete(s.ID)
-			break
+	// 检查是否已存在同名同源技能，存在则复用 ID（保留组合引用）
+	var existingID int64
+	var existingName string
+	var isUpdate bool
+	if all, _ := h.skillRepo.List("", ""); all != nil {
+		for _, s := range all {
+			if s.SourceURL == req.SourceURL {
+				existingID = s.ID
+				existingName = s.Name
+				isUpdate = true
+				break
+			}
 		}
 	}
 
@@ -404,7 +407,7 @@ func (h *SkillHandler) ImportFromGitHub(c *gin.Context) {
 		log.Printf("[Skill] 警告: 导入的仓库中没有 SKILL.md 文件，将使用目录名作为技能名称")
 	}
 
-	// 创建 Skill
+	// 准备技能元数据
 	skill := &store.Skill{
 		Name:        skillName,
 		Description: skillDesc,
@@ -414,16 +417,28 @@ func (h *SkillHandler) ImportFromGitHub(c *gin.Context) {
 		Enabled:     true,
 	}
 
-	id, err := h.skillRepo.Create(skill)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建技能记录失败: " + err.Error()})
-		return
+	var id int64
+	if isUpdate {
+		id = existingID
+		skill.ID = id
+		// 清除旧磁盘文件和文件索引
+		h.skillFS.DeleteSkillDir(id, existingName)
+		h.skillRepo.DeleteAllFileIndexes(id)
+	} else {
+		newID, err := h.skillRepo.Create(skill)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建技能记录失败: " + err.Error()})
+			return
+		}
+		id = newID
 	}
 
 	// 创建目录并写入文件
 	basePath, err := h.skillFS.EnsureDir(id, skillName)
 	if err != nil {
-		h.skillRepo.Delete(id)
+		if !isUpdate {
+			h.skillRepo.Delete(id)
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建技能目录失败: " + err.Error()})
 		return
 	}
@@ -508,18 +523,23 @@ func (h *SkillHandler) UploadSkill(c *gin.Context) {
 		}
 	}
 
-	// 同名覆盖：如果已存在同名技能，先删除
-	if existing, _ := h.skillRepo.List("", ""); existing != nil {
-		for _, s := range existing {
+	// 查找同名已有技能，存在则复用 ID（保留组合引用）
+	var existingID int64
+	var isUpdate bool
+	if all, _ := h.skillRepo.List("", ""); all != nil {
+		for _, s := range all {
 			if s.Name == skillName {
+				existingID = s.ID
+				isUpdate = true
+				// 清除旧磁盘文件和文件索引（保留 DB 记录）
 				h.skillFS.DeleteSkillDir(s.ID, s.Name)
-				h.skillRepo.Delete(s.ID)
+				h.skillRepo.DeleteAllFileIndexes(s.ID)
 				break
 			}
 		}
 	}
 
-	// 创建技能 DB 记录
+	// 准备技能元数据
 	skill := &store.Skill{
 		Name:        skillName,
 		Description: skillDesc,
@@ -528,21 +548,30 @@ func (h *SkillHandler) UploadSkill(c *gin.Context) {
 		Enabled:     true,
 	}
 
-	id, err := h.skillRepo.Create(skill)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建技能记录失败: " + err.Error()})
-		return
+	var id int64
+	if isUpdate {
+		id = existingID
+		skill.ID = id
+	} else {
+		newID, err := h.skillRepo.Create(skill)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建技能记录失败: " + err.Error()})
+			return
+		}
+		id = newID
 	}
 
 	// 用 ExtractZip 解压到磁盘
 	entries, err := h.skillFS.ExtractZip(id, skillName, zipData)
 	if err != nil {
-		h.skillRepo.Delete(id)
+		if !isUpdate {
+			h.skillRepo.Delete(id)
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "解压文件失败: " + err.Error()})
 		return
 	}
 
-	// 更新 base_path
+	// 更新 base_path 和元数据
 	basePath, _ := h.skillFS.EnsureDir(id, skillName)
 	skill.ID = id
 	skill.BasePath = basePath
@@ -634,18 +663,23 @@ func (h *SkillHandler) UploadFolder(c *gin.Context) {
 
 	log.Printf("[Skill] 收到文件夹上传: %d 个文件, 名称=%s", len(files), skillName)
 
-	// 同名覆盖：如果已存在同名技能，先删除
-	if existing, _ := h.skillRepo.List("", ""); existing != nil {
-		for _, s := range existing {
+	// 查找同名已有技能，存在则复用 ID（保留组合引用）
+	var existingID int64
+	var isUpdate bool
+	if all, _ := h.skillRepo.List("", ""); all != nil {
+		for _, s := range all {
 			if s.Name == skillName {
+				existingID = s.ID
+				isUpdate = true
+				// 清除旧磁盘文件和文件索引（保留 DB 记录）
 				h.skillFS.DeleteSkillDir(s.ID, s.Name)
-				h.skillRepo.Delete(s.ID)
+				h.skillRepo.DeleteAllFileIndexes(s.ID)
 				break
 			}
 		}
 	}
 
-	// 创建技能 DB 记录
+	// 准备技能元数据
 	skill := &store.Skill{
 		Name:        skillName,
 		Description: skillDesc,
@@ -654,16 +688,25 @@ func (h *SkillHandler) UploadFolder(c *gin.Context) {
 		Enabled:     true,
 	}
 
-	id, err := h.skillRepo.Create(skill)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建技能记录失败: " + err.Error()})
-		return
+	var id int64
+	if isUpdate {
+		id = existingID
+		skill.ID = id
+	} else {
+		newID, err := h.skillRepo.Create(skill)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建技能记录失败: " + err.Error()})
+			return
+		}
+		id = newID
 	}
 
 	// 确保目录存在
 	basePath, err := h.skillFS.EnsureDir(id, skillName)
 	if err != nil {
-		h.skillRepo.Delete(id)
+		if !isUpdate {
+			h.skillRepo.Delete(id)
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建技能目录失败: " + err.Error()})
 		return
 	}
@@ -779,27 +822,30 @@ func (h *SkillHandler) ImportRepo(c *gin.Context) {
 	repoTag := "repo:" + info.Owner + "/" + info.Repo
 	repoURL := client.BuildRepoURL(info.Owner, info.Repo)
 
-	// 先检查是否有同源的已有技能，如果有，先删除重建
-	existingSkills, _ := h.skillRepo.List("", repoTag)
-	for _, s := range existingSkills {
-		h.skillFS.DeleteSkillDir(s.ID, s.Name)
-		h.skillRepo.Delete(s.ID)
-	}
-
-	// 检查是否已存在同名的组合
-	existingCombos, _ := h.skillCombinationRepo.List()
-	comboID := int64(0)
-	comboName := info.Repo
-	for _, c := range existingCombos {
-		if c.Name == comboName {
-			comboID = c.ID
-			h.skillCombinationRepo.Delete(comboID)
-			break
+	// 收集已有同源技能（按 source_url 索引），复用 ID 以保留组合引用
+	existingBySource := make(map[string]store.Skill)
+	if existingSkills, _ := h.skillRepo.List("", repoTag); existingSkills != nil {
+		for _, s := range existingSkills {
+			if s.SourceURL != "" {
+				existingBySource[s.SourceURL] = s
+			}
 		}
 	}
 
-	// 单个技能不创建组合
-	if len(discovered) > 1 {
+	// 检查是否已存在同名组合，有则复用 comboID
+	comboID := int64(0)
+	comboName := info.Repo
+	if existingCombos, _ := h.skillCombinationRepo.List(); existingCombos != nil {
+		for _, c := range existingCombos {
+			if c.Name == comboName {
+				comboID = c.ID
+				break
+			}
+		}
+	}
+
+	// 多技能时若还没有组合则创建
+	if len(discovered) > 1 && comboID == 0 {
 		comboDesc := fmt.Sprintf("从 %s 导入的技能组合", repoURL)
 		comboID, err = h.skillCombinationRepo.Create(comboName, comboDesc)
 		if err != nil {
@@ -812,11 +858,14 @@ func (h *SkillHandler) ImportRepo(c *gin.Context) {
 		SkillID int64  `json:"skill_id"`
 		Name    string `json:"name"`
 		Files   int    `json:"files"`
+		Updated bool   `json:"updated"`
 	}
 
 	var results []importResult
 
 	for _, sk := range discovered {
+		existing, hasExisting := existingBySource[sk.SkillURL]
+
 		skill := &store.Skill{
 			Name:        sk.Name,
 			Description: sk.Description,
@@ -826,15 +875,30 @@ func (h *SkillHandler) ImportRepo(c *gin.Context) {
 			Enabled:     true,
 		}
 
-		id, err := h.skillRepo.Create(skill)
-		if err != nil {
-			log.Printf("[Skill] 创建技能记录失败 %s: %v", sk.Name, err)
-			continue
+		var id int64
+		var isUpdate bool
+
+		if hasExisting {
+			id = existing.ID
+			isUpdate = true
+			skill.ID = id
+			// 清除旧磁盘文件和文件索引
+			h.skillFS.DeleteSkillDir(id, existing.Name)
+			h.skillRepo.DeleteAllFileIndexes(id)
+		} else {
+			newID, err := h.skillRepo.Create(skill)
+			if err != nil {
+				log.Printf("[Skill] 创建技能记录失败 %s: %v", sk.Name, err)
+				continue
+			}
+			id = newID
 		}
 
 		basePath, err := h.skillFS.EnsureDir(id, sk.Name)
 		if err != nil {
-			h.skillRepo.Delete(id)
+			if !isUpdate {
+				h.skillRepo.Delete(id)
+			}
 			continue
 		}
 		skill.ID = id
@@ -859,6 +923,7 @@ func (h *SkillHandler) ImportRepo(c *gin.Context) {
 			SkillID: id,
 			Name:    sk.Name,
 			Files:   fileCount,
+			Updated: isUpdate,
 		})
 	}
 

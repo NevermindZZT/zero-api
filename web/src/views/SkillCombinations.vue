@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, h } from 'vue'
+import { ref, onMounted, onUnmounted, computed, h } from 'vue'
 import {
   NCard, NGrid, NGi, NButton, NModal, NForm, NFormItem, NInput,
   NSelect, NSpace, NTag, NIcon, NDrawer, NDrawerContent, NDataTable, NAlert,
@@ -21,13 +21,25 @@ const showEditModal = ref(false)
 const showDetailDrawer = ref(false)
 const editingCombo = ref<any>(null)
 const detailSkills = ref<any[]>([])
+const comboCols = ref(3)
 
 const formData = ref({ name: '', description: '' })
 const editSkills = ref<number[]>([])
 
+function updateComboCols() {
+  const w = window.innerWidth
+  comboCols.value = w < 480 ? 1 : w < 768 ? 2 : 3
+}
+
 onMounted(() => {
   loadCombinations()
   loadAllSkills()
+  updateComboCols()
+  window.addEventListener('resize', updateComboCols)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateComboCols)
 })
 
 async function loadCombinations() {
@@ -174,7 +186,7 @@ async function confirmAddSkill() {
       </NButton>
     </div>
 
-    <NGrid :x-gap="16" :y-gap="16" :cols="3" responsive="screen">
+    <NGrid :x-gap="16" :y-gap="16" :cols="comboCols">
       <NGi v-for="combo in combinations" :key="combo.id">
         <NCard :title="combo.name" hoverable @click="showDetail(combo)">
           <template #header-extra>
