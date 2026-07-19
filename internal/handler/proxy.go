@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/never/zero-api/internal/pricing"
+
 	"github.com/gin-gonic/gin"
 	"github.com/never/zero-api/internal/adapter"
 	"github.com/never/zero-api/internal/upstream"
@@ -365,10 +367,26 @@ func (h *ProxyHandler) recordUsage(requestModel string, rawResp, convertedResp [
 		completionTokens = usage.CompletionTokens
 		cacheHitTokens = usage.CacheHitTokens
 		totalTokens = usage.TotalTokens
+
+		// 解析定价规则，无规则时使用 flat 定价
+		flat := pricing.PricingSet{
+			Input:      model.PricingInput,
+			Output:     model.PricingOutput,
+			CacheRead:  model.PricingCacheRead,
+			CacheWrite: model.PricingCacheWrite,
+		}
+		_, resolved := pricing.ResolvePricing(
+			model.ParsedPricingRules(),
+			flat,
+			time.Now(),
+			usage.PromptTokens,
+			usage.TotalTokens,
+		)
+
 		cacheMissTokens := usage.PromptTokens - usage.CacheHitTokens
-		cost = (float64(cacheMissTokens)/1000000)*model.PricingInput +
-			(float64(usage.CacheHitTokens)/1000000)*model.PricingCacheRead +
-			(float64(usage.CompletionTokens)/1000000)*model.PricingOutput
+		cost = (float64(cacheMissTokens)/1000000)*resolved.Input +
+			(float64(usage.CacheHitTokens)/1000000)*resolved.CacheRead +
+			(float64(usage.CompletionTokens)/1000000)*resolved.Output
 	}
 
 	if _, err := h.usageRepo.Insert(&store.UsageRecord{

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/never/zero-api/internal/adapter"
+	"github.com/never/zero-api/internal/pricing"
 	"github.com/never/zero-api/internal/store"
 	"github.com/never/zero-api/internal/upstream"
 )
@@ -534,11 +535,26 @@ func (pa *ProxyAdapter) recordUsage(requestModel string, rawResp, convertedResp 
 		cacheHitTokens = usage.CacheHitTokens
 		totalTokens = usage.TotalTokens
 
+		// 解析定价规则，无规则时使用 flat 定价
+		flat := pricing.PricingSet{
+			Input:      model.PricingInput,
+			Output:     model.PricingOutput,
+			CacheRead:  model.PricingCacheRead,
+			CacheWrite: model.PricingCacheWrite,
+		}
+		_, resolved := pricing.ResolvePricing(
+			model.ParsedPricingRules(),
+			flat,
+			time.Now(),
+			usage.PromptTokens,
+			usage.TotalTokens,
+		)
+
 		// 计算费用：prompt_tokens 已包含 cache_hit_tokens，需减去缓存部分再分别计价
 		cacheMissTokens := promptTokens - cacheHitTokens
-		cost = (float64(cacheMissTokens)/1000000)*model.PricingInput +
-			(float64(cacheHitTokens)/1000000)*model.PricingCacheRead +
-			(float64(completionTokens)/1000000)*model.PricingOutput
+		cost = (float64(cacheMissTokens)/1000000)*resolved.Input +
+			(float64(cacheHitTokens)/1000000)*resolved.CacheRead +
+			(float64(completionTokens)/1000000)*resolved.Output
 	}
 
 	if _, err := pa.usageRepo.Insert(&store.UsageRecord{

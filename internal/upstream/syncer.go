@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -134,6 +135,12 @@ func (s *Syncer) SyncModels(channelID int64) (int, error) {
 			m.PricingOutput = conf.PricingOutput
 			m.PricingCacheRead = conf.PricingCacheRead
 			m.PricingCacheWrite = conf.PricingCacheWrite
+			// 同步定价规则（如有）
+			if len(conf.PricingRules) > 0 {
+				if b, err := json.Marshal(conf.PricingRules); err == nil {
+					m.PricingRules = string(b)
+				}
+			}
 		}
 
 		if _, err := s.modelRepo.Upsert(m); err == nil {

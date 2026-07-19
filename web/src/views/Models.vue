@@ -20,7 +20,76 @@ const form = ref({
   supports_vision: false, supports_thinking: false, supports_tools: false,
   pricing_input: 0, pricing_output: 0,
   pricing_cache_read: 0, pricing_cache_write: 0, status: 'active',
+  pricing_rules: '[]',
 })
+
+// 定价规则管理
+const weekDayOptions = [
+  { label: '周一', value: 'mon' },
+  { label: '周二', value: 'tue' },
+  { label: '周三', value: 'wed' },
+  { label: '周四', value: 'thu' },
+  { label: '周五', value: 'fri' },
+  { label: '周六', value: 'sat' },
+  { label: '周日', value: 'sun' },
+]
+
+function getParsedRules(): any[] {
+  try {
+    return JSON.parse(form.value.pricing_rules || '[]')
+  } catch {
+    return []
+  }
+}
+
+function setParsedRules(rules: any[]) {
+  form.value.pricing_rules = JSON.stringify(rules)
+}
+
+function addRule() {
+  const rules = getParsedRules()
+  const id = 'rule_' + Date.now()
+  rules.push({
+    id,
+    type: 'time_range',
+    enabled: true,
+    name: '',
+    days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+    start_time: '00:00',
+    end_time: '08:00',
+    pricing_input: 0,
+    pricing_output: 0,
+    pricing_cache_read: 0,
+    pricing_cache_write: 0,
+  })
+  setParsedRules(rules)
+}
+
+function removeRule(index: number) {
+  const rules = getParsedRules()
+  rules.splice(index, 1)
+  setParsedRules(rules)
+}
+
+function moveRuleUp(index: number) {
+  if (index <= 0) return
+  const rules = getParsedRules()
+  ;[rules[index - 1], rules[index]] = [rules[index], rules[index - 1]]
+  setParsedRules(rules)
+}
+
+function moveRuleDown(index: number) {
+  const rules = getParsedRules()
+  if (index >= rules.length - 1) return
+  ;[rules[index], rules[index + 1]] = [rules[index + 1], rules[index]]
+  setParsedRules(rules)
+}
+
+function updateRule(index: number, rule: any) {
+  const rules = getParsedRules()
+  rules[index] = rule
+  setParsedRules(rules)
+}
 
 // 批量操作
 const checkedRowKeys = ref<DataTableRowKey[]>([])
@@ -86,11 +155,15 @@ const columns = [
     },
   },
   {
-    title: '价格', key: 'pricing', width: 120,
+    title: '价格', key: 'pricing', width: 140,
     render: (r: any) => {
       const fmt = (v: number) => `$${(v || 0).toFixed(4)}/M`
+      const hasRules = r.pricing_rules && r.pricing_rules !== '[]'
       return h('div', { style: 'line-height:1.7;font-size:12px' }, [
-        h('div', {}, `输入 ${fmt(r.pricing_input)}`),
+        h('div', {}, [
+          `输入 ${fmt(r.pricing_input)}`,
+          hasRules ? h(NTag, { size: 'tiny', type: 'info', bordered: false, style: 'margin-left:6px' }, () => '多段定价') : null,
+        ]),
         h('div', {}, `输出 ${fmt(r.pricing_output)}`),
         h('div', { style: 'color:#888' }, `缓存读 ${fmt(r.pricing_cache_read)}`),
         h('div', { style: 'color:#888' }, `缓存写 ${fmt(r.pricing_cache_write)}`),
@@ -159,6 +232,7 @@ function editModel(m: any) {
     pricing_cache_read: m.pricing_cache_read || 0,
     pricing_cache_write: m.pricing_cache_write || 0,
     status: m.status,
+    pricing_rules: m.pricing_rules || '[]',
   }
   showModal.value = true
 }
@@ -311,6 +385,76 @@ async function batchAction(action: string) {
           </NFormItem>
           <NFormItem label="缓存写入 ($/1M)">
             <NInputNumber v-model:value="form.pricing_cache_write" :precision="4" :step="0.01" style="width:100%" />
+          </NFormItem>
+
+          <NDivider />
+          <NFormItem label="高级定价" style="align-items:flex-start">
+            <div style="width:100%">
+              <div v-if="getParsedRules().length === 0" style="color:#94a3b8;font-size:13px;padding:8px 0">
+                未设置定价规则，将使用固定定价
+              </div>
+              <div v-for="(rule, idx) in getParsedRules()" :key="rule.id" style="background:rgba(30,41,59,0.5);border:1px solid rgba(102,126,234,0.2);border-radius:8px;padding:12px;margin-bottom:8px">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <NSwitch size="small" :value="rule.enabled" @update:value="v => { rule.enabled = v; updateRule(idx, {...rule}) }" />
+                    <NInput size="small" style="width:160px" :value="rule.name" placeholder="规则名称" @update:value="v => { rule.name = v; updateRule(idx, {...rule}) }" />
+                    <NSelect size="small" style="width:120px" :value="rule.type" :options="[{label:'时间段',value:'time_range'},{label:'Token阶梯',value:'token_tier'}]" @update:value="v => { rule.type = v; updateRule(idx, {...rule}) }" />
+                  </div>
+                  <div style="display:flex;gap:4px">
+                    <NButton size="tiny" quaternary circle :disabled="idx === 0" @click="moveRuleUp(idx)" title="上移">▲</NButton>
+                    <NButton size="tiny" quaternary circle :disabled="idx >= getParsedRules().length - 1" @click="moveRuleDown(idx)" title="下移">▼</NButton>
+                    <NButton size="tiny" quaternary circle type="error" @click="removeRule(idx)" title="删除">✕</NButton>
+                  </div>
+                </div>
+
+                <!-- 时间段条件 -->
+                <div v-if="rule.type === 'time_range'" style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <span style="color:#94a3b8;font-size:12px">时间</span>
+                    <NInput size="small" style="width:68px" :value="rule.start_time" placeholder="00:00" @update:value="v => { rule.start_time = v; updateRule(idx, {...rule}) }" />
+                    <span style="color:#94a3b8">—</span>
+                    <NInput size="small" style="width:68px" :value="rule.end_time" placeholder="08:00" @update:value="v => { rule.end_time = v; updateRule(idx, {...rule}) }" />
+                  </div>
+                  <div style="display:flex;align-items:center;gap:4px;flex:1">
+                    <span style="color:#94a3b8;font-size:12px">星期</span>
+                    <NSelect size="small" multiple style="min-width:200px;flex:1" :value="rule.days || []" :options="weekDayOptions" @update:value="v => { rule.days = v; updateRule(idx, {...rule}) }" />
+                  </div>
+                </div>
+
+                <!-- Token 阶梯条件 -->
+                <div v-if="rule.type === 'token_tier'" style="display:flex;gap:12px;margin-bottom:8px">
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <span style="color:#94a3b8;font-size:12px">Prompt ≤</span>
+                    <NInputNumber size="small" style="width:120px" :min="0" :step="1024" placeholder="0=不限" :value="rule.prompt_max_tokens || 0" @update:value="v => { rule.prompt_max_tokens = v; updateRule(idx, {...rule}) }" />
+                  </div>
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <span style="color:#94a3b8;font-size:12px">Context ≤</span>
+                    <NInputNumber size="small" style="width:120px" :min="0" :step="1024" placeholder="0=不限" :value="rule.context_max_tokens || 0" @update:value="v => { rule.context_max_tokens = v; updateRule(idx, {...rule}) }" />
+                  </div>
+                </div>
+
+                <!-- 规则定价 -->
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <span style="color:#94a3b8;font-size:12px">输入</span>
+                    <NInputNumber size="small" style="width:90px" :precision="4" :step="0.01" :value="rule.pricing_input" @update:value="v => { rule.pricing_input = v; updateRule(idx, {...rule}) }" />
+                  </div>
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <span style="color:#94a3b8;font-size:12px">输出</span>
+                    <NInputNumber size="small" style="width:90px" :precision="4" :step="0.01" :value="rule.pricing_output" @update:value="v => { rule.pricing_output = v; updateRule(idx, {...rule}) }" />
+                  </div>
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <span style="color:#94a3b8;font-size:12px">缓存读</span>
+                    <NInputNumber size="small" style="width:90px" :precision="4" :step="0.01" :value="rule.pricing_cache_read" @update:value="v => { rule.pricing_cache_read = v; updateRule(idx, {...rule}) }" />
+                  </div>
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <span style="color:#94a3b8;font-size:12px">缓存写</span>
+                    <NInputNumber size="small" style="width:90px" :precision="4" :step="0.01" :value="rule.pricing_cache_write" @update:value="v => { rule.pricing_cache_write = v; updateRule(idx, {...rule}) }" />
+                  </div>
+                </div>
+              </div>
+              <NButton size="small" @click="addRule" style="margin-top:4px">+ 添加定价规则</NButton>
+            </div>
           </NFormItem>
         </NForm>
         <template #footer>

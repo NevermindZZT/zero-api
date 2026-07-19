@@ -3,6 +3,8 @@ package store
 import (
 	"sync"
 	"time"
+
+	"github.com/never/zero-api/internal/pricing"
 )
 
 // 模型列表缓存
@@ -35,6 +37,7 @@ type Model struct {
 	PricingOutput     float64   `json:"pricing_output"`       // $/1M tokens（输出）
 	PricingCacheRead  float64   `json:"pricing_cache_read"`   // $/1M tokens（缓存读取）
 	PricingCacheWrite float64   `json:"pricing_cache_write"`  // $/1M tokens（缓存写入）
+	PricingRules      string    `json:"pricing_rules"`        // 定价规则 JSON
 	Status            string    `json:"status"` // active, inactive
 	UserModified      bool      `json:"user_modified"`        // 用户是否手动编辑过
 	CreatedAt       time.Time `json:"created_at"`
@@ -45,6 +48,11 @@ type Model struct {
 	ChannelType     string `json:"channel_type,omitempty"`
 	ChannelPriority int    `json:"channel_priority,omitempty"`
 	ChannelStatus   string `json:"channel_status,omitempty"`
+}
+
+// ParsedPricingRules 解析并返回定价规则列表
+func (m *Model) ParsedPricingRules() pricing.PricingRules {
+	return pricing.MustParsePricingRules(m.PricingRules)
 }
 
 type ModelRepo struct {
@@ -81,6 +89,7 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 			        m.context_window, m.max_output_tokens,
 			        m.supports_vision, m.supports_thinking, m.supports_tools,
 		        m.pricing_input, m.pricing_output, m.pricing_cache_read, m.pricing_cache_write,
+		        m.pricing_rules,
 		        m.status,`+userModifiedField+`, m.created_at, m.updated_at,
 		        `+channelNameType+`, `+channelPriority+`, `+channelStatus+`
 			 FROM models m LEFT JOIN channels c ON m.channel_id = c.id
@@ -91,6 +100,7 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 		        m.context_window, m.max_output_tokens,
 		        m.supports_vision, m.supports_thinking, m.supports_tools,
 		        m.pricing_input, m.pricing_output, m.pricing_cache_read, m.pricing_cache_write,
+		        m.pricing_rules,
 		        m.status,`+userModifiedField+`, m.created_at, m.updated_at,
 		        `+channelNameType+`, `+channelPriority+`, `+channelStatus+`
 			 FROM models m LEFT JOIN channels c ON m.channel_id = c.id
@@ -108,6 +118,7 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 			&m.ContextWindow, &m.MaxOutputTokens,
 			&m.SupportsVision, &m.SupportsThinking, &m.SupportsTools,
 			&m.PricingInput, &m.PricingOutput, &m.PricingCacheRead, &m.PricingCacheWrite,
+			&m.PricingRules,
 			&m.Status, &m.UserModified, &m.CreatedAt, &m.UpdatedAt,
 			&m.ChannelName, &m.ChannelType, &m.ChannelPriority, &m.ChannelStatus); err != nil {
 			return nil, err
@@ -133,6 +144,7 @@ func (r *ModelRepo) GetByID(id int64) (*Model, error) {
 		        m.context_window, m.max_output_tokens,
 		        m.supports_vision, m.supports_thinking, m.supports_tools,
 		        m.pricing_input, m.pricing_output, m.pricing_cache_read, m.pricing_cache_write,
+		        m.pricing_rules,
 		        m.status, m.user_modified, m.created_at, m.updated_at,
 		        COALESCE(c.name, ''), COALESCE(c.type, ''), COALESCE(c.priority, 99), COALESCE(c.status, 'active')
 		 FROM models m LEFT JOIN channels c ON m.channel_id = c.id
@@ -141,6 +153,7 @@ func (r *ModelRepo) GetByID(id int64) (*Model, error) {
 		&m.ContextWindow, &m.MaxOutputTokens,
 		&m.SupportsVision, &m.SupportsThinking, &m.SupportsTools,
 		&m.PricingInput, &m.PricingOutput, &m.PricingCacheRead, &m.PricingCacheWrite,
+		&m.PricingRules,
 		&m.Status, &m.UserModified, &m.CreatedAt, &m.UpdatedAt,
 		&m.ChannelName, &m.ChannelType, &m.ChannelPriority, &m.ChannelStatus)
 	if err != nil {
@@ -156,10 +169,11 @@ func (r *ModelRepo) Upsert(m *Model) (int64, error) {
 	result, err := r.db.Exec(
 		`INSERT INTO models (channel_id, model_id, display_name, context_window, max_output_tokens,
 		                     supports_vision, supports_thinking, supports_tools,
-		                     pricing_input, pricing_output, pricing_cache_read, pricing_cache_write, status)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                     pricing_input, pricing_output, pricing_cache_read, pricing_cache_write, pricing_rules, status)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(channel_id, model_id) DO UPDATE SET
-		   display_name = CASE WHEN display_name = model_id THEN ? ELSE display_name END,		   context_window = CASE WHEN user_modified = 0 THEN ? ELSE context_window END,
+		   display_name = CASE WHEN display_name = model_id THEN ? ELSE display_name END,
+		   context_window = CASE WHEN user_modified = 0 THEN ? ELSE context_window END,
 		   max_output_tokens = CASE WHEN user_modified = 0 THEN ? ELSE max_output_tokens END,
 		   supports_vision = CASE WHEN user_modified = 0 THEN ? ELSE supports_vision END,
 		   supports_thinking = CASE WHEN user_modified = 0 THEN ? ELSE supports_thinking END,
@@ -168,14 +182,16 @@ func (r *ModelRepo) Upsert(m *Model) (int64, error) {
 		   pricing_output = CASE WHEN user_modified = 0 THEN ? ELSE pricing_output END,
 		   pricing_cache_read = CASE WHEN user_modified = 0 THEN ? ELSE pricing_cache_read END,
 		   pricing_cache_write = CASE WHEN user_modified = 0 THEN ? ELSE pricing_cache_write END,
+		   pricing_rules = CASE WHEN user_modified = 0 THEN ? ELSE pricing_rules END,
 		   updated_at = CURRENT_TIMESTAMP`,
 		m.ChannelID, m.ModelID, m.DisplayName, m.ContextWindow, m.MaxOutputTokens,
 		m.SupportsVision, m.SupportsThinking, m.SupportsTools,
-		m.PricingInput, m.PricingOutput, m.PricingCacheRead, m.PricingCacheWrite, m.Status,
+		m.PricingInput, m.PricingOutput, m.PricingCacheRead, m.PricingCacheWrite, m.PricingRules, m.Status,
 		m.DisplayName,
 		m.ContextWindow, m.MaxOutputTokens,
 		m.SupportsVision, m.SupportsThinking, m.SupportsTools,
 		m.PricingInput, m.PricingOutput, m.PricingCacheRead, m.PricingCacheWrite,
+		m.PricingRules,
 	)
 	if err != nil {
 		return 0, err
@@ -188,10 +204,12 @@ func (r *ModelRepo) Update(m *Model) error {
 		`UPDATE models SET display_name=?, context_window=?, max_output_tokens=?,
 		 supports_vision=?, supports_thinking=?, supports_tools=?,
 		 pricing_input=?, pricing_output=?, pricing_cache_read=?, pricing_cache_write=?,
+		 pricing_rules=?,
 		 status=?, user_modified=1, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
 		m.DisplayName, m.ContextWindow, m.MaxOutputTokens,
 		m.SupportsVision, m.SupportsThinking, m.SupportsTools,
 		m.PricingInput, m.PricingOutput, m.PricingCacheRead, m.PricingCacheWrite,
+		m.PricingRules,
 		m.Status, m.ID,
 	)
 	return err
@@ -247,12 +265,14 @@ func (r *ModelRepo) FindByChannelAndModelID(channelID int64, modelID string) (*M
 		`SELECT id, channel_id, model_id, display_name, context_window, max_output_tokens,
 		        supports_vision, supports_thinking, supports_tools,
 		        pricing_input, pricing_output, pricing_cache_read, pricing_cache_write,
+		        pricing_rules,
 		        status, user_modified, created_at, updated_at
 		 FROM models WHERE channel_id = ? AND model_id = ?`, channelID, modelID,
 	).Scan(&m.ID, &m.ChannelID, &m.ModelID, &m.DisplayName,
 		&m.ContextWindow, &m.MaxOutputTokens,
 		&m.SupportsVision, &m.SupportsThinking, &m.SupportsTools,
 		&m.PricingInput, &m.PricingOutput, &m.PricingCacheRead, &m.PricingCacheWrite,
+		&m.PricingRules,
 		&m.Status, &m.UserModified, &m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		return nil, err

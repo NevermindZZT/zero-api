@@ -8,6 +8,26 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// PricingRule 配置层定价规则定义（与 pricing.PricingRule 一致，避免循环依赖）
+type PricingRule struct {
+	ID      string `yaml:"id"`
+	Type    string `yaml:"type"`
+	Enabled bool   `yaml:"enabled"`
+	Name    string `yaml:"name"`
+
+	Days      []string `yaml:"days,omitempty"`
+	StartTime string   `yaml:"start_time,omitempty"`
+	EndTime   string   `yaml:"end_time,omitempty"`
+
+	PromptMaxTokens  int `yaml:"prompt_max_tokens,omitempty"`
+	ContextMaxTokens int `yaml:"context_max_tokens,omitempty"`
+
+	PricingInput      float64 `yaml:"pricing_input"`
+	PricingOutput     float64 `yaml:"pricing_output"`
+	PricingCacheRead  float64 `yaml:"pricing_cache_read"`
+	PricingCacheWrite float64 `yaml:"pricing_cache_write"`
+}
+
 // ModelDefault 预填的模型默认数据
 // 优先级：内置 modelDB < 配置默认值 < 上游 API < 用户手动编辑
 type ModelDefault struct {
@@ -20,6 +40,7 @@ type ModelDefault struct {
 	PricingOutput     float64 `yaml:"pricing_output"`
 	PricingCacheRead  float64 `yaml:"pricing_cache_read"`
 	PricingCacheWrite float64 `yaml:"pricing_cache_write"`
+	PricingRules      []PricingRule `yaml:"pricing_rules,omitempty"`
 }
 
 type Config struct {
