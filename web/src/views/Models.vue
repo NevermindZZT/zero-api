@@ -5,7 +5,7 @@ import {
   NForm, NFormItem, NInput, NInputNumber, NSwitch, NDivider, NSelect,
   useMessage, NSpin, NIcon,
 } from 'naive-ui'
-import { HardwareChipSharp } from '@vicons/ionicons5'
+import { HardwareChipSharp, CloudDownloadSharp, CloudUploadSharp } from '@vicons/ionicons5'
 import { modelApi, channelApi } from '@/api'
 import type { DataTableRowKey } from 'naive-ui'
 
@@ -96,6 +96,117 @@ const checkedRowKeys = ref<DataTableRowKey[]>([])
 const batchDisabled = computed(() => checkedRowKeys.value.length === 0)
 const statusFilter = ref<'all' | 'active' | 'inactive'>('all')
 const channelFilter = ref<number | null>(null)
+
+// 批量编辑对话框
+const showBatchEditModal = ref(false)
+const batchEditForm = ref({
+  pricing_input: null as number | null,
+  pricing_output: null as number | null,
+  pricing_cache_read: null as number | null,
+  pricing_cache_write: null as number | null,
+  context_window: null as number | null,
+  max_output_tokens: null as number | null,
+  supports_vision: null as boolean | null,
+  supports_thinking: null as boolean | null,
+  supports_tools: null as boolean | null,
+})
+const batchEditTriState = (field: keyof typeof batchEditForm.value): boolean | null => batchEditForm.value[field] as any
+
+function openBatchEdit() {
+  batchEditForm.value = {
+    pricing_input: null, pricing_output: null, pricing_cache_read: null, pricing_cache_write: null,
+    context_window: null, max_output_tokens: null,
+    supports_vision: null, supports_thinking: null, supports_tools: null,
+  }
+  showBatchEditModal.value = true
+}
+
+// 三态开关：未设置(null) → 是(true) → 否(false) → 未设置(null)
+function toggleTriState(field: keyof typeof batchEditForm.value) {
+  const v = batchEditForm.value[field] as boolean | null
+  if (v === null) { batchEditForm.value[field] = true as any }
+  else if (v === true) { batchEditForm.value[field] = false as any }
+  else { batchEditForm.value[field] = null as any }
+}
+
+function triStateLabel(v: boolean | null) {
+  if (v === null) return '未设置'
+  return v ? '是' : '否'
+}
+
+async function submitBatchEdit() {
+  const ids = checkedRowKeys.value.map(Number)
+  if (!ids.length) return
+  // 过滤掉 null 值
+  const payload: any = {}
+  for (const [k, v] of Object.entries(batchEditForm.value)) {
+    if (v !== null) payload[k] = v
+  }
+  try {
+    await modelApi.batch('batch_edit', ids, payload)
+    message.success(`已编辑 ${ids.length} 个模型`)
+    showBatchEditModal.value = false
+    checkedRowKeys.value = []
+    loadModels()
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '批量编辑失败')
+  }
+}
+
+// 导出
+async function exportModels() {
+  try {
+    const res = await modelApi.export()
+    const blob = res.data as Blob
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `models-export-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    message.success('导出成功')
+  } catch (e: any) {
+    message.error('导出失败')
+  }
+}
+
+// 导入
+const importing = ref(false)
+const importFileRef = ref<HTMLInputElement | null>(null)
+function triggerImport() {
+  importFileRef.value?.click()
+}
+async function handleImportFile(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  importing.value = true
+  try {
+    const text = await file.text()
+    const data = JSON.parse(text)
+    const res = await modelApi.import(data)
+    message.success(`导入成功，共处理 ${res.data?.imported ?? 0} 个模型`)
+    loadModels()
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '导入失败，请检查文件格式')
+  } finally {
+    importing.value = false
+    if (importFileRef.value) importFileRef.value.value = ''
+  }
+}
+
+// 重置为默认（清除 user_modified）
+async function batchReset() {
+  const ids = checkedRowKeys.value.map(Number)
+  if (!ids.length) return
+  try {
+    await modelApi.batch('reset', ids)
+    message.success(`已重置 ${ids.length} 个模型，下次同步将更新为上游数据`)
+    checkedRowKeys.value = []
+    loadModels()
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '重置失败')
+  }
+}
 
 const totalModels = computed(() => models.value.length)
 const activeModels = computed(() => models.value.filter(m => m.status === 'active').length)
@@ -298,6 +409,15 @@ async function batchAction(action: string) {
           </p>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <NButton size="small" quaternary @click="exportModels" :loading="false">
+            <template #icon><NIcon size="16"><CloudDownloadSharp /></NIcon></template>
+            导出
+          </NButton>
+          <input ref="importFileRef" type="file" accept=".json" style="display:none" @change="handleImportFile" />
+          <NButton size="small" quaternary @click="triggerImport" :loading="importing">
+            <template #icon><NIcon size="16"><CloudUploadSharp /></NIcon></template>
+            导入
+          </NButton>
           <span style="color:#94a3b8;font-size:13px">状态过滤</span>
           <NSelect
             v-model:value="statusFilter"
@@ -327,6 +447,13 @@ async function batchAction(action: string) {
         <NSpace>
           <NButton size="small" type="success" @click="batchAction('enable')">批量启用</NButton>
           <NButton size="small" @click="batchAction('disable')">批量禁用</NButton>
+          <NButton size="small" type="info" @click="openBatchEdit">批量编辑</NButton>
+          <NPopconfirm @positive-click="batchReset">
+            <template #trigger>
+              <NButton size="small" type="warning">重置为默认</NButton>
+            </template>
+            将清除 {{ checkedRowKeys.length }} 个模型的"手动编辑"标记，下次同步时上游数据会覆盖这些模型。确认？
+          </NPopconfirm>
           <NPopconfirm @positive-click="batchAction('delete')">
             <template #trigger>
               <NButton size="small" type="error">批量删除</NButton>
@@ -461,6 +588,45 @@ async function batchAction(action: string) {
           <NSpace justify="end">
             <NButton @click="showModal = false">取消</NButton>
             <NButton type="primary" @click="saveModel">保存</NButton>
+          </NSpace>
+        </template>
+      </NModal>
+      <!-- 批量编辑对话框 -->
+      <NModal v-model:show="showBatchEditModal" title="批量编辑" preset="card" style="width:500px">
+        <div style="color:#94a3b8;font-size:13px;margin-bottom:16px">已选 <b style="color:#e2e8f0">{{ checkedRowKeys.length }}</b> 个模型，仅更新设置的字段，留空表示不修改。</div>
+        <NForm label-placement="left" label-width="120">
+          <NFormItem label="输入价格 ($/1M)">
+            <NInputNumber v-model:value="batchEditForm.pricing_input" :precision="6" :step="0.000001" style="width:100%" placeholder="留空=不修改" :clearable="true" />
+          </NFormItem>
+          <NFormItem label="输出价格 ($/1M)">
+            <NInputNumber v-model:value="batchEditForm.pricing_output" :precision="6" :step="0.000001" style="width:100%" placeholder="留空=不修改" :clearable="true" />
+          </NFormItem>
+          <NFormItem label="缓存读取 ($/1M)">
+            <NInputNumber v-model:value="batchEditForm.pricing_cache_read" :precision="6" :step="0.000001" style="width:100%" placeholder="留空=不修改" :clearable="true" />
+          </NFormItem>
+          <NFormItem label="缓存写入 ($/1M)">
+            <NInputNumber v-model:value="batchEditForm.pricing_cache_write" :precision="6" :step="0.000001" style="width:100%" placeholder="留空=不修改" :clearable="true" />
+          </NFormItem>
+          <NFormItem label="上下文窗口">
+            <NInputNumber v-model:value="batchEditForm.context_window" :min="0" :step="1024" style="width:100%" placeholder="留空=不修改" :clearable="true" />
+          </NFormItem>
+          <NFormItem label="最大输出">
+            <NInputNumber v-model:value="batchEditForm.max_output_tokens" :min="0" :step="1024" style="width:100%" placeholder="留空=不修改" :clearable="true" />
+          </NFormItem>
+          <NFormItem label="支持视觉">
+            <NButton size="small" :type="batchEditForm.supports_vision === null ? 'default' : 'primary'" @click="toggleTriState('supports_vision')">{{ triStateLabel(batchEditForm.supports_vision) }}</NButton>
+          </NFormItem>
+          <NFormItem label="支持思考">
+            <NButton size="small" :type="batchEditForm.supports_thinking === null ? 'default' : 'primary'" @click="toggleTriState('supports_thinking')">{{ triStateLabel(batchEditForm.supports_thinking) }}</NButton>
+          </NFormItem>
+          <NFormItem label="支持工具">
+            <NButton size="small" :type="batchEditForm.supports_tools === null ? 'default' : 'primary'" @click="toggleTriState('supports_tools')">{{ triStateLabel(batchEditForm.supports_tools) }}</NButton>
+          </NFormItem>
+        </NForm>
+        <template #footer>
+          <NSpace justify="end">
+            <NButton @click="showBatchEditModal = false">取消</NButton>
+            <NButton type="primary" @click="submitBatchEdit">保存</NButton>
           </NSpace>
         </template>
       </NModal>

@@ -1,6 +1,9 @@
 package store
 
 import (
+	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -252,6 +255,205 @@ func (r *ModelRepo) BatchSetStatus(ids []int64, status string) error {
 func (r *ModelRepo) BatchDelete(ids []int64) error {
 	for _, id := range ids {
 		if _, err := r.db.Exec(`DELETE FROM models WHERE id = ?`, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ModelExportItem 导出/导入用的模型数据结构（只含关键字段，不含 DB 内部 id/channel_id）
+type ModelExportItem struct {
+	ModelID           string          `json:"model_id"`
+	DisplayName       string          `json:"display_name,omitempty"`
+	ContextWindow     int             `json:"context_window,omitempty"`
+	MaxOutputTokens   int             `json:"max_output_tokens,omitempty"`
+	SupportsVision    bool            `json:"supports_vision,omitempty"`
+	SupportsThinking  bool            `json:"supports_thinking,omitempty"`
+	SupportsTools     bool            `json:"supports_tools,omitempty"`
+	PricingInput      float64         `json:"pricing_input,omitempty"`
+	PricingOutput     float64         `json:"pricing_output,omitempty"`
+	PricingCacheRead  float64         `json:"pricing_cache_read,omitempty"`
+	PricingCacheWrite float64         `json:"pricing_cache_write,omitempty"`
+	PricingRules      json.RawMessage `json:"pricing_rules,omitempty"`
+	Status            string          `json:"status,omitempty"`
+}
+
+// BatchEditFields 批量编辑的可选字段
+type BatchEditFields struct {
+	PricingInput      *float64
+	PricingOutput     *float64
+	PricingCacheRead  *float64
+	PricingCacheWrite *float64
+	ContextWindow     *int
+	MaxOutputTokens   *int
+	SupportsVision    *bool
+	SupportsThinking  *bool
+	SupportsTools     *bool
+}
+
+// ExportJSON 导出所有模型为 JSON
+func (r *ModelRepo) ExportJSON() ([]byte, error) {
+	models, err := r.List(0)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]ModelExportItem, 0, len(models))
+	for _, m := range models {
+		pr := json.RawMessage("[]")
+		if m.PricingRules != "" && m.PricingRules != "[]" {
+			pr = json.RawMessage(m.PricingRules)
+		}
+		items = append(items, ModelExportItem{
+			ModelID:           m.ModelID,
+			DisplayName:       m.DisplayName,
+			ContextWindow:     m.ContextWindow,
+			MaxOutputTokens:   m.MaxOutputTokens,
+			SupportsVision:    m.SupportsVision,
+			SupportsThinking:  m.SupportsThinking,
+			SupportsTools:     m.SupportsTools,
+			PricingInput:      m.PricingInput,
+			PricingOutput:     m.PricingOutput,
+			PricingCacheRead:  m.PricingCacheRead,
+			PricingCacheWrite: m.PricingCacheWrite,
+			PricingRules:      pr,
+			Status:            m.Status,
+		})
+	}
+	type wrapper struct {
+		Version    int               `json:"version"`
+		ExportedAt string            `json:"exported_at"`
+		Models     []ModelExportItem `json:"models"`
+	}
+	return json.MarshalIndent(wrapper{Version: 1, ExportedAt: time.Now().UTC().Format(time.RFC3339), Models: items}, "", "  ")
+}
+
+// ImportJSON 从导出数据批量导入（按 model_id 匹配任意渠道，覆盖并标记 user_modified=1）
+func (r *ModelRepo) ImportJSON(items []ModelExportItem, overwriteUserModified bool) (int, error) {
+	count := 0
+	for _, item := range items {
+		if item.ModelID == "" {
+			continue
+		}
+		pr := "[]"
+		if len(item.PricingRules) > 0 {
+			pr = string(item.PricingRules)
+		}
+		status := item.Status
+		if status == "" {
+			status = "active"
+		}
+		// 按 model_id 匹配任意记录
+		existing, _ := r.findByModelID(item.ModelID)
+		if existing != nil {
+			if existing.UserModified && !overwriteUserModified {
+				continue // 跳过用户已手动编辑的模型
+			}
+			existing.DisplayName = item.DisplayName
+			existing.ContextWindow = item.ContextWindow
+			existing.MaxOutputTokens = item.MaxOutputTokens
+			existing.SupportsVision = item.SupportsVision
+			existing.SupportsThinking = item.SupportsThinking
+			existing.SupportsTools = item.SupportsTools
+			existing.PricingInput = item.PricingInput
+			existing.PricingOutput = item.PricingOutput
+			existing.PricingCacheRead = item.PricingCacheRead
+			existing.PricingCacheWrite = item.PricingCacheWrite
+			existing.PricingRules = pr
+			existing.Status = status
+			existing.UserModified = true
+			if err := r.Update(existing); err != nil {
+				return count, fmt.Errorf("更新模型 %s 失败: %w", item.ModelID, err)
+			}
+		}
+		count++
+	}
+	return count, nil
+}
+
+// findByModelID 按 model_id 查找（返回第一条匹配记录）
+func (r *ModelRepo) findByModelID(modelID string) (*Model, error) {
+	m := &Model{}
+	err := r.db.QueryRow(
+		`SELECT id, channel_id, model_id, display_name, context_window, max_output_tokens,
+		        supports_vision, supports_thinking, supports_tools,
+		        pricing_input, pricing_output, pricing_cache_read, pricing_cache_write,
+		        pricing_rules,
+		        status, user_modified, created_at, updated_at
+		 FROM models WHERE model_id = ? LIMIT 1`, modelID,
+	).Scan(&m.ID, &m.ChannelID, &m.ModelID, &m.DisplayName,
+		&m.ContextWindow, &m.MaxOutputTokens,
+		&m.SupportsVision, &m.SupportsThinking, &m.SupportsTools,
+		&m.PricingInput, &m.PricingOutput, &m.PricingCacheRead, &m.PricingCacheWrite,
+		&m.PricingRules,
+		&m.Status, &m.UserModified, &m.CreatedAt, &m.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// BatchEdit 批量编辑模型（仅更新非 nil 字段，标记 user_modified=1）
+func (r *ModelRepo) BatchEdit(ids []int64, fields BatchEditFields) error {
+	setClauses := []string{}
+	args := []interface{}{}
+
+	if fields.PricingInput != nil {
+		setClauses = append(setClauses, "pricing_input = ?")
+		args = append(args, *fields.PricingInput)
+	}
+	if fields.PricingOutput != nil {
+		setClauses = append(setClauses, "pricing_output = ?")
+		args = append(args, *fields.PricingOutput)
+	}
+	if fields.PricingCacheRead != nil {
+		setClauses = append(setClauses, "pricing_cache_read = ?")
+		args = append(args, *fields.PricingCacheRead)
+	}
+	if fields.PricingCacheWrite != nil {
+		setClauses = append(setClauses, "pricing_cache_write = ?")
+		args = append(args, *fields.PricingCacheWrite)
+	}
+	if fields.ContextWindow != nil {
+		setClauses = append(setClauses, "context_window = ?")
+		args = append(args, *fields.ContextWindow)
+	}
+	if fields.MaxOutputTokens != nil {
+		setClauses = append(setClauses, "max_output_tokens = ?")
+		args = append(args, *fields.MaxOutputTokens)
+	}
+	if fields.SupportsVision != nil {
+		setClauses = append(setClauses, "supports_vision = ?")
+		args = append(args, *fields.SupportsVision)
+	}
+	if fields.SupportsThinking != nil {
+		setClauses = append(setClauses, "supports_thinking = ?")
+		args = append(args, *fields.SupportsThinking)
+	}
+	if fields.SupportsTools != nil {
+		setClauses = append(setClauses, "supports_tools = ?")
+		args = append(args, *fields.SupportsTools)
+	}
+	if len(setClauses) == 0 {
+		return nil
+	}
+
+	setClauses = append(setClauses, "user_modified = 1", "updated_at = CURRENT_TIMESTAMP")
+	setSQL := strings.Join(setClauses, ", ")
+
+	for _, id := range ids {
+		allArgs := append([]interface{}{}, args...)
+		allArgs = append(allArgs, id)
+		if _, err := r.db.Exec("UPDATE models SET "+setSQL+" WHERE id = ?", allArgs...); err != nil {
+			return fmt.Errorf("批量编辑模型 %d 失败: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// BatchClearUserModified 批量清除 user_modified 标记（允许同步覆盖）
+func (r *ModelRepo) BatchClearUserModified(ids []int64) error {
+	for _, id := range ids {
+		if err := r.ClearUserModified(id); err != nil {
 			return err
 		}
 	}

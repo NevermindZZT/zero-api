@@ -50,7 +50,10 @@ export const modelApi = {
   update: (id: number, data: any) => api.put(`/models/${id}`, data),
   delete: (id: number) => api.delete(`/models/${id}`),
   toggle: (id: number) => api.post(`/models/${id}/toggle`),
-  batch: (action: string, ids: number[]) => api.post('/models/batch', { action, ids }),
+  batch: (action: string, ids: number[], extra?: any) =>
+    api.post('/models/batch', { action, ids, ...extra }),
+  export: () => api.get('/models/export', { responseType: 'blob' }),
+  import: (data: any) => api.post('/models/import', data),
 }
 
 export const chatTestApi = {

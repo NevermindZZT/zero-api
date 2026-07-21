@@ -14,16 +14,16 @@ import (
 
 // Syncer 负责从上游渠道同步模型信息
 type Syncer struct {
-	channelRepo   *store.ChannelRepo
-	modelRepo     *store.ModelRepo
-	configDefaults map[string]config.ModelDefault
+	channelRepo    *store.ChannelRepo
+	modelRepo      *store.ModelRepo
+	modelPresets   *config.ModelPresets
 }
 
-func NewSyncer(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, configDefaults map[string]config.ModelDefault) *Syncer {
+func NewSyncer(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, presets *config.ModelPresets) *Syncer {
 	return &Syncer{
-		channelRepo:    channelRepo,
-		modelRepo:      modelRepo,
-		configDefaults: configDefaults,
+		channelRepo:  channelRepo,
+		modelRepo:    modelRepo,
+		modelPresets: presets,
 	}
 }
 
@@ -55,7 +55,8 @@ func (s *Syncer) mergeModelInfo(upstreamModel adapter.ModelInfo) adapter.ModelIn
 	}
 
 	// 从配置文件默认值覆盖（优先级2）
-	if conf, ok := s.configDefaults[upstreamModel.ID]; ok {
+	defaults := s.modelPresets.GetAll()
+	if conf, ok := defaults[upstreamModel.ID]; ok {
 		if conf.ContextWindow > 0 {
 			result.ContextWindow = conf.ContextWindow
 		}
@@ -130,7 +131,8 @@ func (s *Syncer) SyncModels(channelID int64) (int, error) {
 		}
 
 		// 从配置文件默认值中获取定价（上游 API 通常不返回定价）
-		if conf, ok := s.configDefaults[merged.ID]; ok {
+		defaults := s.modelPresets.GetAll()
+		if conf, ok := defaults[merged.ID]; ok {
 			m.PricingInput = conf.PricingInput
 			m.PricingOutput = conf.PricingOutput
 			m.PricingCacheRead = conf.PricingCacheRead
@@ -154,4 +156,9 @@ func (s *Syncer) SyncModels(channelID int64) (int, error) {
 	log.Printf("[同步] 渠道 %s (%d) 同步完成: %d 个模型", ch.Name, channelID, count)
 
 	return count, nil
+}
+
+// ReloadPresets 重新加载模型预设文件
+func (s *Syncer) ReloadPresets(presetsPath string) error {
+	return s.modelPresets.Reload(presetsPath)
 }

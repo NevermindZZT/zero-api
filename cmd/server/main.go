@@ -55,8 +55,10 @@ func main() {
 	go svc.Usage.BackfillDailyAgg()
 	requestTimeout := time.Duration(cfg.Upstream.RequestTimeoutSeconds) * time.Second
 
-	// 初始化上游同步器（传入配置文件中的模型默认值）
-	syncer := upstream.NewSyncer(svc.Channel, svc.Model, cfg.ModelDefaults)
+	// 初始化上游同步器（使用模型预设文件替代 config.yaml model_defaults）
+	presetsPath := filepath.Join(filepath.Dir(cfg.Database.Path), "model-presets.json")
+	modelPresets := config.NewModelPresets(presetsPath, cfg.ModelDefaults)
+	syncer := upstream.NewSyncer(svc.Channel, svc.Model, modelPresets)
 
 	// 初始化处理器
 	channelH := handler.NewChannelHandler(svc.Channel, svc.Model)
@@ -66,7 +68,7 @@ func main() {
 	proxyConfigH := handler.NewProxyConfigHandler(svc.ProxyConfig, "certs")
 	// 代理配置更新后通知 ProxyHandler 刷新缓存
 	proxyConfigH.SetOnUpdate(proxyH.InvalidateProxyConfig)
-	syncH := handler.NewSyncHandler(syncer, svc.Model)
+	syncH := handler.NewSyncHandler(syncer, svc.Model, presetsPath)
 	authH := handler.NewAuthHandler(cfg.Auth.Username, cfg.Auth.Password, cfg.Auth.Secret)
 	apiKeyH := handler.NewAPIKeyHandler(svc.APIKey)
 	dbH := handler.NewDatabaseHandler(db, cfg.Database.Path)
@@ -96,6 +98,7 @@ func main() {
 		api.POST("/channels/:id/test", syncH.TestChannel)
 		api.POST("/channels/:id/sync", syncH.SyncModels)
 		api.POST("/channels/:id/toggle", channelH.ToggleChannel)
+		api.POST("/models/reload-presets", syncH.ReloadPresets)
 
 		// 模型管理
 		api.GET("/models", modelH.ListModels)
@@ -104,6 +107,8 @@ func main() {
 		api.DELETE("/models/:id", modelH.DeleteModel)
 		api.POST("/models/:id/toggle", modelH.ToggleModel)
 		api.POST("/models/batch", modelH.BatchAction)
+		api.GET("/models/export", modelH.ExportModels)
+		api.POST("/models/import", modelH.ImportModels)
 
 		// 使用统计
 		api.GET("/stats/overview", usageH.GetOverview)
