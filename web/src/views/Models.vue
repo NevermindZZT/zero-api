@@ -157,7 +157,7 @@ const columns = [
   {
     title: '价格', key: 'pricing', width: 140,
     render: (r: any) => {
-      const fmt = (v: number) => `$${(v || 0).toFixed(4)}/M`
+      const fmt = (v: number) => `$${(v || 0).toFixed(6)}/M`
       const hasRules = r.pricing_rules && r.pricing_rules !== '[]'
       return h('div', { style: 'line-height:1.7;font-size:12px' }, [
         h('div', {}, [
@@ -375,16 +375,16 @@ async function batchAction(action: string) {
           <NDivider />
 
           <NFormItem label="输入价格 ($/1M)">
-            <NInputNumber v-model:value="form.pricing_input" :precision="4" :step="0.01" style="width:100%" />
+            <NInputNumber v-model:value="form.pricing_input" :precision="6" :step="0.000001" style="width:100%" />
           </NFormItem>
           <NFormItem label="输出价格 ($/1M)">
-            <NInputNumber v-model:value="form.pricing_output" :precision="4" :step="0.01" style="width:100%" />
+            <NInputNumber v-model:value="form.pricing_output" :precision="6" :step="0.000001" style="width:100%" />
           </NFormItem>
           <NFormItem label="缓存读取 ($/1M)">
-            <NInputNumber v-model:value="form.pricing_cache_read" :precision="4" :step="0.01" style="width:100%" />
+            <NInputNumber v-model:value="form.pricing_cache_read" :precision="6" :step="0.000001" style="width:100%" />
           </NFormItem>
           <NFormItem label="缓存写入 ($/1M)">
-            <NInputNumber v-model:value="form.pricing_cache_write" :precision="4" :step="0.01" style="width:100%" />
+            <NInputNumber v-model:value="form.pricing_cache_write" :precision="6" :step="0.000001" style="width:100%" />
           </NFormItem>
 
           <NDivider />
@@ -437,19 +437,19 @@ async function batchAction(action: string) {
                 <div style="display:flex;gap:8px;flex-wrap:wrap">
                   <div style="display:flex;align-items:center;gap:4px">
                     <span style="color:#94a3b8;font-size:12px">输入</span>
-                    <NInputNumber size="small" style="width:90px" :precision="4" :step="0.01" :value="rule.pricing_input" @update:value="v => { rule.pricing_input = v; updateRule(idx, {...rule}) }" />
+                    <NInputNumber size="small" style="width:90px" :precision="6" :step="0.000001" :value="rule.pricing_input" @update:value="v => { rule.pricing_input = v; updateRule(idx, {...rule}) }" />
                   </div>
                   <div style="display:flex;align-items:center;gap:4px">
                     <span style="color:#94a3b8;font-size:12px">输出</span>
-                    <NInputNumber size="small" style="width:90px" :precision="4" :step="0.01" :value="rule.pricing_output" @update:value="v => { rule.pricing_output = v; updateRule(idx, {...rule}) }" />
+                    <NInputNumber size="small" style="width:90px" :precision="6" :step="0.000001" :value="rule.pricing_output" @update:value="v => { rule.pricing_output = v; updateRule(idx, {...rule}) }" />
                   </div>
                   <div style="display:flex;align-items:center;gap:4px">
                     <span style="color:#94a3b8;font-size:12px">缓存读</span>
-                    <NInputNumber size="small" style="width:90px" :precision="4" :step="0.01" :value="rule.pricing_cache_read" @update:value="v => { rule.pricing_cache_read = v; updateRule(idx, {...rule}) }" />
+                    <NInputNumber size="small" style="width:90px" :precision="6" :step="0.000001" :value="rule.pricing_cache_read" @update:value="v => { rule.pricing_cache_read = v; updateRule(idx, {...rule}) }" />
                   </div>
                   <div style="display:flex;align-items:center;gap:4px">
                     <span style="color:#94a3b8;font-size:12px">缓存写</span>
-                    <NInputNumber size="small" style="width:90px" :precision="4" :step="0.01" :value="rule.pricing_cache_write" @update:value="v => { rule.pricing_cache_write = v; updateRule(idx, {...rule}) }" />
+                    <NInputNumber size="small" style="width:90px" :precision="6" :step="0.000001" :value="rule.pricing_cache_write" @update:value="v => { rule.pricing_cache_write = v; updateRule(idx, {...rule}) }" />
                   </div>
                 </div>
               </div>

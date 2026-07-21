@@ -70,7 +70,7 @@ function now() {
 }
 
 // 时间范围切换
-const timeRange = ref<'total' | 'month' | 'week' | 'today'>('total')
+const timeRange = ref<'total' | 'month' | 'week' | 'today'>('month')
 const timeRangeOptions: { label: string; value: typeof timeRange.value }[] = [
   { label: '全部', value: 'total' },
   { label: '本月', value: 'month' },
@@ -78,25 +78,31 @@ const timeRangeOptions: { label: string; value: typeof timeRange.value }[] = [
   { label: '今日', value: 'today' },
 ]
 
-// 将时间范围转为 start/end 参数
+// 客户端时区偏移（分钟），传给后端做时区转换
+const tzOffset = -new Date().getTimezoneOffset()
+
+// 将时间范围转为 start/end/granularity 参数
 function getRangeParams(range: typeof timeRange.value) {
   const today = new Date()
   const end = formatLocalDate(today)
-  if (range === 'total') return { start: undefined, end: undefined }
-  if (range === 'today') return { start: end, end }
+  if (range === 'today') return { start: end, end, granularity: 'hour' as const }
   if (range === 'month') {
     const start = formatLocalDate(new Date(today.getFullYear(), today.getMonth(), 1))
-    return { start, end }
+    return { start, end, granularity: 'day' as const }
   }
   if (range === 'week') {
     const day = today.getDay()
     const diff = day === 0 ? 6 : day - 1
     const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate())
     monday.setDate(monday.getDate() - diff)
-    return { start: formatLocalDate(monday), end }
+    // 周日 = 周一 + 6
+    const sunday = new Date(monday)
+    sunday.setDate(monday.getDate() + 6)
+    return { start: formatLocalDate(monday), end: formatLocalDate(sunday), granularity: 'day' as const }
   }
-  const start = formatLocalDate(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 90))
-  return { start, end }
+  // total: 近 12 个月，按月统计
+  const start = formatLocalDate(new Date(today.getFullYear(), today.getMonth() - 11, 1))
+  return { start, end, granularity: 'month' as const }
 }
 
 const rangeLabel = computed(() => {
@@ -112,12 +118,12 @@ watch(timeRange, async () => {
 
 async function loadData() {
   try {
-    const { start, end } = getRangeParams(timeRange.value)
+    const { start, end, granularity } = getRangeParams(timeRange.value)
     const [overviewRes, dailyRes, recordsRes, modelRes] = await Promise.all([
-      usageApi.overview(undefined, start, end),
-      usageApi.daily(start, end),
-      usageApi.records(undefined, start, end, 200),
-      usageApi.byModel(start, end),
+      usageApi.overview(undefined, start, end, tzOffset),
+      usageApi.daily(start, end, undefined, granularity, tzOffset),
+      usageApi.records(undefined, start, end, 200, tzOffset),
+      usageApi.byModel(start, end, undefined, tzOffset),
     ])
     overview.value = overviewRes.data
     dailyStats.value = dailyRes.data
@@ -133,7 +139,7 @@ async function loadData() {
 async function smartPoll() {
   try {
     const { start, end } = getRangeParams(timeRange.value)
-    const res = await usageApi.overview(undefined, start, end)
+    const res = await usageApi.overview(undefined, start, end, tzOffset)
     const newTotal = res.data?.total_requests || 0
     const oldTotal = overview.value?.total_requests
     if (oldTotal === undefined || newTotal !== oldTotal) {
@@ -170,7 +176,7 @@ onMounted(async () => {
   await loadData()
   // 加载年度热力图（不跟随时间范围）
   try {
-    const res = await usageApi.yearHeatmap()
+    const res = await usageApi.yearHeatmap(tzOffset)
     yearHeatmap.value = res.data
   } catch (e) { console.error(e) }
   loading.value = false
@@ -203,7 +209,12 @@ function renderTrendChart() {
   if (!chartContainer.value || !stats || stats.length === 0) return
 
   trendChart = echarts.init(chartContainer.value)
-  const dates = stats.map((d: any) => d.date).reverse()
+  const isHour = stats[0]?.date?.length === 13 // "2025-07-21 08" = 13 chars
+  const dates = stats.map((d: any) => {
+    const raw = d.date
+    if (isHour) return raw.slice(-2) + ':00' // "08" → "08:00"
+    return raw
+  }).reverse()
   const tokens = stats.map((d: any) => d.total_tokens).reverse()
   const requests = stats.map((d: any) => d.requests).reverse()
 

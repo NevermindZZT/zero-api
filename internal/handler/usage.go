@@ -17,12 +17,23 @@ func NewUsageHandler(usageRepo *store.UsageRepo) *UsageHandler {
 	return &UsageHandler{usageRepo: usageRepo}
 }
 
+// parseTzOffset 解析客户端时区偏移（分钟），默认 480（UTC+8）
+func parseTzOffset(c *gin.Context) int {
+	s := c.DefaultQuery("tz_offset", "480")
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return 480
+	}
+	return v
+}
+
 // GetOverview 获取总览统计
 func (h *UsageHandler) GetOverview(c *gin.Context) {
 	apiKeyID := c.Query("api_key_id")
 	start := c.Query("start")
 	end := c.Query("end")
-	stats, err := h.usageRepo.GetOverview(apiKeyID, start, end)
+	tz := parseTzOffset(c)
+	stats, err := h.usageRepo.GetOverview(apiKeyID, start, end, tz)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -30,13 +41,15 @@ func (h *UsageHandler) GetOverview(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
-// GetDailyStats 获取按日统计
+// GetDailyStats 获取按日/月/小时统计（含补0）
 func (h *UsageHandler) GetDailyStats(c *gin.Context) {
 	start := c.DefaultQuery("start", time.Now().AddDate(0, -7, 0).Format("2006-01-02"))
 	end := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
 	apiKeyID := c.Query("api_key_id")
+	granularity := c.DefaultQuery("granularity", "day") // day | month | hour
+	tz := parseTzOffset(c)
 
-	stats, err := h.usageRepo.GetDailyStats(start, end, apiKeyID)
+	stats, err := h.usageRepo.GetDailyStats(start, end, apiKeyID, granularity, tz)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -58,7 +71,8 @@ func (h *UsageHandler) GetRecentRecords(c *gin.Context) {
 	apiKeyIDStr := c.Query("api_key_id")
 	start := c.Query("start")
 	end := c.Query("end")
-	records, err := h.usageRepo.GetRecentRecords(limit, apiKeyIDStr, start, end)
+	tz := parseTzOffset(c)
+	records, err := h.usageRepo.GetRecentRecords(limit, apiKeyIDStr, start, end, tz)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -74,8 +88,9 @@ func (h *UsageHandler) GetModelStats(c *gin.Context) {
 	start := c.DefaultQuery("start", time.Now().AddDate(0, -3, 0).Format("2006-01-02"))
 	end := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
 	apiKeyID := c.Query("api_key_id")
+	tz := parseTzOffset(c)
 
-	stats, err := h.usageRepo.GetModelStats(start, end, apiKeyID)
+	stats, err := h.usageRepo.GetModelStats(start, end, apiKeyID, tz)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -91,7 +106,8 @@ func (h *UsageHandler) GetByAPIKey(c *gin.Context) {
 	apiKeyIDStr := c.Query("api_key_id")
 	start := c.Query("start")
 	end := c.Query("end")
-	stats, err := h.usageRepo.GetOverview(apiKeyIDStr, start, end)
+	tz := parseTzOffset(c)
+	stats, err := h.usageRepo.GetOverview(apiKeyIDStr, start, end, tz)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -101,7 +117,8 @@ func (h *UsageHandler) GetByAPIKey(c *gin.Context) {
 
 // GetYearHeatmap 获取年度热力图数据（GitHub-style）
 func (h *UsageHandler) GetYearHeatmap(c *gin.Context) {
-	data, err := h.usageRepo.GetYearHeatmapData()
+	tz := parseTzOffset(c)
+	data, err := h.usageRepo.GetYearHeatmapData(tz)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

@@ -1,10 +1,53 @@
 package store
 
 import (
+	"fmt"
 	"log"
 	"sync"
 	"time"
 )
+
+// tzLoc 根据客户端偏移分钟数构造时区
+func tzLoc(minutes int) *time.Location {
+	return time.FixedZone("Client", minutes*60)
+}
+
+// sqlTz 构造 SQLite strftime 时区修饰符，如 "+480 minutes"
+func sqlTz(minutes int) string {
+	return fmt.Sprintf("%+d minutes", minutes)
+}
+
+// localDateToUTCRange 将客户端时区的日期转为 UTC 时间范围（用于 usage_records 查询）
+func localDateToUTCRange(date string, tzMinutes int) (utcStart, utcEnd string) {
+	loc := tzLoc(tzMinutes)
+	t, err := time.ParseInLocation("2006-01-02", date, loc)
+	if err != nil {
+		return date, addDay(date)
+	}
+	return t.UTC().Format("2006-01-02 15:04:05"),
+		t.AddDate(0, 0, 1).UTC().Format("2006-01-02 15:04:05")
+}
+
+// localDateRangeToBounds 将客户端时区的起止日期转为 usage_daily 的 UTC 日期范围
+// 返回 minDate, maxDate，使用 date >= ? AND date <= ? 查询
+func localDateRangeToBounds(start, end string, tzMinutes int) (string, string) {
+	loc := tzLoc(tzMinutes)
+	startT, err := time.ParseInLocation("2006-01-02", start, loc)
+	if err != nil {
+		return start, end
+	}
+	endT, err := time.ParseInLocation("2006-01-02", end, loc)
+	if err != nil {
+		return start, end
+	}
+	return startT.UTC().Format("2006-01-02"),
+		endT.AddDate(0, 0, 1).UTC().Format("2006-01-02")
+}
+
+// localNowDate 返回客户端时区的当天日期
+func localNowDate(tzMinutes int) string {
+	return time.Now().In(tzLoc(tzMinutes)).Format("2006-01-02")
+}
 
 // ===== 批量写入缓冲区 =====
 
@@ -108,12 +151,12 @@ func flushUsageBatch(db *DB, batch []*UsageRecord) {
 	}
 }
 
-// aggDate 获取预聚合用日期：优先用记录的 CreatedAt，为零值则用当前时间
+// aggDate 获取预聚合用日期（UTC 日期），用于 usage_daily 存储
 func aggDate(u *UsageRecord) string {
 	if u.CreatedAt.IsZero() {
-		return time.Now().Format("2006-01-02")
+		return time.Now().UTC().Format("2006-01-02")
 	}
-	return u.CreatedAt.Format("2006-01-02")
+	return u.CreatedAt.UTC().Format("2006-01-02")
 }
 
 // ===== UsageRecord & Repo =====
@@ -219,8 +262,8 @@ func (r *UsageRepo) updateDailyAgg(u *UsageRecord) {
 	}
 }
 
-// GetOverview 获取总览统计（基于预聚合表 usage_daily，避免全表扫描）
-func (r *UsageRepo) GetOverview(apiKeyID, startDate, endDate string) (*OverviewStats, error) {
+// GetOverview 获取总览统计（基于预聚合表 usage_daily）
+func (r *UsageRepo) GetOverview(apiKeyID, startDate, endDate string, tzOffsetMinutes int) (*OverviewStats, error) {
 	stats := &OverviewStats{}
 	args := []interface{}{}
 	conditions := []string{}
@@ -229,8 +272,9 @@ func (r *UsageRepo) GetOverview(apiKeyID, startDate, endDate string) (*OverviewS
 		args = append(args, apiKeyID)
 	}
 	if startDate != "" && endDate != "" {
+		minDate, maxDate := localDateRangeToBounds(startDate, endDate, tzOffsetMinutes)
 		conditions = append(conditions, "date >= ? AND date <= ?")
-		args = append(args, startDate, endDate)
+		args = append(args, minDate, maxDate)
 	}
 	where := ""
 	if len(conditions) > 0 {
@@ -248,7 +292,7 @@ func (r *UsageRepo) GetOverview(apiKeyID, startDate, endDate string) (*OverviewS
 	)
 	if err != nil {
 		// 降级：表可能不存在（刚迁移），回退到 usage_records
-		return r.getOverviewFallback(apiKeyID, startDate, endDate)
+		return r.getOverviewFallback(apiKeyID, startDate, endDate, tzOffsetMinutes)
 	}
 
 	// 安全兜底：usage_daily 返回 0 但 usage_records 有数据时自动降级
@@ -258,7 +302,7 @@ func (r *UsageRepo) GetOverview(apiKeyID, startDate, endDate string) (*OverviewS
 		if usageRecCount > 0 {
 			log.Printf("[Usage] usage_daily 为空但 usage_records 有 %d 条记录，自动触发回填+降级", usageRecCount)
 			go r.backfillDailyAgg()
-			return r.getOverviewFallback(apiKeyID, startDate, endDate)
+			return r.getOverviewFallback(apiKeyID, startDate, endDate, tzOffsetMinutes)
 		}
 	}
 
@@ -273,10 +317,11 @@ func (r *UsageRepo) GetOverview(apiKeyID, startDate, endDate string) (*OverviewS
 			(SELECT COUNT(*) FROM models WHERE status = 'active')`,
 	).Scan(&stats.ActiveChannels, &stats.ActiveModels)
 
-	// 今日统计始终查今天（不受时间范围影响）
-	today := time.Now().Format("2006-01-02")
-	todayArgs := []interface{}{today}
-	todayWhere := " WHERE date = ?"
+	// 今日统计（客户端时区当天）
+	today := localNowDate(tzOffsetMinutes)
+	todayMin, todayMax := localDateRangeToBounds(today, today, tzOffsetMinutes)
+	todayArgs := []interface{}{todayMin, todayMax}
+	todayWhere := " WHERE date >= ? AND date <= ?"
 	if apiKeyID != "" {
 		todayWhere += " AND api_key_id = ?"
 		todayArgs = append(todayArgs, apiKeyID)
@@ -294,8 +339,8 @@ func (r *UsageRepo) GetOverview(apiKeyID, startDate, endDate string) (*OverviewS
 	return stats, nil
 }
 
-// getOverviewFallback 降级方案：从 usage_records 全表查询（用于旧数据兼容）
-func (r *UsageRepo) getOverviewFallback(apiKeyID, startDate, endDate string) (*OverviewStats, error) {
+// getOverviewFallback 降级方案：从 usage_records 全表查询
+func (r *UsageRepo) getOverviewFallback(apiKeyID, startDate, endDate string, tzOffsetMinutes int) (*OverviewStats, error) {
 	stats := &OverviewStats{}
 	args := []interface{}{}
 	conditions := []string{}
@@ -304,8 +349,10 @@ func (r *UsageRepo) getOverviewFallback(apiKeyID, startDate, endDate string) (*O
 		args = append(args, apiKeyID)
 	}
 	if startDate != "" && endDate != "" {
+		utcStart, _ := localDateToUTCRange(startDate, tzOffsetMinutes)
+		_, utcEnd := localDateToUTCRange(endDate, tzOffsetMinutes)
 		conditions = append(conditions, "created_at >= ? AND created_at < ?")
-		args = append(args, startDate, addDay(endDate))
+		args = append(args, utcStart, utcEnd)
 	}
 	where := ""
 	if len(conditions) > 0 {
@@ -328,16 +375,18 @@ func (r *UsageRepo) getOverviewFallback(apiKeyID, startDate, endDate string) (*O
 			(SELECT COUNT(*) FROM models WHERE status = 'active')`,
 	).Scan(&stats.ActiveChannels, &stats.ActiveModels)
 
-	todayArgs := []interface{}{}
+	// 今日统计（客户端时区当天 UTC 00:00）
+	todayLoc := time.Now().In(tzLoc(tzOffsetMinutes))
+	todayUTCStart := todayLoc.Truncate(24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
+	todayArgs := []interface{}{todayUTCStart}
 	todayWhere := ""
 	if apiKeyID != "" {
 		todayWhere = " AND api_key_id = ?"
 		todayArgs = append(todayArgs, apiKeyID)
 	}
-	todayStart := time.Now().Format("2006-01-02")
 	err = r.db.QueryRow(
 		`SELECT COALESCE(COUNT(*), 0), COALESCE(SUM(total_tokens), 0) FROM usage_records WHERE created_at >= ?`+todayWhere,
-		append([]interface{}{todayStart}, todayArgs...)...,
+		todayArgs...,
 	).Scan(&stats.TodayRequests, &stats.TodayTokens)
 	if err != nil {
 		stats.TodayRequests = 0
@@ -347,16 +396,33 @@ func (r *UsageRepo) getOverviewFallback(apiKeyID, startDate, endDate string) (*O
 	return stats, nil
 }
 
-// GetDailyStats 获取按日聚合统计（基于预聚合表 usage_daily）
-func (r *UsageRepo) GetDailyStats(start, end string, apiKeyID ...string) ([]DailyStats, error) {
+// GetDailyStats 获取按日/月/小时聚合统计（含补0；hour 粒度直接查 usage_records）
+func (r *UsageRepo) GetDailyStats(start, end string, apiKeyID string, granularity string, tzOffsetMinutes int) ([]DailyStats, error) {
+	if granularity == "hour" {
+		return r.getHourlyStats(start, apiKeyID, tzOffsetMinutes)
+	}
+
+	var dateExpr, groupBy, orderBy string
+	isMonth := granularity == "month"
+	if isMonth {
+		dateExpr = "substr(date, 1, 7)"
+		groupBy = "substr(date, 1, 7)"
+		orderBy = "substr(date, 1, 7) DESC"
+	} else {
+		dateExpr = "date"
+		groupBy = "date"
+		orderBy = "date DESC"
+	}
+
+	minDate, maxDate := localDateRangeToBounds(start, end, tzOffsetMinutes)
 	whereDate := "WHERE date >= ? AND date <= ?"
-	args := []interface{}{start, end}
-	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
+	args := []interface{}{minDate, maxDate}
+	if apiKeyID != "" {
 		whereDate += " AND api_key_id = ?"
-		args = append(args, apiKeyID[0])
+		args = append(args, apiKeyID)
 	}
 	rows, err := r.db.Query(
-		`SELECT date,
+		`SELECT `+dateExpr+`,
 		        COALESCE(SUM(prompt_tokens), 0),
 		        COALESCE(SUM(completion_tokens), 0),
 		        COALESCE(SUM(cache_hit_tokens), 0),
@@ -364,47 +430,90 @@ func (r *UsageRepo) GetDailyStats(start, end string, apiKeyID ...string) ([]Dail
 		        COALESCE(SUM(requests), 0),
 		        COALESCE(SUM(cost), 0)
 		 FROM usage_daily `+whereDate+`
-		 GROUP BY date ORDER BY date DESC`, args...)
+		 GROUP BY `+groupBy+` ORDER BY `+orderBy, args...)
 	if err != nil {
 		// 降级：回退到 usage_records 查询
-		return r.getDailyStatsFallback(start, end, apiKeyID...)
+		return r.getDailyStatsFallback(start, end, granularity, apiKeyID, tzOffsetMinutes)
 	}
 	defer rows.Close()
 
-	var stats []DailyStats
+	dataMap := make(map[string]DailyStats)
 	for rows.Next() {
 		var s DailyStats
 		if err := rows.Scan(&s.Date, &s.PromptTokens, &s.CompletionTokens, &s.CacheHitTokens, &s.TotalTokens, &s.Requests, &s.Cost); err != nil {
 			return nil, err
 		}
-		stats = append(stats, s)
+		dataMap[s.Date] = s
 	}
 
-	// 安全兜底：usage_daily 无数据但 usage_records 有数据时自动降级
-	if len(stats) == 0 {
+	if len(dataMap) == 0 {
 		var usageRecCount int64
 		_ = r.db.QueryRow("SELECT COUNT(*) FROM usage_records").Scan(&usageRecCount)
 		if usageRecCount > 0 {
 			log.Printf("[Usage] GetDailyStats: usage_daily 为空但 usage_records 有 %d 条记录，自动触发回填+降级", usageRecCount)
 			go r.backfillDailyAgg()
-			return r.getDailyStatsFallback(start, end, apiKeyID...)
+			return r.getDailyStatsFallback(start, end, granularity, apiKeyID, tzOffsetMinutes)
 		}
 	}
 
-	return stats, nil
+	return fillZeroStats(start, end, dataMap, granularity), nil
 }
 
-// getDailyStatsFallback 降级方案：从 usage_records 实时聚合
-func (r *UsageRepo) getDailyStatsFallback(start, end string, apiKeyID ...string) ([]DailyStats, error) {
-	nextDay := addDay(end)
+// fillZeroStats 生成完整日期/月份/小时序列，无数据项补 0
+func fillZeroStats(start, end string, dataMap map[string]DailyStats, granularity string) []DailyStats {
+	var stats []DailyStats
+	switch granularity {
+	case "month":
+		startMonth := start[:7]
+		endMonth := end[:7]
+		startT, _ := time.Parse("2006-01", startMonth)
+		endT, _ := time.Parse("2006-01", endMonth)
+		for t := endT; !t.Before(startT); t = t.AddDate(0, -1, 0) {
+			key := t.Format("2006-01")
+			if s, ok := dataMap[key]; ok {
+				stats = append(stats, s)
+			} else {
+				stats = append(stats, DailyStats{Date: key})
+			}
+		}
+	case "hour":
+		// 生成 00~23 共 24 小时，key 格式 "2025-07-21 08"
+		for h := 23; h >= 0; h-- {
+			key := start + " " + fmt.Sprintf("%02d", h)
+			if s, ok := dataMap[key]; ok {
+				stats = append(stats, s)
+			} else {
+				stats = append(stats, DailyStats{Date: key})
+			}
+		}
+	default: // "day"
+		startT, _ := time.Parse("2006-01-02", start)
+		endT, _ := time.Parse("2006-01-02", end)
+		for t := endT; !t.Before(startT); t = t.AddDate(0, 0, -1) {
+			key := t.Format("2006-01-02")
+			if s, ok := dataMap[key]; ok {
+				stats = append(stats, s)
+			} else {
+				stats = append(stats, DailyStats{Date: key})
+			}
+		}
+	}
+	return stats
+}
+
+// getHourlyStats 按小时统计（直接查 usage_records，不使用 usage_daily）
+func (r *UsageRepo) getHourlyStats(date string, apiKeyID string, tzOffsetMinutes int) ([]DailyStats, error) {
+	utcStart, utcEnd := localDateToUTCRange(date, tzOffsetMinutes)
+	tzMod := sqlTz(tzOffsetMinutes)
+
 	whereDate := "WHERE created_at >= ? AND created_at < ?"
-	args := []interface{}{start, nextDay}
-	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
+	args := []interface{}{utcStart, utcEnd}
+	if apiKeyID != "" {
 		whereDate += " AND api_key_id = ?"
-		args = append(args, apiKeyID[0])
+		args = append(args, apiKeyID)
 	}
 	rows, err := r.db.Query(
-		`SELECT date(created_at) as day,
+		`SELECT strftime('%Y-%m-%d %H', created_at, '`+tzMod+`') as hour,
 		        COALESCE(SUM(prompt_tokens), 0),
 		        COALESCE(SUM(completion_tokens), 0),
 		        COALESCE(SUM(cache_hit_tokens), 0),
@@ -412,21 +521,73 @@ func (r *UsageRepo) getDailyStatsFallback(start, end string, apiKeyID ...string)
 		        COUNT(*),
 		        COALESCE(SUM(cost), 0)
 		 FROM usage_records `+whereDate+`
-		 GROUP BY day ORDER BY day DESC`, args...)
+		 GROUP BY hour ORDER BY hour DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var stats []DailyStats
+	dataMap := make(map[string]DailyStats)
 	for rows.Next() {
 		var s DailyStats
 		if err := rows.Scan(&s.Date, &s.PromptTokens, &s.CompletionTokens, &s.CacheHitTokens, &s.TotalTokens, &s.Requests, &s.Cost); err != nil {
 			return nil, err
 		}
-		stats = append(stats, s)
+		dataMap[s.Date] = s
 	}
-	return stats, nil
+
+	return fillZeroStats(date, "", dataMap, "hour"), nil
+}
+
+// getDailyStatsFallback 降级方案：从 usage_records 实时聚合
+func (r *UsageRepo) getDailyStatsFallback(start, end, granularity, apiKeyID string, tzOffsetMinutes int) ([]DailyStats, error) {
+	tzMod := sqlTz(tzOffsetMinutes)
+	var dateExpr, orderBy string
+	switch granularity {
+	case "month":
+		dateExpr = "substr(created_at, 1, 7)"
+		orderBy = "substr(created_at, 1, 7) DESC"
+	case "hour":
+		dateExpr = "strftime('%Y-%m-%d %H', created_at, '" + tzMod + "')"
+		orderBy = "strftime('%Y-%m-%d %H', created_at, '" + tzMod + "') DESC"
+	default:
+		dateExpr = "date(created_at, '" + tzMod + "')"
+		orderBy = "date(created_at, '" + tzMod + "') DESC"
+	}
+
+	utcStart, _ := localDateToUTCRange(start, tzOffsetMinutes)
+	_, utcEnd := localDateToUTCRange(end, tzOffsetMinutes)
+	whereDate := "WHERE created_at >= ? AND created_at < ?"
+	args := []interface{}{utcStart, utcEnd}
+	if apiKeyID != "" {
+		whereDate += " AND api_key_id = ?"
+		args = append(args, apiKeyID)
+	}
+	rows, err := r.db.Query(
+		`SELECT `+dateExpr+` as day,
+		        COALESCE(SUM(prompt_tokens), 0),
+		        COALESCE(SUM(completion_tokens), 0),
+		        COALESCE(SUM(cache_hit_tokens), 0),
+		        COALESCE(SUM(total_tokens), 0),
+		        COUNT(*),
+		        COALESCE(SUM(cost), 0)
+		 FROM usage_records `+whereDate+`
+		 GROUP BY day ORDER BY `+orderBy, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	dataMap := make(map[string]DailyStats)
+	for rows.Next() {
+		var s DailyStats
+		if err := rows.Scan(&s.Date, &s.PromptTokens, &s.CompletionTokens, &s.CacheHitTokens, &s.TotalTokens, &s.Requests, &s.Cost); err != nil {
+			return nil, err
+		}
+		dataMap[s.Date] = s
+	}
+
+	return fillZeroStats(start, end, dataMap, granularity), nil
 }
 
 // ModelStats 按模型聚合统计
@@ -438,9 +599,8 @@ type ModelStats struct {
 }
 
 // GetModelStats 获取按模型聚合统计（饼图专用）
-func (r *UsageRepo) GetModelStats(start, end string, apiKeyID ...string) ([]ModelStats, error) {
-	// 先尝试从 usage_daily 查询
-	stats, err := r.getModelStatsFromDaily(start, end, apiKeyID...)
+func (r *UsageRepo) GetModelStats(start, end string, apiKeyID string, tzOffsetMinutes int) ([]ModelStats, error) {
+	stats, err := r.getModelStatsFromDaily(start, end, apiKeyID, tzOffsetMinutes)
 	if err != nil {
 		return nil, err
 	}
@@ -452,19 +612,20 @@ func (r *UsageRepo) GetModelStats(start, end string, apiKeyID ...string) ([]Mode
 		if usageRecCount > 0 {
 			log.Printf("[Usage] GetModelStats: usage_daily 为空但 usage_records 有 %d 条记录，自动触发回填+降级", usageRecCount)
 			go r.backfillDailyAgg()
-			return r.getModelStatsFallback(start, end, apiKeyID...)
+			return r.getModelStatsFallback(start, end, apiKeyID, tzOffsetMinutes)
 		}
 	}
 
 	return stats, nil
 }
 
-func (r *UsageRepo) getModelStatsFromDaily(start, end string, apiKeyID ...string) ([]ModelStats, error) {
+func (r *UsageRepo) getModelStatsFromDaily(start, end string, apiKeyID string, tzOffsetMinutes int) ([]ModelStats, error) {
+	minDate, maxDate := localDateRangeToBounds(start, end, tzOffsetMinutes)
 	whereDate := "WHERE date >= ? AND date <= ?"
-	args := []interface{}{start, end}
-	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
+	args := []interface{}{minDate, maxDate}
+	if apiKeyID != "" {
 		whereDate += " AND api_key_id = ?"
-		args = append(args, apiKeyID[0])
+		args = append(args, apiKeyID)
 	}
 	rows, err := r.db.Query(
 		`SELECT request_model,
@@ -490,7 +651,7 @@ func (r *UsageRepo) getModelStatsFromDaily(start, end string, apiKeyID ...string
 }
 
 // GetRecentRecords 获取最近使用记录
-func (r *UsageRepo) GetRecentRecords(limit int, apiKeyID, startDate, endDate string) ([]UsageRecord, error) {
+func (r *UsageRepo) GetRecentRecords(limit int, apiKeyID, startDate, endDate string, tzOffsetMinutes int) ([]UsageRecord, error) {
 	args := []interface{}{}
 	conditions := []string{}
 	if apiKeyID != "" {
@@ -498,12 +659,14 @@ func (r *UsageRepo) GetRecentRecords(limit int, apiKeyID, startDate, endDate str
 		args = append(args, apiKeyID)
 	}
 	if startDate != "" {
+		utcStart, _ := localDateToUTCRange(startDate, tzOffsetMinutes)
 		conditions = append(conditions, "u.created_at >= ?")
-		args = append(args, startDate)
+		args = append(args, utcStart)
 	}
 	if endDate != "" {
+		_, utcEnd := localDateToUTCRange(endDate, tzOffsetMinutes)
 		conditions = append(conditions, "u.created_at < ?")
-		args = append(args, addDay(endDate))
+		args = append(args, utcEnd)
 	}
 	where := ""
 	if len(conditions) > 0 {
@@ -542,11 +705,15 @@ func (r *UsageRepo) GetRecentRecords(limit int, apiKeyID, startDate, endDate str
 	return records, nil
 }
 
-// backfillDailyAgg 异步回填 usage_daily（从 usage_records 聚合）
+// backfillDailyAgg 异步回填 usage_daily（从 usage_records 聚合，使用本地时间）
 func (r *UsageRepo) backfillDailyAgg() {
 	log.Println("[Usage] 开始异步回填 usage_daily...")
+	// 先清空旧数据（旧数据可能是 UTC 日期），再重新聚合
+	if _, err := r.db.Exec(`DELETE FROM usage_daily`); err != nil {
+		log.Printf("[Usage] 清空 usage_daily 失败: %v", err)
+	}
 	result, err := r.db.Exec(`
-		INSERT OR IGNORE INTO usage_daily (date, api_key_id, request_model, prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens, requests, cost)
+		INSERT INTO usage_daily (date, api_key_id, request_model, prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens, requests, cost)
 		SELECT date(created_at), api_key_id, request_model,
 		       SUM(prompt_tokens), SUM(completion_tokens), SUM(cache_hit_tokens), SUM(total_tokens),
 		       COUNT(*), SUM(cost)
@@ -560,13 +727,20 @@ func (r *UsageRepo) backfillDailyAgg() {
 	log.Printf("[Usage] 异步回填 usage_daily 完成，写入 %d 行聚合数据", affected)
 }
 
+// BackfillDailyAgg 公开的回填方法（服务启动时调用）
+func (r *UsageRepo) BackfillDailyAgg() {
+	r.backfillDailyAgg()
+}
+
 // getModelStatsFallback 降级方案：从 usage_records 实时按模型聚合
-func (r *UsageRepo) getModelStatsFallback(start, end string, apiKeyID ...string) ([]ModelStats, error) {
+func (r *UsageRepo) getModelStatsFallback(start, end string, apiKeyID string, tzOffsetMinutes int) ([]ModelStats, error) {
+	utcStart, _ := localDateToUTCRange(start, tzOffsetMinutes)
+	_, utcEnd := localDateToUTCRange(end, tzOffsetMinutes)
 	whereDate := "WHERE created_at >= ? AND created_at < ?"
-	args := []interface{}{start, addDay(end)}
-	if len(apiKeyID) > 0 && apiKeyID[0] != "" {
+	args := []interface{}{utcStart, utcEnd}
+	if apiKeyID != "" {
 		whereDate += " AND api_key_id = ?"
-		args = append(args, apiKeyID[0])
+		args = append(args, apiKeyID)
 	}
 	rows, err := r.db.Query(
 		`SELECT request_model,
@@ -618,9 +792,9 @@ type YearHeatmapItem struct {
 	TotalTokens int64  `json:"total_tokens"`
 }
 
-// GetYearHeatmapData 获取过去一年每日 Tokens 用量（GitHub-style 热力图，无数据的日期补 0）
-func (r *UsageRepo) GetYearHeatmapData() ([]YearHeatmapItem, error) {
-	end := time.Now()
+// GetYearHeatmapData 获取过去一年每日 Tokens 用量
+func (r *UsageRepo) GetYearHeatmapData(tzOffsetMinutes int) ([]YearHeatmapItem, error) {
+	end := time.Now().In(tzLoc(tzOffsetMinutes))
 	start := end.AddDate(-1, 0, 0)
 	startStr := start.Format("2006-01-02")
 	endStr := end.Format("2006-01-02")

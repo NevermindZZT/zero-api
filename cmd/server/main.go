@@ -51,6 +51,8 @@ func main() {
 	svc := store.NewService(db)
 	// 启动 usage 批量写入协程
 	store.InitUsageBuffer(db)
+	// 启动后异步回填 usage_daily（修正时区后首次运行需要重算历史数据）
+	go svc.Usage.BackfillDailyAgg()
 	requestTimeout := time.Duration(cfg.Upstream.RequestTimeoutSeconds) * time.Second
 
 	// 初始化上游同步器（传入配置文件中的模型默认值）

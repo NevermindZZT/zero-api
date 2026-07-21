@@ -114,15 +114,15 @@ export const chatTestApi = {
 
 // ===== Usage API =====
 export const usageApi = {
-  overview: (apiKeyId?: number, start?: string, end?: string) =>
-    api.get('/stats/overview', { params: { api_key_id: apiKeyId || undefined, start, end } }),
-  daily: (start?: string, end?: string, apiKeyId?: number) =>
-    api.get('/stats/daily', { params: { start, end, api_key_id: apiKeyId || undefined } }),
-  byModel: (start?: string, end?: string, apiKeyId?: number) =>
-    api.get('/stats/by-model', { params: { start, end, api_key_id: apiKeyId || undefined } }),
-  yearHeatmap: () => api.get('/stats/year-heatmap'),
-  records: (apiKeyId?: number, start?: string, end?: string, limit?: number) =>
-    api.get('/usage/records', { params: { api_key_id: apiKeyId || undefined, start, end, limit } }),
+  overview: (apiKeyId?: number, start?: string, end?: string, tzOffset?: number) =>
+    api.get('/stats/overview', { params: { api_key_id: apiKeyId || undefined, start, end, tz_offset: tzOffset } }),
+  daily: (start?: string, end?: string, apiKeyId?: number, granularity?: string, tzOffset?: number) =>
+    api.get('/stats/daily', { params: { start, end, api_key_id: apiKeyId || undefined, granularity, tz_offset: tzOffset } }),
+  byModel: (start?: string, end?: string, apiKeyId?: number, tzOffset?: number) =>
+    api.get('/stats/by-model', { params: { start, end, api_key_id: apiKeyId || undefined, tz_offset: tzOffset } }),
+  yearHeatmap: (tzOffset?: number) => api.get('/stats/year-heatmap', { params: { tz_offset: tzOffset } }),
+  records: (apiKeyId?: number, start?: string, end?: string, limit?: number, tzOffset?: number) =>
+    api.get('/usage/records', { params: { api_key_id: apiKeyId || undefined, start, end, limit, tz_offset: tzOffset } }),
 }
 
 // ===== Proxy Config API =====
