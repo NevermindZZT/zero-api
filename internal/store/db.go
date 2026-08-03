@@ -180,6 +180,10 @@ func (d *DB) migrate() error {
 	d.Exec(`ALTER TABLE usage_records ADD COLUMN cache_hit_tokens INTEGER DEFAULT 0`)
 	// 迁移：添加 api_key_id 列（如果不存在）
 	d.Exec(`ALTER TABLE usage_records ADD COLUMN api_key_id INTEGER DEFAULT NULL`)
+	// 迁移：添加 total_duration_ms 列（如果不存在）
+	// 注意：旧数据库的 usage_records 表没有该列，INSERT 语句包含该列会导致写入失败、
+	// 用量数据无法进入统计，必须通过 ALTER TABLE 补齐。
+	d.Exec(`ALTER TABLE usage_records ADD COLUMN total_duration_ms INTEGER DEFAULT 0`)
 	// 迁移：清理旧记录的 api_key_id=0（迁移默认值遗留下的无效数据，0 不对应任何有效密钥）
 	d.Exec(`UPDATE usage_records SET api_key_id = NULL WHERE api_key_id = 0`)
 	// 迁移：添加缓存读取/写入价格列（如果不存在）

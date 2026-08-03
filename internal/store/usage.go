@@ -677,7 +677,7 @@ func (r *UsageRepo) GetRecentRecords(limit int, apiKeyID, startDate, endDate str
 	rows, err := r.db.Query(
 		`SELECT u.id, u.channel_id, u.model_id, u.api_key_id, u.request_model,
 		        u.prompt_tokens, u.completion_tokens, u.cache_hit_tokens, u.total_tokens,
-		        u.latency_ms, u.cost, u.created_at,
+		        u.latency_ms, u.total_duration_ms, u.cost, u.created_at,
 		        COALESCE(ak.name, '') AS api_key_name,
 		        COALESCE(c.name, '') AS channel_name
 		 FROM usage_records u
@@ -695,7 +695,7 @@ func (r *UsageRepo) GetRecentRecords(limit int, apiKeyID, startDate, endDate str
 		var u UsageRecord
 		if err := rows.Scan(&u.ID, &u.ChannelID, &u.ModelID, &u.APIKeyID, &u.RequestModel,
 			&u.PromptTokens, &u.CompletionTokens, &u.CacheHitTokens, &u.TotalTokens,
-			&u.LatencyMs, &u.Cost, &u.CreatedAt, &u.APIKeyName, &u.ChannelName); err != nil {
+			&u.LatencyMs, &u.TotalDurationMs, &u.Cost, &u.CreatedAt, &u.APIKeyName, &u.ChannelName); err != nil {
 			return nil, err
 		}
 		records = append(records, u)
