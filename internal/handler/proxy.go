@@ -344,7 +344,7 @@ func (h *ProxyHandler) resolveAndValidateAPIKey(c *gin.Context) (*int64, error) 
 	return &k.ID, nil
 }
 
-func (h *ProxyHandler) recordUsage(requestModel string, rawResp, convertedResp []byte, adapt adapter.Adapter, model *store.Model, channelID int64, apiKeyID *int64, latencyMs int) {
+func (h *ProxyHandler) recordUsage(requestModel string, rawResp, convertedResp []byte, adapt adapter.Adapter, model *store.Model, channelID int64, apiKeyID *int64, latencyMs int, totalDurationMs int) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[Usage] 记录用量 panic 恢复: %v", r)
@@ -399,6 +399,7 @@ func (h *ProxyHandler) recordUsage(requestModel string, rawResp, convertedResp [
 		CacheHitTokens:   cacheHitTokens,
 		TotalTokens:      totalTokens,
 		LatencyMs:        latencyMs,
+		TotalDurationMs:  totalDurationMs,
 		Cost:             cost,
 	}); err != nil {
 		log.Printf("[Usage] 插入记录失败: %v", err)
@@ -516,6 +517,7 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 
 	// === 非流式响应（原逻辑）===
 	latencyMs := int(time.Since(startTime).Milliseconds())
+	totalDurationMs := latencyMs
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("读取上游响应失败: %w", err)
@@ -528,7 +530,7 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 	}
 
 	// 记录使用信息
-	go h.recordUsage(matchedModel.ModelID, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
+	go h.recordUsage(matchedModel.ModelID, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs, totalDurationMs)
 
 	// 返回响应（过滤逐跳头）
 	filteredHeaders := filterHopByHop(resp.Header)
@@ -592,6 +594,8 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 	// 使用 bufio.Reader 逐行读取
 	reader := bufio.NewReaderSize(resp.Body, 64*1024)
 	var buf bytes.Buffer
+	var firstTokenTime time.Time
+	var gotFirstToken bool
 
 	for {
 		line, err := reader.ReadBytes('\n')
@@ -608,6 +612,12 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 		// 成功收到数据，重置空闲计时器
 		safeResetIdle()
 		buf.Write(line)
+
+		// 记录首 Token 到达时间（TTFT）
+		if !gotFirstToken {
+			firstTokenTime = time.Now()
+			gotFirstToken = true
+		}
 
 		// 写入客户端
 		if _, werr := c.Writer.Write(line); werr != nil {
@@ -626,11 +636,18 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 	}
 
 	// 记录使用信息
-	latencyMs := int(time.Since(startTime).Milliseconds())
+	// 流式：latency_ms = 首 Token 延时（TTFT），total_duration_ms = 总耗时
+	var latencyMs int
+	if gotFirstToken {
+		latencyMs = int(firstTokenTime.Sub(startTime).Milliseconds())
+	} else {
+		latencyMs = int(time.Since(startTime).Milliseconds())
+	}
+	totalDurationMs := int(time.Since(startTime).Milliseconds())
 	fullRespBytes := buf.Bytes()
 	if len(fullRespBytes) > 0 {
 		convertedResp, _ := adapt.ConvertResponse(fullRespBytes)
-		go h.recordUsage(matchedModel.ModelID, fullRespBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
+		go h.recordUsage(matchedModel.ModelID, fullRespBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs, totalDurationMs)
 	}
 	return nil
 }

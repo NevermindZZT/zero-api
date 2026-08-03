@@ -47,6 +47,7 @@ const recordColumns = [
   { title: '缓存命中', key: 'cache_hit_tokens' },
   { title: '总 Tokens', key: 'total_tokens' },
   { title: '费用 ($)', key: 'cost', render: (r: any) => r.cost?.toFixed(6) },
+  { title: '延时/耗时', key: 'latency_ms', render: (r: any) => r.latency_ms != null ? `${r.latency_ms} / ${r.total_duration_ms || r.latency_ms} ms` : '-' },
   { title: '时间', key: 'created_at', render: (r: any) => formatDateTime(r.created_at) },
 ]
 

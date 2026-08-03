@@ -99,8 +99,8 @@ func flushUsageBatch(db *DB, batch []*UsageRecord) {
 	stmt, err := tx.Prepare(`INSERT INTO usage_records
 		(channel_id, model_id, api_key_id, request_model,
 		 prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens,
-		 latency_ms, cost)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		 latency_ms, total_duration_ms, cost)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		tx.Rollback()
 		log.Printf("[Usage] 批量写入预编译失败: %v", err)
@@ -111,7 +111,7 @@ func flushUsageBatch(db *DB, batch []*UsageRecord) {
 	for _, u := range batch {
 		if _, err := stmt.Exec(u.ChannelID, u.ModelID, u.APIKeyID, u.RequestModel,
 			u.PromptTokens, u.CompletionTokens, u.CacheHitTokens, u.TotalTokens,
-			u.LatencyMs, u.Cost); err != nil {
+			u.LatencyMs, u.TotalDurationMs, u.Cost); err != nil {
 			log.Printf("[Usage] 批量写入单条失败: %v", err)
 		}
 	}
@@ -173,6 +173,7 @@ type UsageRecord struct {
 	CacheHitTokens   int       `json:"cache_hit_tokens"`
 	TotalTokens      int       `json:"total_tokens"`
 	LatencyMs        int       `json:"latency_ms"`
+	TotalDurationMs  int       `json:"total_duration_ms"`
 	Cost             float64   `json:"cost"`
 	CreatedAt        time.Time `json:"created_at"`
 }
@@ -224,9 +225,9 @@ func (r *UsageRepo) Insert(u *UsageRecord) (int64, error) {
 // insertDirect 直接写入（绕过缓冲区）
 func (r *UsageRepo) insertDirect(u *UsageRecord) (int64, error) {
 	result, err := r.db.Exec(
-		`INSERT INTO usage_records (channel_id, model_id, api_key_id, request_model, prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens, latency_ms, cost)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		u.ChannelID, u.ModelID, u.APIKeyID, u.RequestModel, u.PromptTokens, u.CompletionTokens, u.CacheHitTokens, u.TotalTokens, u.LatencyMs, u.Cost,
+		`INSERT INTO usage_records (channel_id, model_id, api_key_id, request_model, prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens, latency_ms, total_duration_ms, cost)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		u.ChannelID, u.ModelID, u.APIKeyID, u.RequestModel, u.PromptTokens, u.CompletionTokens, u.CacheHitTokens, u.TotalTokens, u.LatencyMs, u.TotalDurationMs, u.Cost,
 	)
 	if err != nil {
 		return 0, err

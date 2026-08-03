@@ -63,7 +63,7 @@ const recordColumns = [
   { title: '输出', key: 'completion_tokens' },
   { title: '缓存命中', key: 'cache_hit_tokens', render: (r: any) => r.cache_hit_tokens?.toLocaleString() || '-' },
   { title: '总 Tokens', key: 'total_tokens' },
-  { title: '延迟 (ms)', key: 'latency_ms' },
+  { title: '延时/耗时 (ms)', key: 'latency_ms', render: (r: any) => r.latency_ms != null ? `${r.latency_ms} / ${r.total_duration_ms || r.latency_ms}` : '-' },
   { title: '费用 ($)', key: 'cost', render: (r: any) => r.cost?.toFixed(6) },
   { title: '时间', key: 'created_at', render: (r: any) => formatDateTime(r.created_at) },
 ]

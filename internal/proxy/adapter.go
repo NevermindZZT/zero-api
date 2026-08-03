@@ -369,6 +369,7 @@ func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, 
 	defer resp.Body.Close()
 
 	latencyMs := int(time.Since(startTime).Milliseconds())
+	totalDurationMs := latencyMs
 	respBytes, _ := io.ReadAll(resp.Body)
 
 	// 转换响应
@@ -390,7 +391,7 @@ func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, 
 	}
 
 	// 异步记录用量
-	go pa.recordUsage(originalModel, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
+	go pa.recordUsage(originalModel, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs, totalDurationMs)
 
 	// 构建响应头
 	respHeaders := make(map[string]string)
@@ -511,7 +512,7 @@ func (pa *ProxyAdapter) rewriteSSEResponse(bodyStr, fromModel, toModel string) [
 	return nil
 }
 
-func (pa *ProxyAdapter) recordUsage(requestModel string, rawResp, convertedResp []byte, adapt adapter.Adapter, model *store.Model, channelID int64, apiKeyID *int64, latencyMs int) {
+func (pa *ProxyAdapter) recordUsage(requestModel string, rawResp, convertedResp []byte, adapt adapter.Adapter, model *store.Model, channelID int64, apiKeyID *int64, latencyMs int, totalDurationMs int) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[代理][Usage] 记录用量 panic 恢复: %v", r)
@@ -567,6 +568,7 @@ func (pa *ProxyAdapter) recordUsage(requestModel string, rawResp, convertedResp 
 		CacheHitTokens:   cacheHitTokens,
 		TotalTokens:      totalTokens,
 		LatencyMs:        latencyMs,
+		TotalDurationMs:  totalDurationMs,
 		Cost:             cost,
 	}); err != nil {
 		log.Printf("[代理][Usage] 插入记录失败: %v", err)
@@ -797,6 +799,8 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 
 	// 流式转发 SSE 数据块
 	var buf bytes.Buffer
+	var firstTokenTime time.Time
+	var gotFirstToken bool
 	streamReader := bufio.NewReaderSize(resp.Body, 64*1024)
 	done := false
 	for !done {
@@ -810,6 +814,11 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 			} else {
 				return true, fmt.Errorf("读取 SSE 流失败: %w", err)
 			}
+		}
+		// 记录首 Token 到达时间（TTFT）
+		if !gotFirstToken && len(line) > 0 {
+			firstTokenTime = time.Now()
+			gotFirstToken = true
 		}
 		if _, werr := conn.Write(line); werr != nil {
 			// 检查客户端是否断连：尝试短读 1 字节
@@ -827,11 +836,18 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 	}
 
 	// 异步记录用量
-	latencyMs := int(time.Since(startTime).Milliseconds())
+	// 流式：latency_ms = 首 Token 延时（TTFT），total_duration_ms = 总耗时
+	var latencyMs int
+	if gotFirstToken {
+		latencyMs = int(firstTokenTime.Sub(startTime).Milliseconds())
+	} else {
+		latencyMs = int(time.Since(startTime).Milliseconds())
+	}
+	totalDurationMs := int(time.Since(startTime).Milliseconds())
 	fullResp := buf.Bytes()
 	if len(fullResp) > 0 {
 		convertedResp, _ := adapt.ConvertResponse(fullResp)
-		go pa.recordUsage(originalModel, fullResp, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs)
+		go pa.recordUsage(originalModel, fullResp, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs, totalDurationMs)
 	}
 
 	return false, nil
