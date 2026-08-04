@@ -158,17 +158,39 @@ function closeMobile() {
   justify-content: center;
   flex-shrink: 0;
 }
+/* 侧边栏内容：flex 列布局，让菜单区独立滚动、footer 固定在底部
+   原实现 footer 为 absolute 定位，而 NLayoutSider 的滚动容器包裹了所有内容，
+   菜单滚动时会从 footer 底下穿过造成重叠。改为：
+   logo（固定）→ 菜单（flex:1 + overflow auto）→ footer（普通 flex 项）
+   注意：NLayoutSider 设置 native-scrollbar=false 时使用 n-scrollbar 组件，
+   内容包裹在 .n-scrollbar-content 中。必须用 height:100%（而非 min-height:100%），
+   否则 flex 容器高度被内容撑开，flex:1 无法压缩菜单实现内部滚动。 */
+:deep(.n-scrollbar-content) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+:deep(.n-menu) {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0; /* 允许 flex 子项收缩，配合 overflow 生效 */
+  /* 隐藏原生滚动条：保留滚动能力，但避免出现与 naive-ui 风格不一致的滚动条
+     侧边栏菜单滚动是自然的交互，不需要可见滚动条 */
+  scrollbar-width: none;        /* Firefox */
+  -ms-overflow-style: none;     /* IE/Edge 旧版 */
+}
+:deep(.n-menu::-webkit-scrollbar) {
+  display: none;                /* Chrome/Safari/Edge */
+}
 .sidebar-footer {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
   border-top: 1px solid var(--border-color);
   font-size: 12px;
+  flex-shrink: 0;
 }
 .project-link {
   display: inline-flex;
