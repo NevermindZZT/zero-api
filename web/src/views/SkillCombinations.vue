@@ -26,8 +26,17 @@ const comboCols = ref(3)
 const formData = ref({ name: '', description: '' })
 const editSkills = ref<number[]>([])
 
+// 详情 Drawer 响应式宽度：小屏幕（<768px）时占满宽度（两侧留 16px 边距），
+// 大屏幕固定 550px。避免固定宽度在小屏时溢出屏幕。
+const viewportWidth = ref(window.innerWidth)
+const drawerWidth = computed(() => {
+  const w = viewportWidth.value
+  return w < 768 ? Math.max(280, w - 32) : 550
+})
+
 function updateComboCols() {
   const w = window.innerWidth
+  viewportWidth.value = w
   comboCols.value = w < 480 ? 1 : w < 768 ? 2 : 3
 }
 
@@ -206,7 +215,7 @@ async function confirmAddSkill() {
     <div v-if="!combinations.length" style="text-align:center;padding:60px 0;color:#666;">暂无技能组合，点击右上角新建</div>
 
     <!-- 创建 Modal -->
-    <NModal v-model:show="showCreateModal" title="新建组合" preset="card" style="width:450px;">
+    <NModal v-model:show="showCreateModal" title="新建组合" preset="card" style="width:450px;max-width:calc(100vw - 32px);">
       <NForm :model="formData" label-placement="top">
         <NFormItem label="名称"><NInput v-model:value="formData.name" placeholder="组合名称" /></NFormItem>
         <NFormItem label="描述"><NInput v-model:value="formData.description" type="textarea" placeholder="组合描述" /></NFormItem>
@@ -215,7 +224,7 @@ async function confirmAddSkill() {
     </NModal>
 
     <!-- 编辑 Modal -->
-    <NModal v-model:show="showEditModal" title="编辑组合" preset="card" style="width:550px;">
+    <NModal v-model:show="showEditModal" title="编辑组合" preset="card" style="width:550px;max-width:calc(100vw - 32px);">
       <NForm :model="formData" label-placement="top">
         <NFormItem label="名称"><NInput v-model:value="formData.name" /></NFormItem>
         <NFormItem label="描述"><NInput v-model:value="formData.description" type="textarea" /></NFormItem>
@@ -224,7 +233,7 @@ async function confirmAddSkill() {
     </NModal>
 
     <!-- 添加技能 Modal（支持多选，已添加的技能显示为灰色） -->
-    <NModal v-model:show="showAddSkillModal" title="添加技能" preset="card" style="width:550px;">
+    <NModal v-model:show="showAddSkillModal" title="添加技能" preset="card" style="width:550px;max-width:calc(100vw - 32px);">
       <NAlert type="info" :bordered="false" style="margin-bottom:12px;">
         搜索并选择要添加到组合的技能，可多选。<strong>灰色项</strong>为已添加，不可重复选择。
       </NAlert>
@@ -232,9 +241,9 @@ async function confirmAddSkill() {
       <template #footer><NSpace justify="end"><NButton @click="showAddSkillModal=false">取消</NButton><NButton type="primary" :disabled="!addSkillSelected.length" @click="confirmAddSkill">添加 {{ addSkillSelected.length > 0 ? `(${addSkillSelected.length})` : '' }}</NButton></NSpace></template>
     </NModal>
 
-    <!-- 详情 Drawer -->
-    <NDrawer v-model:show="showDetailDrawer" :width="550" placement="right">
-      <NDrawerContent :title="`组合详情: ${editingCombo?.name || ''}`">
+    <!-- 详情 Drawer（宽度响应式，小屏占满屏避免溢出） -->
+    <NDrawer v-model:show="showDetailDrawer" :width="drawerWidth" placement="right">
+      <NDrawerContent :title="`组合详情: ${editingCombo?.name || ''}`" :native-scrollbar="false">
         <div style="margin-bottom:16px;">
           <NButton type="primary" size="small" @click="openAddSkill(addSkillComboId)">
             <template #icon><NIcon><AddSharp /></NIcon></template>添加技能

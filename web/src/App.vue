@@ -147,6 +147,46 @@ body {
 .main-content::-webkit-scrollbar-thumb:hover {
   background: rgba(148, 163, 184, 0.4);
 }
+
+/* Firefox：统一所有滚动条为细条 + 深色（scrollbar-color 需要与 ::-webkit 配合，
+   保证 Firefox 下不出现白色默认滚动条） */
+.main-content,
+.n-drawer-body-content-wrapper,
+.n-modal-body-content-wrapper,
+.n-base-select-menu,
+.n-data-table-base-table-body {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.2) transparent;
+}
+
+/* 弹层（Drawer/Modal 等）内容区的原生滚动条统一为深色细条，
+   避免出现浏览器默认白色滚动条与暗色主题不一致 */
+.n-drawer-body-content-wrapper::-webkit-scrollbar,
+.n-modal-body-content-wrapper::-webkit-scrollbar,
+.n-base-select-menu::-webkit-scrollbar,
+.n-data-table-base-table-body::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.n-drawer-body-content-wrapper::-webkit-scrollbar-track,
+.n-modal-body-content-wrapper::-webkit-scrollbar-track,
+.n-base-select-menu::-webkit-scrollbar-track,
+.n-data-table-base-table-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.n-drawer-body-content-wrapper::-webkit-scrollbar-thumb,
+.n-modal-body-content-wrapper::-webkit-scrollbar-thumb,
+.n-base-select-menu::-webkit-scrollbar-thumb,
+.n-data-table-base-table-body::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 3px;
+}
+.n-drawer-body-content-wrapper::-webkit-scrollbar-thumb:hover,
+.n-modal-body-content-wrapper::-webkit-scrollbar-thumb:hover,
+.n-base-select-menu::-webkit-scrollbar-thumb:hover,
+.n-data-table-base-table-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.4);
+}
 .content-container {
   width: 100%;
   max-width: 1400px;

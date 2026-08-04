@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, h } from 'vue'
+import { ref, onMounted, onUnmounted, h, computed } from 'vue'
 import {
   NDataTable, NButton, NModal, NForm, NFormItem, NInput, NSelect,
   NTag, NSpace, NIcon, NTree, NDrawer, NDrawerContent, NAlert, NDivider, useMessage, useDialog,
@@ -29,6 +29,14 @@ const editForm = ref({ name: '', description: '', tags: [] as string[] })
 const previewFile = ref<{ path: string; content: string } | null>(null)
 const showPreview = ref(false)
 
+// 预览 Drawer 响应式宽度：小屏幕（<768px）时占满宽度（两侧留 16px 边距），
+// 大屏幕固定 550px。避免固定宽度在小屏时溢出屏幕。
+const previewViewportWidth = ref(window.innerWidth)
+const previewDrawerWidth = computed(() => {
+  const w = previewViewportWidth.value
+  return w < 768 ? Math.max(280, w - 32) : 550
+})
+
 // 导入
 // 导入
 const importUrl = ref('')
@@ -49,7 +57,16 @@ const syncingSkills = ref<Set<number>>(new Set())
 onMounted(() => {
   loadSkills()
   loadTags()
+  window.addEventListener('resize', updatePreviewViewport)
 })
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updatePreviewViewport)
+})
+
+function updatePreviewViewport() {
+  previewViewportWidth.value = window.innerWidth
+}
 
 async function loadSkills() {
   loading.value = true
@@ -405,7 +422,7 @@ my-skill/
     </div>
 
     <!-- 编辑 Modal -->
-    <NModal v-model:show="showEditModal" title="编辑技能元数据" preset="card" style="width:500px;">
+    <NModal v-model:show="showEditModal" title="编辑技能元数据" preset="card" style="width:500px;max-width:calc(100vw - 32px);">
       <NForm :model="editForm" label-placement="top">
         <NFormItem label="名称">
           <NInput v-model:value="editForm.name" placeholder="技能标识符" />
@@ -426,7 +443,7 @@ my-skill/
     </NModal>
 
     <!-- GitHub 导入 Modal -->
-    <NModal v-model:show="showImportModal" title="从 GitHub 导入" preset="card" style="width:600px;">
+    <NModal v-model:show="showImportModal" title="从 GitHub 导入" preset="card" style="width:600px;max-width:calc(100vw - 32px);">
       <NDivider style="margin-top:0;">导入仓库（推荐）</NDivider>
       <p style="margin-bottom:8px; font-size:13px; color:#888;">
         扫描整个仓库，自动发现所有包含 <code>SKILL.md</code> 的技能目录，批量导入并创建技能组合。<br/>
@@ -459,7 +476,7 @@ my-skill/
     </NModal>
 
     <!-- ZIP 上传 Modal -->
-    <NModal v-model:show="showUploadModal" title="上传技能" preset="card" style="width:550px;">
+    <NModal v-model:show="showUploadModal" title="上传技能" preset="card" style="width:550px;max-width:calc(100vw - 32px);">
       <div style="margin-bottom:20px;">
         <h4 style="margin-bottom:8px;">📁 方式一：选择文件夹</h4>
         <p style="font-size:13px;color:#888;margin-bottom:8px;">直接选择本地的 skill 文件夹（需包含 SKILL.md）</p>
@@ -483,9 +500,9 @@ my-skill/
       </template>
     </NModal>
 
-    <!-- 文件内容预览 Drawer -->
-    <NDrawer v-model:show="showPreview" :width="550" placement="right">
-      <NDrawerContent :title="previewFile?.path">
+    <!-- 文件内容预览 Drawer（宽度响应式，小屏占满屏避免溢出） -->
+    <NDrawer v-model:show="showPreview" :width="previewDrawerWidth" placement="right">
+      <NDrawerContent :title="previewFile?.path" :native-scrollbar="false">
         <pre style="white-space:pre-wrap;font-size:13px;line-height:1.6;font-family:monospace;">{{ previewFile?.content }}</pre>
       </NDrawerContent>
     </NDrawer>
