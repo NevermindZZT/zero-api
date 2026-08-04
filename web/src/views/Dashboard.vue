@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue'
-import { NCard, NGrid, NGi, NStatistic, NDataTable, NSpin, NSpace, NProgress, NIcon, NButton, NButtonGroup, NTag } from 'naive-ui'
+import { NCard, NGrid, NGi, NStatistic, NDataTable, NSpin, NSpace, NProgress, NIcon, NButton, NButtonGroup, NTag, NDatePicker } from 'naive-ui'
 import {
   StatsChartSharp,
   SendSharp,
@@ -71,13 +71,44 @@ function now() {
 }
 
 // 时间范围切换
-const timeRange = ref<'total' | 'month' | 'week' | 'today'>('month')
+// 快捷按钮 + 自定义日期范围选择器（custom 时用 customRange 的起止日期）
+const timeRange = ref<'total' | 'month' | 'prevMonth' | 'week' | 'prevWeek' | 'today' | 'yesterday' | 'custom'>('month')
 const timeRangeOptions: { label: string; value: typeof timeRange.value }[] = [
   { label: '全部', value: 'total' },
   { label: '本月', value: 'month' },
+  { label: '上月', value: 'prevMonth' },
   { label: '本周', value: 'week' },
+  { label: '上周', value: 'prevWeek' },
   { label: '今日', value: 'today' },
+  { label: '昨日', value: 'yesterday' },
 ]
+
+// 自定义日期范围（时间戳对）
+const customRange = ref<[number, number] | null>(null)
+
+// 设置快捷范围时清除自定义范围
+function setTimeRange(val: typeof timeRange.value) {
+  customRange.value = null
+  timeRange.value = val
+}
+
+// 自定义范围变更：切换到 custom 模式
+function onCustomRangeChange(value: [number, number] | null) {
+  if (value) {
+    customRange.value = value
+    timeRange.value = 'custom'
+  }
+}
+
+// 根据起止日期推断图表粒度
+function inferGranularity(startStr: string, endStr: string): 'hour' | 'day' | 'month' {
+  const startT = new Date(startStr).getTime()
+  const endT = new Date(endStr).getTime()
+  const days = Math.round((endT - startT) / 86400000) + 1
+  if (days <= 3) return 'hour'   // 3 天内：按小时
+  if (days <= 62) return 'day'   // ~2 个月内：按天
+  return 'month'                 // 更长：按月
+}
 
 // 客户端时区偏移（分钟），传给后端做时区转换
 const tzOffset = -new Date().getTimezoneOffset()
@@ -86,27 +117,67 @@ const tzOffset = -new Date().getTimezoneOffset()
 function getRangeParams(range: typeof timeRange.value) {
   const today = new Date()
   const end = formatLocalDate(today)
-  if (range === 'today') return { start: end, end, granularity: 'hour' as const }
-  if (range === 'month') {
-    const start = formatLocalDate(new Date(today.getFullYear(), today.getMonth(), 1))
-    return { start, end, granularity: 'day' as const }
+  if (range === 'custom' && customRange.value) {
+    const startStr = formatLocalDate(new Date(customRange.value[0]))
+    const endStr = formatLocalDate(new Date(customRange.value[1]))
+    return { start: startStr, end: endStr, granularity: inferGranularity(startStr, endStr) }
   }
-  if (range === 'week') {
-    const day = today.getDay()
-    const diff = day === 0 ? 6 : day - 1
-    const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-    monday.setDate(monday.getDate() - diff)
-    // 周日 = 周一 + 6
-    const sunday = new Date(monday)
-    sunday.setDate(monday.getDate() + 6)
-    return { start: formatLocalDate(monday), end: formatLocalDate(sunday), granularity: 'day' as const }
+  switch (range) {
+    case 'today':
+      return { start: end, end, granularity: 'hour' as const }
+    case 'yesterday': {
+      const y = new Date(today)
+      y.setDate(y.getDate() - 1)
+      const ds = formatLocalDate(y)
+      return { start: ds, end: ds, granularity: 'hour' as const }
+    }
+    case 'month': {
+      const start = formatLocalDate(new Date(today.getFullYear(), today.getMonth(), 1))
+      return { start, end, granularity: 'day' as const }
+    }
+    case 'prevMonth': {
+      // 上月 1 日 = 本月 1 日减一个月；上月最后一天 = 本月 0 日
+      const first = new Date(today.getFullYear(), today.getMonth() - 1, 1)
+      const last = new Date(today.getFullYear(), today.getMonth(), 0)
+      return { start: formatLocalDate(first), end: formatLocalDate(last), granularity: 'day' as const }
+    }
+    case 'week': {
+      const day = today.getDay()
+      const diff = day === 0 ? 6 : day - 1
+      const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+      monday.setDate(monday.getDate() - diff)
+      // 周日 = 周一 + 6
+      const sunday = new Date(monday)
+      sunday.setDate(monday.getDate() + 6)
+      return { start: formatLocalDate(monday), end: formatLocalDate(sunday), granularity: 'day' as const }
+    }
+    case 'prevWeek': {
+      const day = today.getDay()
+      const diff = day === 0 ? 6 : day - 1
+      // 本周一
+      const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+      monday.setDate(monday.getDate() - diff)
+      // 上周一 = 本周一 - 7
+      const prevMonday = new Date(monday)
+      prevMonday.setDate(monday.getDate() - 7)
+      const prevSunday = new Date(prevMonday)
+      prevSunday.setDate(prevMonday.getDate() + 6)
+      return { start: formatLocalDate(prevMonday), end: formatLocalDate(prevSunday), granularity: 'day' as const }
+    }
+    default: {
+      // total: 近 12 个月，按月统计
+      const start = formatLocalDate(new Date(today.getFullYear(), today.getMonth() - 11, 1))
+      return { start, end, granularity: 'month' as const }
+    }
   }
-  // total: 近 12 个月，按月统计
-  const start = formatLocalDate(new Date(today.getFullYear(), today.getMonth() - 11, 1))
-  return { start, end, granularity: 'month' as const }
 }
 
 const rangeLabel = computed(() => {
+  if (timeRange.value === 'custom' && customRange.value) {
+    const s = formatLocalDate(new Date(customRange.value[0]))
+    const e = formatLocalDate(new Date(customRange.value[1]))
+    return `${s} ~ ${e}`
+  }
   const opt = timeRangeOptions.find(o => o.value === timeRange.value)
   return opt?.label || '全部'
 })
@@ -295,8 +366,17 @@ function formatTokens(n: number) {
         </div>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <NButtonGroup size="tiny">
-          <NButton v-for="opt in timeRangeOptions" :key="opt.value" :type="timeRange === opt.value ? 'primary' : 'default'" @click="timeRange = opt.value">{{ opt.label }}</NButton>
+          <NButton v-for="opt in timeRangeOptions" :key="opt.value" :type="timeRange === opt.value ? 'primary' : 'default'" @click="setTimeRange(opt.value)">{{ opt.label }}</NButton>
         </NButtonGroup>
+        <NDatePicker
+          v-model:value="customRange"
+          type="daterange"
+          size="small"
+          clearable
+          :is-date-disabled="(ts: number) => ts > Date.now()"
+          style="width: 240px"
+          @update:value="onCustomRangeChange"
+        />
         <span v-if="lastUpdated" style="font-size:12px;color:#64748b">
           上次更新: {{ lastUpdated }}
           <span style="color:#22c55e;margin-left:4px">● 15s 自动刷新</span>
