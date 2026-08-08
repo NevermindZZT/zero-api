@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { h, onMounted, ref } from 'vue'
+import { h, onMounted, ref, computed } from 'vue'
 import {
   NButton, NCard, NDataTable, NModal, NForm, NFormItem,
   NInput, NInputNumber, NSelect, NSpace, NTag, NPopconfirm, NMessageProvider,
@@ -18,11 +18,37 @@ const syncingId = ref<number | null>(null)
 const form = ref({ name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99, use_proxy: false, failover_enabled: true, test_model: '' })
 
 const channelTypes = [
-  { label: 'OpenAI 兼容', value: 'openai' },
-  { label: 'Anthropic', value: 'anthropic' },
-  { label: 'Google Gemini', value: 'gemini' },
-  { label: 'OpenRouter', value: 'openrouter' },
+  { label: 'OpenAI 兼容 (chat/completions)', value: 'openai' },
+  { label: 'Anthropic (messages)', value: 'anthropic' },
+  { label: 'Google Gemini (generateContent)', value: 'gemini' },
+  { label: 'OpenAI Responses (responses)', value: 'responses' },
 ]
+
+// 规范化 Base URL（与后端 normalizeBaseURL 保持一致）
+function normalizeBaseURL(url: string) {
+  if (!url) return ''
+  let u = url.trim().replace(/\/+$/, '')
+  if (u.endsWith('/v1beta')) u = u.slice(0, -7)
+  else if (u.endsWith('/v1')) u = u.slice(0, -3)
+  return u
+}
+
+// 根据接口类型 + Base URL 计算完整的上游请求 URL
+const fullURL = computed(() => {
+  const base = normalizeBaseURL(form.value.base_url)
+  if (!base) return ''
+  switch (form.value.type) {
+    case 'anthropic':
+      return `${base}/v1/messages`
+    case 'gemini':
+      // 实际请求会拼接模型名，流式使用 streamGenerateContent
+      return `${base}/v1beta/models/{model}:generateContent`
+    case 'responses':
+      return `${base}/v1/responses`
+    default:
+      return `${base}/v1/chat/completions`
+  }
+})
 
 const columns = [
   { title: 'ID', key: 'id', width: 60 },
@@ -196,6 +222,9 @@ async function toggleChannel(ch: any) {
           </NFormItem>
           <NFormItem label="Base URL">
             <NInput v-model:value="form.base_url" placeholder="https://api.deepseek.com" />
+          </NFormItem>
+          <NFormItem v-if="fullURL" label="完整 URL" label-description="将请求到的上游地址">
+            <NInput :value="fullURL" readonly :bordered="false" style="color:#22c55e;font-size:13px" />
           </NFormItem>
           <NFormItem label="API Key">
             <NInput

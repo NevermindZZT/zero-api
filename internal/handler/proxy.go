@@ -195,7 +195,7 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 	c.Data(http.StatusOK, "application/json", body)
 }
 
-// ChatCompletion 处理聊天补全请求（核心中转）
+// ChatCompletion 处理 OpenAI 兼容聊天补全请求（下游 OpenAI 协议）
 func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 	bodyBytes, err := io.ReadAll(c.Request.Body)
 	if err != nil {
@@ -203,12 +203,200 @@ func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 		return
 	}
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	h.handleCompletion(c, bodyBytes, adapter.NewDownstreamAdapter("openai"))
+}
 
+// MessagesCompletion 处理 Anthropic Messages 请求（下游 Anthropic 协议）
+func (h *ProxyHandler) MessagesCompletion(c *gin.Context) {
+	bodyBytes, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "读取请求体失败"})
+		return
+	}
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	h.handleCompletion(c, bodyBytes, adapter.NewDownstreamAdapter("anthropic"))
+}
+
+// ResponsesCompletion 处理 OpenAI Responses API 请求（下游 Responses 协议）
+func (h *ProxyHandler) ResponsesCompletion(c *gin.Context) {
+	bodyBytes, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "读取请求体失败"})
+		return
+	}
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	h.handleCompletion(c, bodyBytes, adapter.NewDownstreamAdapter("responses"))
+}
+
+// PassthroughEndpoint 功能类接口透传（embeddings / images / audio / moderations / batches 等）
+// 这些接口使用 OpenAI 标准格式且各供应商兼容，无需协议转换：
+//   - 请求体原样转发到上游（OpenAI 兼容渠道）
+//   - 响应原样返回
+//   - 仅支持 openai 类型渠道（协议转换类渠道不适用）
+func (h *ProxyHandler) PassthroughEndpoint(c *gin.Context) {
+	bodyBytes, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "读取请求体失败"})
+		return
+	}
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+	// 解析请求体获取模型名
+	var reqBody struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(bodyBytes, &reqBody); err != nil || reqBody.Model == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 model 字段"})
+		return
+	}
+
+	// 验证并解析 API Key
+	apiKeyID, err := h.resolveAndValidateAPIKey(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+
+	allModels, err := h.modelRepo.List(0)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询模型失败"})
+		return
+	}
+
+	// 查找启用的匹配模型（仅 openai 类型渠道支持功能类接口透传）
+	var candidates []*store.Model
+	for i, m := range allModels {
+		if m.ModelID == reqBody.Model && m.Status == "active" {
+			ch, cerr := h.channelRepo.GetByID(m.ChannelID)
+			if cerr == nil && ch.Status == "active" && ch.Type == "openai" {
+				candidates = append(candidates, &allModels[i])
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("模型 %s 未找到、未启用或渠道类型不支持功能类接口（需 OpenAI 兼容渠道）", reqBody.Model)})
+		return
+	}
+
+	proxyConfig := h.getProxyConfig()
+	requestTimeout := time.Duration(proxyConfig.RequestTimeoutSeconds) * time.Second
+
+	// 按优先级依次尝试
+	var lastErr error
+	for _, matchedModel := range candidates {
+		ch, err := h.channelRepo.GetByID(matchedModel.ChannelID)
+		if err != nil {
+			lastErr = fmt.Errorf("渠道 %d 获取失败: %w", matchedModel.ChannelID, err)
+			continue
+		}
+		if ch.Status != "active" {
+			continue
+		}
+
+		if err := h.tryForwardPassthrough(c, bodyBytes, matchedModel, ch, apiKeyID, requestTimeout, proxyConfig); err == nil {
+			h.breaker.RecordSuccess(ch.ID)
+			return
+		} else {
+			lastErr = err
+			h.breaker.RecordFailure(ch.ID)
+			log.Printf("[透传] 模型 %s 渠道 %s 失败，尝试下一渠道: %v", reqBody.Model, ch.Name, err)
+		}
+	}
+
+	c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("所有渠道均失败: %v", lastErr)})
+}
+
+// tryForwardPassthrough 功能类接口透传：请求体原样转发，响应原样返回
+func (h *ProxyHandler) tryForwardPassthrough(c *gin.Context, bodyBytes []byte, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, requestTimeout time.Duration, proxyConfig *store.ProxyConfigData) error {
+	adapt := adapter.NewAdapter(ch.Type)
+
+	// 功能类接口上游 URL 与聊天不同：/v1/embeddings、/v1/images/... 等
+	// 客户端请求路径即上游路径（OpenAI 兼容格式）
+	upstreamURL := adapt.GetChatURL(ch.BaseURL)
+	_ = upstreamURL
+
+	// 构造上游 URL：base + 客户端请求路径（保留 /v1 之后的路径）
+	path := c.Request.URL.Path
+	base := strings.TrimRight(ch.BaseURL, "/")
+	if strings.HasSuffix(base, "/v1") {
+		base = strings.TrimSuffix(base, "/v1")
+	}
+	upstreamURL = base + path
+
+	startTime := time.Now()
+
+	var cancel context.CancelFunc
+	upstreamCtx, cancel := context.WithTimeout(context.Background(), requestTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(upstreamCtx, "POST", upstreamURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("构造上游请求失败: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// 认证头
+	if ch.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+ch.APIKey)
+	} else if auth := c.GetHeader("Authorization"); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+
+	var client *http.Client
+	if ch.UseProxy && proxyConfig.ForwardProxyURL != "" {
+		client, err = upstream.NewHTTPClientWithProxyAndTimeout(
+			proxyConfig.ForwardProxyURL,
+			proxyConfig.ForwardProxyUser,
+			proxyConfig.ForwardProxyPass,
+			requestTimeout,
+		)
+		if err != nil {
+			log.Printf("[透传] 渠道 %s 代理配置错误，回退直连: %v", ch.Name, err)
+		}
+	}
+	if client == nil {
+		client = upstream.NewHTTPClientWithTimeout(requestTimeout)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("上游请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if upstream.ShouldFailoverStatus(resp.StatusCode) {
+		respBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("上游返回可切换错误状态 %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	latencyMs := int(time.Since(startTime).Milliseconds())
+	totalDurationMs := latencyMs
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("读取上游响应失败: %w", err)
+	}
+
+	// 记录用量（功能类接口响应可能含 usage，尝试提取）
+	go h.recordUsage(matchedModel.ModelID, respBytes, respBytes, adapt, matchedModel, ch.ID, apiKeyID, latencyMs, totalDurationMs)
+
+	// 返回响应（过滤逐跳头）
+	filteredHeaders := filterHopByHop(resp.Header)
+	for k, vals := range filteredHeaders {
+		for _, v := range vals {
+			c.Header(k, v)
+		}
+	}
+	c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), respBytes)
+	return nil
+}
+
+// handleCompletion 核心中转逻辑（下游协议 → 规范格式 → 上游渠道）
+func (h *ProxyHandler) handleCompletion(c *gin.Context, rawBody []byte, downstream adapter.DownstreamAdapter) {
 	var reqBody struct {
 		Model  string `json:"model"`
 		Stream bool   `json:"stream"`
 	}
-	if err := json.Unmarshal(bodyBytes, &reqBody); err != nil || reqBody.Model == "" {
+	if err := json.Unmarshal(rawBody, &reqBody); err != nil || reqBody.Model == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 model 字段"})
 		return
 	}
@@ -286,7 +474,7 @@ func (h *ProxyHandler) ChatCompletion(c *gin.Context) {
 			}
 		}
 
-		if err := h.tryForward(c, bodyBytes, matchedModel, ch, apiKeyID, requestTimeout, proxyConfig, reqBody.Stream); err == nil {
+		if err := h.tryForward(c, rawBody, matchedModel, ch, apiKeyID, requestTimeout, proxyConfig, reqBody.Stream, downstream); err == nil {
 			// 成功，清除熔断状态
 			h.breaker.RecordSuccess(ch.ID)
 			return
@@ -361,6 +549,12 @@ func (h *ProxyHandler) recordUsage(requestModel string, rawResp, convertedResp [
 		usage, err = adapt.ExtractUsage(rawResp)
 	}
 	if err != nil {
+		// 兜底：rawResp 为 OpenAI 规范格式（SSE 或完整 JSON）时用 OpenAI 适配器提取
+		if u, uerr := (&adapter.OpenAIAdapter{}).ExtractUsage(rawResp); uerr == nil {
+			usage, err = u, nil
+		}
+	}
+	if err != nil {
 		log.Printf("[Usage] ExtractUsage 失败 (model=%s): %v — 仍记录请求", requestModel, err)
 	} else {
 		promptTokens = usage.PromptTokens
@@ -407,20 +601,42 @@ func (h *ProxyHandler) recordUsage(requestModel string, rawResp, convertedResp [
 }
 
 // tryForward 尝试将请求转发到指定渠道，成功返回 nil，失败返回 error
-func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, requestTimeout time.Duration, proxyConfig *store.ProxyConfigData, isStream bool) error {
+// rawBody 为客户端原始请求（下游协议格式），downstream 为下游协议适配器
+func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, requestTimeout time.Duration, proxyConfig *store.ProxyConfigData, isStream bool, downstream adapter.DownstreamAdapter) error {
 	// 根据渠道类型选择适配器
 	adapt := adapter.NewAdapter(ch.Type)
 
-	// 转换请求体（如果需要）
-	convertedBody, err := adapt.ConvertRequest(matchedModel.ModelID, bodyBytes)
-	if err != nil {
-		return fmt.Errorf("请求格式转换失败: %w", err)
+	// 下游协议与上游渠道协议一致时直接透传（避免规范格式往返转换丢失协议原生特性）
+	if downstream.Protocol() == ch.Type {
+		downstream = adapter.NewPassthroughDownstreamAdapter(ch.Type)
+	}
+
+	// 请求体转换：下游协议 → 规范格式 → 上游格式
+	// 透传模式下不做任何转换，原样转发
+	var bodyBytes []byte
+	if downstream.IsPassthrough() {
+		bodyBytes = rawBody
+	} else {
+		canonicalBody, err := downstream.RequestToCanonical(rawBody)
+		if err != nil {
+			return fmt.Errorf("下游请求转换失败: %w", err)
+		}
+		convertedBody, err := adapt.ConvertRequest(matchedModel.ModelID, canonicalBody)
+		if err != nil {
+			return fmt.Errorf("请求格式转换失败: %w", err)
+		}
+		bodyBytes = convertedBody
 	}
 
 	// 构造上游请求
 	upstreamURL := adapt.GetChatURL(ch.BaseURL)
 	if ch.Type == "gemini" {
-		upstreamURL = fmt.Sprintf("%s/%s:generateContent", upstreamURL, matchedModel.ModelID)
+		// 流式请求使用 :streamGenerateContent 端点，非流式使用 :generateContent
+		endpoint := "generateContent"
+		if isStream {
+			endpoint = "streamGenerateContent"
+		}
+		upstreamURL = fmt.Sprintf("%s/%s:%s", upstreamURL, matchedModel.ModelID, endpoint)
 		if ch.APIKey != "" {
 			upstreamURL = fmt.Sprintf("%s?key=%s", upstreamURL, ch.APIKey)
 		}
@@ -438,7 +654,7 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 		upstreamCtx, cancel = context.WithTimeout(context.Background(), requestTimeout)
 		defer cancel()
 	}
-	req, err := http.NewRequestWithContext(upstreamCtx, "POST", upstreamURL, bytes.NewReader(convertedBody))
+	req, err := http.NewRequestWithContext(upstreamCtx, "POST", upstreamURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return fmt.Errorf("构造上游请求失败: %w", err)
 	}
@@ -501,7 +717,7 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 
 	if isStream {
 		// 流式转发
-		err = h.streamResponse(c, resp, adapt, matchedModel, ch, apiKeyID, startTime, requestTimeout)
+		err = h.streamResponse(c, resp, adapt, matchedModel, ch, apiKeyID, startTime, requestTimeout, downstream)
 		if err != nil {
 			log.Printf("[流式] 模型 %s 渠道 %s 流式转发错误: %v", matchedModel.ModelID, ch.Name, err)
 			// 如果已经向客户端写入任何数据（响应头或 body），
@@ -523,10 +739,18 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 		return fmt.Errorf("读取上游响应失败: %w", err)
 	}
 
-	// 转换响应
-	convertedResp, err := adapt.ConvertResponse(respBytes)
-	if err != nil {
+	// 转换响应（上游格式 → 规范格式 → 下游格式；透传模式原样返回）
+	var convertedResp []byte
+	if downstream.IsPassthrough() {
 		convertedResp = respBytes
+	} else {
+		convertedResp, err = adapt.ConvertResponse(respBytes)
+		if err != nil {
+			convertedResp = respBytes
+		}
+		if downstreamResp, derr := downstream.ResponseToDownstream(convertedResp); derr == nil {
+			convertedResp = downstreamResp
+		}
 	}
 
 	// 记录使用信息
@@ -544,7 +768,7 @@ func (h *ProxyHandler) tryForward(c *gin.Context, bodyBytes []byte, matchedModel
 }
 
 // streamResponse 流式转发上游 SSE 响应
-func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt adapter.Adapter, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, startTime time.Time, requestTimeout time.Duration) error {
+func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt adapter.Adapter, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, startTime time.Time, requestTimeout time.Duration, downstream adapter.DownstreamAdapter) error {
 	// 设置响应头（过滤逐跳头）
 	filteredHeaders := filterHopByHop(resp.Header)
 	for k, vals := range filteredHeaders {
@@ -591,9 +815,18 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 		idleTimer.Reset(requestTimeout)
 	}
 
+	// 流式转换器（上游 SSE → 规范 SSE → 下游 SSE）
+	// 上游转换器：上游协议 → OpenAI 规范格式（OpenAI 兼容上游或透传时为 nil，原样转发）
+	var upConverter adapter.StreamConverter
+	if !downstream.IsPassthrough() {
+		upConverter = adapt.NewStreamConverter()
+	}
+	// 下游转换器：规范格式 → 下游协议（透传时恒等）
+	downConverter := downstream.NewStreamConverter()
+
 	// 使用 bufio.Reader 逐行读取
 	reader := bufio.NewReaderSize(resp.Body, 64*1024)
-	var buf bytes.Buffer
+	var rawBuf bytes.Buffer // 原始上游字节（规范格式，用于用量提取）
 	var firstTokenTime time.Time
 	var gotFirstToken bool
 
@@ -611,7 +844,7 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 
 		// 成功收到数据，重置空闲计时器
 		safeResetIdle()
-		buf.Write(line)
+		rawBuf.Write(line)
 
 		// 记录首 Token 到达时间（TTFT）
 		if !gotFirstToken {
@@ -619,20 +852,64 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 			gotFirstToken = true
 		}
 
-		// 写入客户端
-		if _, werr := c.Writer.Write(line); werr != nil {
-			// 检查是否客户端断连（不触发熔断）
-			if c.Request.Context().Err() != nil {
-				log.Printf("[流式] 客户端断开连接 (模型=%s, 渠道=%s)", matchedModel.ModelID, ch.Name)
-				return nil
+		// 上游协议 → 规范格式（逐行）
+		var canonicalLines [][]byte
+		if upConverter != nil {
+			if out := upConverter.Convert(line); out != nil && len(out) > 0 {
+				canonicalLines = bytes.SplitAfter(out, []byte("\n"))
 			}
-			return fmt.Errorf("写入流式响应失败: %w", werr)
+		} else {
+			canonicalLines = [][]byte{line}
 		}
-		flusher.Flush()
+
+		// 规范格式 → 下游协议，写回客户端
+		for _, cl := range canonicalLines {
+			if len(cl) == 0 {
+				continue
+			}
+			if out := downConverter.Convert(cl); out != nil && len(out) > 0 {
+				if _, werr := c.Writer.Write(out); werr != nil {
+					// 检查是否客户端断连（不触发熔断）
+					if c.Request.Context().Err() != nil {
+						log.Printf("[流式] 客户端断开连接 (模型=%s, 渠道=%s)", matchedModel.ModelID, ch.Name)
+						return nil
+					}
+					return fmt.Errorf("写入流式响应失败: %w", werr)
+				}
+				flusher.Flush()
+			}
+		}
 
 		if err == io.EOF {
 			break
 		}
+	}
+
+	// 流结束：上游转换器收尾（产生规范 [DONE]/usage 等）→ 下游转换器
+	tailLines := [][]byte{}
+	if upConverter != nil {
+		if tail := upConverter.Finish(); tail != nil && len(tail) > 0 {
+			tailLines = bytes.SplitAfter(tail, []byte("\n"))
+			rawBuf.Write(tail)
+		}
+	}
+	for _, tl := range tailLines {
+		if len(tl) == 0 {
+			continue
+		}
+		if out := downConverter.Convert(tl); out != nil && len(out) > 0 {
+			if _, werr := c.Writer.Write(out); werr != nil {
+				return fmt.Errorf("写入流式收尾事件失败: %w", werr)
+			}
+			flusher.Flush()
+		}
+	}
+	// 下游转换器收尾（如 Anthropic message_stop / Responses response.completed）
+	if tail := downConverter.Finish(); tail != nil && len(tail) > 0 {
+		if _, werr := c.Writer.Write(tail); werr != nil {
+			return fmt.Errorf("写入流式收尾事件失败: %w", werr)
+		}
+		flusher.Flush()
 	}
 
 	// 记录使用信息
@@ -644,7 +921,7 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 		latencyMs = int(time.Since(startTime).Milliseconds())
 	}
 	totalDurationMs := int(time.Since(startTime).Milliseconds())
-	fullRespBytes := buf.Bytes()
+	fullRespBytes := rawBuf.Bytes()
 	if len(fullRespBytes) > 0 {
 		convertedResp, _ := adapt.ConvertResponse(fullRespBytes)
 		go h.recordUsage(matchedModel.ModelID, fullRespBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs, totalDurationMs)

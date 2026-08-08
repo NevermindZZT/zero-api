@@ -13,10 +13,11 @@ zero-api 是一个基于 Go 的个人大模型 API 中转服务，集 **API 中�
 ## 功能特性
 
 ### 🔀 API 中转
-- 兼容 OpenAI `/v1/chat/completions` 接口
+- 兼容 OpenAI `/v1/chat/completions`、Anthropic `/v1/messages`、OpenAI Responses `/v1/responses` 接口
 - 自动按模型名路由到对应上游渠道
-- 支持 **OpenAI 兼容**、**Anthropic**、**Google Gemini** 三种协议适配
-- 请求/响应格式自动转换
+- 上游支持 **OpenAI 兼容**、**Anthropic**、**Google Gemini**、**OpenAI Responses** 四种协议适配
+- 请求/响应格式自动转换（下游协议 × 上游协议 全组合，协议一致时原样透传）
+- 功能类接口透传：`/v1/embeddings`、`/v1/images/*`、`/v1/audio/*`、`/v1/moderations`、`/v1/batches`
 
 ### 🛡️ MITM 代理
 - 集成 ModelProxy 的代理拦截功能

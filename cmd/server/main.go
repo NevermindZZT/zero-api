@@ -168,6 +168,19 @@ func main() {
 		v1.GET("/models", proxyH.ListLocalModels)
 		v1.POST("/chat/completions", proxyH.ChatCompletion)
 		v1.POST("/completions", proxyH.ChatCompletion)
+		// Anthropic Messages 协议入口（下游）
+		v1.POST("/messages", proxyH.MessagesCompletion)
+		// OpenAI Responses API 协议入口（下游）
+		v1.POST("/responses", proxyH.ResponsesCompletion)
+		// 功能类接口透传（embeddings / images / audio / moderations / batches）
+		v1.POST("/embeddings", proxyH.PassthroughEndpoint)
+		v1.POST("/images/generations", proxyH.PassthroughEndpoint)
+		v1.POST("/images/edits", proxyH.PassthroughEndpoint)
+		v1.POST("/audio/speech", proxyH.PassthroughEndpoint)
+		v1.POST("/audio/transcriptions", proxyH.PassthroughEndpoint)
+		v1.POST("/audio/translations", proxyH.PassthroughEndpoint)
+		v1.POST("/moderations", proxyH.PassthroughEndpoint)
+		v1.POST("/batches", proxyH.PassthroughEndpoint)
 	}
 
 	// 前端静态文件（SPA 路由兜底）

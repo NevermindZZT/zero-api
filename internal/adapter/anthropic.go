@@ -141,10 +141,16 @@ func (a *AnthropicAdapter) ExtractUsage(body []byte) (*Usage, error) {
 	return nil, fmt.Errorf("无法提取用量信息")
 }
 
+// NewStreamConverter 将 Anthropic 上游 SSE 流转换为 OpenAI 规范格式 SSE
+func (a *AnthropicAdapter) NewStreamConverter() StreamConverter {
+	return &anthropicUpstreamStreamConverter{}
+}
+
 // 请求/响应结构体
 type OpenAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string           `json:"role"`
+	Content   string           `json:"content"`
+	ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
 }
 
 type AnthropicRequest struct {

@@ -29,6 +29,10 @@ type Adapter interface {
 
 	// 从响应中提取用量信息
 	ExtractUsage(body []byte) (*Usage, error)
+
+	// NewStreamConverter 返回将上游 SSE 流转换为 OpenAI 规范格式 SSE 的转换器
+	// 上游协议本身就是 OpenAI 兼容格式（规范格式）时返回 nil，表示无需转换、原样透传
+	NewStreamConverter() StreamConverter
 }
 
 // ModelInfo 上游模型信息
@@ -49,6 +53,11 @@ func NewAdapter(channelType string) Adapter {
 		return &AnthropicAdapter{}
 	case "gemini":
 		return &GeminiAdapter{}
+	case "responses":
+		return &ResponsesAdapter{}
+	case "openai", "openrouter":
+		// openrouter 为 OpenAI 兼容协议（历史遗留值，已并入 openai）
+		return &OpenAIAdapter{}
 	default:
 		return &OpenAIAdapter{}
 	}

@@ -154,6 +154,11 @@ func (a *OpenAIAdapter) ConvertResponse(body []byte) ([]byte, error) {
 	return body, nil
 }
 
+// NewStreamConverter OpenAI 兼容协议本身就是规范格式，无需转换
+func (a *OpenAIAdapter) NewStreamConverter() StreamConverter {
+	return nil
+}
+
 // extractUsageFromJSON 从单一 JSON 对象中提取用量
 func extractUsageFromJSON(data []byte) (*Usage, error) {
 	var resp struct {

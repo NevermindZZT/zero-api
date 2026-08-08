@@ -133,6 +133,11 @@ func (a *GeminiAdapter) ExtractUsage(body []byte) (*Usage, error) {
 	return nil, fmt.Errorf("无法提取用量信息")
 }
 
+// NewStreamConverter 将 Gemini 上游 SSE 流转换为 OpenAI 规范格式 SSE
+func (a *GeminiAdapter) NewStreamConverter() StreamConverter {
+	return &geminiUpstreamStreamConverter{}
+}
+
 type GeminiRequest struct {
 	Contents []GeminiContent `json:"contents"`
 }

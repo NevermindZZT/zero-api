@@ -223,6 +223,8 @@ func (d *DB) migrate() error {
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN github_token TEXT DEFAULT ''`)
 	// 迁移：添加 commit_sha 字段到 skills 表（用于 GitHub 更新追踪）
 	d.Exec(`ALTER TABLE skills ADD COLUMN commit_sha TEXT DEFAULT ''`)
+	// 迁移：渠道类型规范化 — openrouter 与 openai 同为 OpenAI 兼容协议，统一并入 openai
+	d.Exec(`UPDATE channels SET type = 'openai' WHERE type = 'openrouter'`)
 	// 索引：Skill 标签查询
 	d.Exec(`CREATE INDEX IF NOT EXISTS idx_skill_tags_skill ON skill_tags(skill_id)`)
 	d.Exec(`CREATE INDEX IF NOT EXISTS idx_skill_tags_tag ON skill_tags(tag)`)

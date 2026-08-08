@@ -351,7 +351,7 @@ func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, 
 			req.Header.Set("x-api-key", key)
 			req.Header.Set("anthropic-version", "2023-06-01")
 		}
-	case "openai", "openrouter":
+	case "openai", "openrouter", "responses":
 		if ch.APIKey != "" {
 			req.Header.Set("Authorization", "Bearer "+ch.APIKey)
 		} else if auth, ok := headers["authorization"]; ok {
@@ -707,7 +707,8 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 	// 构造上游请求
 	upstreamURL := adapt.GetChatURL(ch.BaseURL)
 	if ch.Type == "gemini" {
-		upstreamURL = fmt.Sprintf("%s/%s:generateContent", upstreamURL, matchedModel.ModelID)
+		// 流式请求使用 :streamGenerateContent 端点
+		upstreamURL = fmt.Sprintf("%s/%s:streamGenerateContent", upstreamURL, matchedModel.ModelID)
 		if ch.APIKey != "" {
 			upstreamURL = fmt.Sprintf("%s?key=%s", upstreamURL, ch.APIKey)
 		}
@@ -729,7 +730,7 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 			req.Header.Set("x-api-key", key)
 			req.Header.Set("anthropic-version", "2023-06-01")
 		}
-	case "openai", "openrouter":
+	case "openai", "openrouter", "responses":
 		if ch.APIKey != "" {
 			req.Header.Set("Authorization", "Bearer "+ch.APIKey)
 		} else if auth, ok := headers["authorization"]; ok {
