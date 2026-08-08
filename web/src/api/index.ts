@@ -61,21 +61,20 @@ export const chatTestApi = {
     headers: { Authorization: `Bearer ${apiKey}` },
     timeout: 30000,
   }),
-  chat: (apiKey: string, model: string, content: string) => axios.post('/v1/chat/completions', {
-    model,
-    messages: [
-      { role: 'user', content },
-    ],
-  }, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-    timeout: 120000,
-  }),
-  chatStream: (apiKey: string, model: string, content: string, onData: (text: string) => void, onDone: () => void, onError: (err: string) => void): AbortController => {
+  chat: (apiKey: string, model: string, content: string, protocol: string = 'openai') => {
+    const { url, body } = buildChatRequest(model, content, protocol, false)
+    return axios.post(url, body, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      timeout: 120000,
+    })
+  },
+  chatStream: (apiKey: string, model: string, content: string, protocol: string, onData: (text: string) => void, onDone: () => void, onError: (err: string) => void): AbortController => {
+    const { url, body } = buildChatRequest(model, content, protocol, true)
     const controller = new AbortController()
-    fetch('/v1/chat/completions', {
+    fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model, messages: [{ role: 'user', content }], stream: true }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     }).then(async (response) => {
       if (!response.ok) {
@@ -100,7 +99,7 @@ export const chatTestApi = {
             const parsed = JSON.parse(payload)
             // OpenAI SSE: choices[0].delta.content
             const delta = parsed?.choices?.[0]?.delta?.content
-            // Anthropic SSE: delta.text
+            // Anthropic / Responses SSE: delta.text
             const text = parsed?.delta?.text
             const content = delta || text || ''
             if (content) onData(content)
@@ -113,6 +112,28 @@ export const chatTestApi = {
     })
     return controller
   },
+}
+
+// 根据协议构建 Chat 测试请求（URL + Body）
+function buildChatRequest(model: string, content: string, protocol: string, stream: boolean): { url: string; body: any } {
+  const base = { model }
+  switch (protocol) {
+    case 'anthropic':
+      return {
+        url: '/v1/messages',
+        body: { ...base, max_tokens: 4096, messages: [{ role: 'user', content }], ...(stream ? { stream: true } : {}) },
+      }
+    case 'responses':
+      return {
+        url: '/v1/responses',
+        body: { ...base, input: [{ role: 'user', content }], ...(stream ? { stream: true } : {}) },
+      }
+    default: // openai
+      return {
+        url: '/v1/chat/completions',
+        body: { ...base, messages: [{ role: 'user', content }], ...(stream ? { stream: true } : {}) },
+      }
+  }
 }
 
 // ===== Usage API =====

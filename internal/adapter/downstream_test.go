@@ -9,6 +9,25 @@ import (
 
 // ===== 透传适配器 =====
 
+func TestProtocolURL(t *testing.T) {
+	cases := []struct {
+		base     string
+		protocol string
+		want     string
+	}{
+		{"https://api.openai.com", "openai", "https://api.openai.com/v1/chat/completions"},
+		{"https://api.openai.com/v1", "openai", "https://api.openai.com/v1/chat/completions"},
+		{"https://api.anthropic.com", "anthropic", "https://api.anthropic.com/v1/messages"},
+		{"https://api.openai.com", "responses", "https://api.openai.com/v1/responses"},
+		{"https://api.example.com/", "openai", "https://api.example.com/v1/chat/completions"},
+	}
+	for _, c := range cases {
+		if got := ProtocolURL(c.base, c.protocol); got != c.want {
+			t.Errorf("ProtocolURL(%s, %s) = %s, want %s", c.base, c.protocol, got, c.want)
+		}
+	}
+}
+
 func TestPassthroughAdapter_NoConversion(t *testing.T) {
 	a := NewPassthroughDownstreamAdapter("anthropic")
 	if !a.IsPassthrough() {

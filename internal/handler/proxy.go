@@ -263,12 +263,12 @@ func (h *ProxyHandler) PassthroughEndpoint(c *gin.Context) {
 		return
 	}
 
-	// 查找启用的匹配模型（仅 openai 类型渠道支持功能类接口透传）
+	// 查找启用的匹配模型（仅支持 openai 协议的模型支持功能类接口透传）
 	var candidates []*store.Model
 	for i, m := range allModels {
 		if m.ModelID == reqBody.Model && m.Status == "active" {
 			ch, cerr := h.channelRepo.GetByID(m.ChannelID)
-			if cerr == nil && ch.Status == "active" && ch.Type == "openai" {
+			if cerr == nil && ch.Status == "active" && m.SupportsProtocol("openai", ch.Type) {
 				candidates = append(candidates, &allModels[i])
 			}
 		}
@@ -606,9 +606,13 @@ func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *
 	// 根据渠道类型选择适配器
 	adapt := adapter.NewAdapter(ch.Type)
 
-	// 下游协议与上游渠道协议一致时直接透传（避免规范格式往返转换丢失协议原生特性）
-	if downstream.Protocol() == ch.Type {
-		downstream = adapter.NewPassthroughDownstreamAdapter(ch.Type)
+	// 保存真实下游协议（透传替换后 Protocol() 会变，必须在替换前保存）
+	downstreamProtocol := downstream.Protocol()
+
+	// 透传判断：以模型支持的协议为准（模型声明或继承渠道 type）
+	// 模型支持下游协议时一定直接转发（不过协议转换），保留协议原生特性
+	if matchedModel.SupportsProtocol(downstreamProtocol, ch.Type) {
+		downstream = adapter.NewPassthroughDownstreamAdapter(downstreamProtocol)
 	}
 
 	// 请求体转换：下游协议 → 规范格式 → 上游格式
@@ -630,6 +634,12 @@ func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *
 
 	// 构造上游请求
 	upstreamURL := adapt.GetChatURL(ch.BaseURL)
+	if downstream.IsPassthrough() {
+		// 透传模式下按【真实下游协议】取上游 URL（不能用 downstream.Protocol()，
+		// 因为模型可能声明了渠道之外的协议，需用替换前保存的 downstreamProtocol）
+		// 模型可单独配置各协议的上游 URL（ProtocolURLs），未配置时回退渠道 base_url 拼接
+		upstreamURL = matchedModel.ProtocolURL(downstreamProtocol, ch.BaseURL)
+	}
 	if ch.Type == "gemini" {
 		// 流式请求使用 :streamGenerateContent 端点，非流式使用 :generateContent
 		endpoint := "generateContent"

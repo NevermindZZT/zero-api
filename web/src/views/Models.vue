@@ -21,7 +21,34 @@ const form = ref({
   pricing_input: 0, pricing_output: 0,
   pricing_cache_read: 0, pricing_cache_write: 0, status: 'active',
   pricing_rules: '[]',
+  protocols: [] as string[],
+  protocol_urls: {} as Record<string, string>,
 })
+
+// 模型支持的协议选项（留空 = 继承渠道类型）
+const protocolOptions = [
+  { label: 'OpenAI Chat', value: 'openai' },
+  { label: 'Anthropic', value: 'anthropic' },
+  { label: 'Gemini', value: 'gemini' },
+  { label: 'Responses', value: 'responses' },
+]
+
+// 已选协议对应的 URL 配置项（过滤空字符串）
+const protocolURLItems = computed(() =>
+  (form.value.protocols || [])
+    .map((p: string) => ({ protocol: p, url: form.value.protocol_urls[p] || '' }))
+    .filter((item: any) => item.url)
+)
+
+// 协议 URL 提示：展示默认拼接的路径
+function baseURLHint(protocol: string): string {
+  switch (protocol) {
+    case 'anthropic': return '渠道 URL + /v1/messages'
+    case 'responses': return '渠道 URL + /v1/responses'
+    case 'gemini': return '渠道 URL + /v1beta/models/{model}:generateContent'
+    default: return '渠道 URL + /v1/chat/completions'
+  }
+}
 
 // 定价规则管理
 const weekDayOptions = [
@@ -254,6 +281,14 @@ const columns = [
     return String(v)
   }},
   {
+    title: '协议', key: 'protocols', width: 140,
+    render: (r: any) => {
+      const list = (r.protocols && r.protocols.length > 0) ? r.protocols : [r.channel_type || 'openai']
+      return h('div', { style: 'display:flex;flex-wrap:wrap;gap:2px' },
+        list.map((p: string) => h(NTag, { size: 'tiny', type: 'info', bordered: false }, () => p)))
+    },
+  },
+  {
     title: '特性', key: 'features', width: 60,
     render: (r: any) => {
       const tags: VNode[] = []
@@ -344,13 +379,22 @@ function editModel(m: any) {
     pricing_cache_write: m.pricing_cache_write || 0,
     status: m.status,
     pricing_rules: m.pricing_rules || '[]',
+    protocols: m.protocols || [],
+    protocol_urls: m.protocol_urls || {},
   }
   showModal.value = true
 }
 
+// 保存前清理 protocol_urls 中的空字符串
 async function saveModel() {
+  // 过滤空字符串 URL，保持提交干净
+  const cleanURLs: Record<string, string> = {}
+  for (const [k, v] of Object.entries(form.value.protocol_urls || {})) {
+    if (v && v.trim()) cleanURLs[k] = v.trim()
+  }
+  const payload = { ...form.value, protocol_urls: cleanURLs }
   try {
-    await modelApi.update(editing.value.id, form.value)
+    await modelApi.update(editing.value.id, payload)
     message.success('模型已更新')
     showModal.value = false
     loadModels()
@@ -498,6 +542,32 @@ async function batchAction(action: string) {
           <NFormItem label="支持工具">
             <NSwitch v-model:value="form.supports_tools" />
           </NFormItem>
+
+          <NFormItem label="支持的协议">
+            <NSelect v-model:value="form.protocols" multiple :options="protocolOptions" placeholder="留空 = 继承渠道类型" />
+          </NFormItem>
+
+          <NDivider style="margin:8px 0" />
+          <NFormItem label="协议 URL 覆盖" style="align-items:flex-start">
+            <div style="width:100%">
+              <p style="margin:0 0 8px;color:#94a3b8;font-size:12px;line-height:1.6">
+                可选：为每个协议指定独立的上游请求 URL（完整地址，含路径）。留空则使用渠道 Base URL 自动拼接。<br>
+                适用于同一模型的不同接口不在同一地址的情况（如 Anthropic 兼容端点在单独路径）。
+              </p>
+              <NSpace vertical size="small" style="width:100%">
+                <div v-for="opt in protocolOptions" :key="opt.value" style="display:flex;align-items:center;gap:8px">
+                  <span style="width:110px;color:#cbd5e1;font-size:13px;flex-shrink:0">{{ opt.label }}</span>
+                  <NInput
+                    v-model:value="form.protocol_urls[opt.value]"
+                    :placeholder="`留空 = ${baseURLHint(opt.value)}`"
+                    size="small"
+                    style="flex:1"
+                  />
+                </div>
+              </NSpace>
+            </div>
+          </NFormItem>
+          <NDivider style="margin:8px 0" />
 
           <NDivider />
 

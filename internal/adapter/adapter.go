@@ -1,6 +1,9 @@
 package adapter
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
 // Usage 从上游响应中提取的用量信息
 type Usage struct {
@@ -37,13 +40,14 @@ type Adapter interface {
 
 // ModelInfo 上游模型信息
 type ModelInfo struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	ContextWindow   int    `json:"context_window"`
-	MaxOutputTokens int    `json:"max_output_tokens"`
-	SupportsVision  bool   `json:"supports_vision"`
-	SupportsThinking bool  `json:"supports_thinking"`
-	SupportsTools   bool   `json:"supports_tools"`
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	ContextWindow   int      `json:"context_window"`
+	MaxOutputTokens int      `json:"max_output_tokens"`
+	SupportsVision  bool     `json:"supports_vision"`
+	SupportsThinking bool    `json:"supports_thinking"`
+	SupportsTools   bool     `json:"supports_tools"`
+	Protocols       []string `json:"protocols"` // 模型支持的协议列表（可选，空 = 继承渠道 type）
 }
 
 // NewAdapter 根据渠道类型创建适配器
@@ -70,4 +74,22 @@ func GetModelDBInfo(modelID string) *ModelInfo {
 		return m
 	}
 	return nil
+}
+
+// ProtocolURL 返回指定协议的标准上游端点 URL
+// 透传模式下由下游协议决定上游路径（而非渠道类型）
+func ProtocolURL(baseURL, protocol string) string {
+	base := strings.TrimRight(baseURL, "/")
+	// base_url 可能以 /v1 结尾（如 https://api.openai.com/v1），需去重
+	if strings.HasSuffix(base, "/v1") {
+		base = strings.TrimSuffix(base, "/v1")
+	}
+	switch protocol {
+	case "anthropic":
+		return base + "/v1/messages"
+	case "responses":
+		return base + "/v1/responses"
+	default: // openai
+		return base + "/v1/chat/completions"
+	}
 }

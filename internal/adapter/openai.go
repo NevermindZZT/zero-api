@@ -49,6 +49,7 @@ func (a *OpenAIAdapter) ParseModelsResponse(body []byte) ([]ModelInfo, error) {
 			ContextLength int     `json:"context_length"`
 			MaxOutput     int     `json:"max_output"`
 			Pricing       map[string]float64 `json:"pricing"`
+			Protocols     []string `json:"protocols"` // 模型支持的协议列表（可选）
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &extResp); err == nil && len(extResp.Data) > 0 {
@@ -59,6 +60,7 @@ func (a *OpenAIAdapter) ParseModelsResponse(body []byte) ([]ModelInfo, error) {
 				Name:            d.Name,
 				ContextWindow:   d.ContextLength,
 				MaxOutputTokens: d.MaxOutput,
+				Protocols:       d.Protocols,
 			}
 			models = append(models, *m)
 		}

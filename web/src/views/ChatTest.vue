@@ -10,11 +10,19 @@ const apiKeys = ref<any[]>([])
 const models = ref<any[]>([])
 const selectedKey = ref<string | null>(null)
 const selectedModel = ref<string | null>(null)
+const selectedProtocol = ref<string>('openai')
 const prompt = ref('')
 const responseText = ref('')
 const errorText = ref('')
 const streamEnabled = ref(false)
 const streamingAbort = ref<AbortController | null>(null)
+
+// 测试使用的下游 API 接口
+const protocolOptions = [
+  { label: 'OpenAI Chat (/v1/chat/completions)', value: 'openai' },
+  { label: 'Anthropic (/v1/messages)', value: 'anthropic' },
+  { label: 'OpenAI Responses (/v1/responses)', value: 'responses' },
+]
 
 const keyOptions = computed(() => apiKeys.value.map((item: any) => ({
   label: `${item.name} (${item.key?.substring(0, 12)}...)`,
@@ -75,6 +83,7 @@ function sendMessage() {
       selectedKey.value,
       selectedModel.value,
       prompt.value.trim(),
+      selectedProtocol.value,
       (text) => { responseText.value += text },
       () => { loading.value = false; streamingAbort.value = null },
       (err) => { errorText.value = err; loading.value = false; streamingAbort.value = null },
@@ -83,12 +92,10 @@ function sendMessage() {
     // === 非流式模式 ===
     loading.value = true
     responseText.value = ''
-    chatTestApi.chat(selectedKey.value, selectedModel.value, prompt.value.trim())
+    chatTestApi.chat(selectedKey.value, selectedModel.value, prompt.value.trim(), selectedProtocol.value)
       .then((res) => {
-        const content = res.data?.choices?.[0]?.message?.content
-        if (Array.isArray(content)) {
-          responseText.value = content.map((item: any) => item?.text || JSON.stringify(item)).join('\n')
-        } else if (typeof content === 'string') {
+        const content = extractResponseContent(res.data, selectedProtocol.value)
+        if (content !== null && content !== undefined) {
           responseText.value = content
         } else {
           responseText.value = JSON.stringify(res.data, null, 2)
@@ -99,6 +106,41 @@ function sendMessage() {
       })
       .finally(() => { loading.value = false })
   }
+}
+
+// 从各协议的非流式响应中提取文本内容
+function extractResponseContent(data: any, protocol: string): string | null {
+  if (!data) return null
+  if (protocol === 'anthropic') {
+    const content = data?.content
+    if (Array.isArray(content)) {
+      return content.map((item: any) => item?.text || '').join('')
+    }
+    if (typeof content === 'string') return content
+    return null
+  }
+  if (protocol === 'responses') {
+    const output = data?.output
+    if (Array.isArray(output)) {
+      return output.map((item: any) => {
+        if (item?.type === 'output_text') return item.text || ''
+        // message 块：content 可能是 [{type:'output_text',text}] 或纯字符串数组
+        const content = item?.content
+        if (Array.isArray(content)) {
+          return content.map((c: any) => (typeof c === 'string' ? c : c?.text || '')).join('')
+        }
+        return ''
+      }).join('')
+    }
+    return null
+  }
+  // openai
+  const content = data?.choices?.[0]?.message?.content
+  if (Array.isArray(content)) {
+    return content.map((item: any) => item?.text || JSON.stringify(item)).join('\n')
+  }
+  if (typeof content === 'string') return content
+  return null
 }
 </script>
 
@@ -121,6 +163,9 @@ function sendMessage() {
         </NFormItem>
         <NFormItem label="模型">
           <NSelect v-model:value="selectedModel" :options="modelOptions" placeholder="先选择 API Key 再加载模型" :disabled="!selectedKey || modelsLoading" :loading="modelsLoading" style="width:100%" />
+        </NFormItem>
+        <NFormItem label="API 接口">
+          <NSelect v-model:value="selectedProtocol" :options="protocolOptions" placeholder="选择下游 API 接口" style="width:100%" />
         </NFormItem>
         <NFormItem label="Prompt">
           <NInput v-model:value="prompt" type="textarea" :autosize="{ minRows: 6, maxRows: 12 }" placeholder="输入测试内容" style="width:100%" />

@@ -52,6 +52,9 @@ func (s *Syncer) mergeModelInfo(upstreamModel adapter.ModelInfo) adapter.ModelIn
 		if !result.SupportsTools {
 			result.SupportsTools = dbInfo.SupportsTools
 		}
+		if len(result.Protocols) == 0 && len(dbInfo.Protocols) > 0 {
+			result.Protocols = dbInfo.Protocols
+		}
 	}
 
 	// 从配置文件默认值覆盖（优先级2）
@@ -71,6 +74,9 @@ func (s *Syncer) mergeModelInfo(upstreamModel adapter.ModelInfo) adapter.ModelIn
 		}
 		if conf.SupportsTools {
 			result.SupportsTools = true
+		}
+		if len(conf.Protocols) > 0 && len(result.Protocols) == 0 {
+			result.Protocols = conf.Protocols
 		}
 	}
 
@@ -127,6 +133,7 @@ func (s *Syncer) SyncModels(channelID int64) (int, error) {
 			SupportsVision:   merged.SupportsVision,
 			SupportsThinking: merged.SupportsThinking,
 			SupportsTools:    merged.SupportsTools,
+			Protocols:        merged.Protocols,
 			Status:           "active",
 		}
 
