@@ -110,6 +110,10 @@ func (d *DB) migrate() error {
 			key TEXT NOT NULL UNIQUE,
 			name TEXT NOT NULL,
 			enabled INTEGER DEFAULT 1,
+			quota_enabled INTEGER DEFAULT 0,
+			quota_balance REAL DEFAULT 0,
+			quota_used REAL DEFAULT 0,
+			allowed_models TEXT DEFAULT '[]',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_created_at ON usage_records(created_at)`,
@@ -239,6 +243,12 @@ func (d *DB) migrate() error {
 	d.Exec(`ALTER TABLE channels ADD COLUMN test_model TEXT DEFAULT ''`)
 	// 迁移：添加余额查询方式字段到 channels 表（auto=按域名推断 / 具体适配器名 / none=不查询）
 	d.Exec(`ALTER TABLE channels ADD COLUMN balance_api TEXT DEFAULT 'auto'`)
+	// 迁移：添加 API Key 额度管理字段（quota_enabled=启用额度限制，quota_balance=剩余额度，
+	// quota_used=累计已用，allowed_models=允许模型列表 JSON，空=全部允许）
+	d.Exec(`ALTER TABLE api_keys ADD COLUMN quota_enabled INTEGER DEFAULT 0`)
+	d.Exec(`ALTER TABLE api_keys ADD COLUMN quota_balance REAL DEFAULT 0`)
+	d.Exec(`ALTER TABLE api_keys ADD COLUMN quota_used REAL DEFAULT 0`)
+	d.Exec(`ALTER TABLE api_keys ADD COLUMN allowed_models TEXT DEFAULT '[]'`)
 	// 迁移：添加系统配置字段到 proxy_config（熔断探针 + 请求超时）
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN probe_api_key TEXT DEFAULT ''`)
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN request_timeout_seconds INTEGER DEFAULT 60`)

@@ -138,6 +138,7 @@ func main() {
 		// API 密钥管理
 		api.GET("/api-keys", apiKeyH.List)
 		api.POST("/api-keys", apiKeyH.Create)
+		api.PUT("/api-keys/:id", apiKeyH.UpdateConfig)
 		api.POST("/api-keys/:id/toggle", apiKeyH.Toggle)
 		api.DELETE("/api-keys/:id", apiKeyH.Delete)
 

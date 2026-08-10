@@ -219,10 +219,16 @@ func (pa *ProxyAdapter) HandleLLMRequest(method, path string, headers map[string
 		log.Printf("[代理] 模型映射: %s → %s", originalModel, targetModel)
 	}
 
-	// 验证并解析 API Key
-	apiKeyID, err := pa.resolveAndValidateAPIKey(headers)
+	// 验证并解析 API Key（含额度校验）
+	apiKey, err := pa.resolveAndValidateAPIKey(headers)
 	if err != nil {
 		return 401, nil, nil, fmt.Errorf("API Key 验证失败: %w", err)
+	}
+	apiKeyID := &apiKey.ID
+
+	// 模型访问校验（allowed_models 限制，用原始请求模型名校验）
+	if err := pa.checkAPIKeyModelAccess(apiKey, originalModel); err != nil {
+		return 403, nil, nil, err
 	}
 
 	// 查找所有启用的匹配模型（列表已按 c.priority 排序）
@@ -282,8 +288,9 @@ func (pa *ProxyAdapter) HandleLLMRequest(method, path string, headers map[string
 }
 
 // resolveAndValidateAPIKey 从请求头中提取并验证 API Key
-// 返回 apiKeyID，如果验证失败则返回 error
-func (pa *ProxyAdapter) resolveAndValidateAPIKey(headers map[string]string) (*int64, error) {
+// 返回 APIKey 完整对象（含额度/模型配置），验证失败返回 error
+// 校验项：key 存在且启用、额度已启用时余额 > 0
+func (pa *ProxyAdapter) resolveAndValidateAPIKey(headers map[string]string) (*store.APIKey, error) {
 	auth, ok := headers["authorization"]
 	if !ok || auth == "" {
 		return nil, fmt.Errorf("缺少 Authorization 头，请提供有效的 API Key")
@@ -299,7 +306,29 @@ func (pa *ProxyAdapter) resolveAndValidateAPIKey(headers map[string]string) (*in
 		return nil, fmt.Errorf("无效的 API Key：密钥不存在或已被禁用")
 	}
 
-	return &k.ID, nil
+	// 额度校验：启用额度且余额 <= 0 时拒绝
+	if k.QuotaEnabled && k.QuotaBalance <= 0 {
+		return nil, fmt.Errorf("API Key 额度已用尽，请联系管理员充值")
+	}
+
+	return k, nil
+}
+
+// checkAPIKeyModelAccess 校验 API Key 是否允许使用指定模型（allowed_models 空=全部允许）
+func (pa *ProxyAdapter) checkAPIKeyModelAccess(ak *store.APIKey, model string) error {
+	if ak == nil || ak.AllowedModels == "" || ak.AllowedModels == "[]" || ak.AllowedModels == "null" {
+		return nil
+	}
+	var allowed []string
+	if err := json.Unmarshal([]byte(ak.AllowedModels), &allowed); err != nil {
+		return nil
+	}
+	for _, m := range allowed {
+		if m == model {
+			return nil
+		}
+	}
+	return fmt.Errorf("API Key 未被授权使用模型 %s", model)
 }
 
 // downstreamProtocolFromPath 从客户端请求路径推导下游协议
@@ -604,6 +633,13 @@ func (pa *ProxyAdapter) recordUsage(requestModel string, rawResp, convertedResp 
 	}); err != nil {
 		log.Printf("[代理][Usage] 插入记录失败: %v", err)
 	}
+
+	// 扣减 API Key 额度（启用额度的 key 按实际费用扣减）
+	if apiKeyID != nil && cost > 0 {
+		if _, err := pa.apiKeyRepo.DeductQuota(*apiKeyID, cost); err != nil {
+			log.Printf("[代理][Quota] API Key %d 扣减额度失败: %v", *apiKeyID, err)
+		}
+	}
 }
 
 // HandleLLMStreamRequest 处理流式 LLM 请求，SSE 数据直接写入 conn
@@ -631,11 +667,18 @@ func (pa *ProxyAdapter) HandleLLMStreamRequest(headers map[string]string, body [
 		log.Printf("[代理] 模型映射: %s → %s", originalModel, targetModel)
 	}
 
-	// 验证并解析 API Key
-	apiKeyID, err := pa.resolveAndValidateAPIKey(headers)
+	// 验证并解析 API Key（含额度校验）
+	apiKey, err := pa.resolveAndValidateAPIKey(headers)
 	if err != nil {
 		writeJSONError(conn, 401, "API Key 验证失败: "+err.Error())
 		return fmt.Errorf("API Key 验证失败: %w", err)
+	}
+	apiKeyID := &apiKey.ID
+
+	// 模型访问校验（allowed_models 限制）
+	if err := pa.checkAPIKeyModelAccess(apiKey, originalModel); err != nil {
+		writeJSONError(conn, 403, err.Error())
+		return err
 	}
 
 	// 查找所有启用的匹配模型

@@ -250,10 +250,17 @@ func (h *ProxyHandler) PassthroughEndpoint(c *gin.Context) {
 		return
 	}
 
-	// 验证并解析 API Key
-	apiKeyID, err := h.resolveAndValidateAPIKey(c)
+	// 验证并解析 API Key（含额度校验）
+	apiKey, err := h.resolveAndValidateAPIKey(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+	apiKeyID := &apiKey.ID
+
+	// 模型访问校验（allowed_models 限制）
+	if err := h.checkAPIKeyModelAccess(apiKey, reqBody.Model); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -401,12 +408,20 @@ func (h *ProxyHandler) handleCompletion(c *gin.Context, rawBody []byte, downstre
 		return
 	}
 
-	// 验证并解析 API Key
-	apiKeyID, err := h.resolveAndValidateAPIKey(c)
+	// 验证并解析 API Key（含额度校验）
+	apiKey, err := h.resolveAndValidateAPIKey(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
 	}
+	apiKeyID := &apiKey.ID
+
+	// 模型访问校验（allowed_models 限制）
+	if err := h.checkAPIKeyModelAccess(apiKey, reqBody.Model); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	}
+
 	allModels, err := h.modelRepo.List(0)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询模型失败"})
@@ -512,8 +527,9 @@ func (h *ProxyHandler) InvalidateProxyConfig() {
 }
 
 // resolveAndValidateAPIKey 从请求中提取并验证 API Key
-// 返回 apiKeyID，如果验证失败则返回 error
-func (h *ProxyHandler) resolveAndValidateAPIKey(c *gin.Context) (*int64, error) {
+// 返回 APIKey 完整对象（含额度/模型配置），如果验证失败则返回 error
+// 校验项：key 存在且启用、额度已启用时余额 > 0
+func (h *ProxyHandler) resolveAndValidateAPIKey(c *gin.Context) (*store.APIKey, error) {
 	auth := c.GetHeader("Authorization")
 	if auth == "" {
 		return nil, fmt.Errorf("缺少 Authorization 头，请提供有效的 API Key")
@@ -529,7 +545,40 @@ func (h *ProxyHandler) resolveAndValidateAPIKey(c *gin.Context) (*int64, error) 
 		return nil, fmt.Errorf("无效的 API Key：密钥不存在或已被禁用")
 	}
 
-	return &k.ID, nil
+	// 额度校验：启用额度且余额 <= 0 时拒绝
+	if k.QuotaEnabled && k.QuotaBalance <= 0 {
+		return nil, fmt.Errorf("API Key 额度已用尽，请联系管理员充值")
+	}
+
+	return k, nil
+}
+
+// checkAPIKeyModelAccess 校验 API Key 是否允许使用指定模型
+// allowed_models 为空表示全部允许
+func (h *ProxyHandler) checkAPIKeyModelAccess(ak *store.APIKey, model string) error {
+	if ak == nil || ak.AllowedModels == "" || ak.AllowedModels == "[]" || ak.AllowedModels == "null" {
+		return nil // 默认不限制
+	}
+	var allowed []string
+	if err := json.Unmarshal([]byte(ak.AllowedModels), &allowed); err != nil {
+		return nil // 解析失败视为不限制
+	}
+	for _, m := range allowed {
+		if m == model {
+			return nil
+		}
+	}
+	return fmt.Errorf("API Key 未被授权使用模型 %s", model)
+}
+
+// parseAllowedModels 解析允许的模型列表（供其他 handler 使用）
+func parseAllowedModels(s string) []string {
+	if s == "" || s == "[]" || s == "null" {
+		return nil
+	}
+	var out []string
+	_ = json.Unmarshal([]byte(s), &out)
+	return out
 }
 
 func (h *ProxyHandler) recordUsage(requestModel string, rawResp, convertedResp []byte, adapt adapter.Adapter, model *store.Model, channelID int64, apiKeyID *int64, latencyMs int, totalDurationMs int) {
@@ -597,6 +646,13 @@ func (h *ProxyHandler) recordUsage(requestModel string, rawResp, convertedResp [
 		Cost:             cost,
 	}); err != nil {
 		log.Printf("[Usage] 插入记录失败: %v", err)
+	}
+
+	// 扣减 API Key 额度（启用额度的 key 按实际费用扣减）
+	if apiKeyID != nil && cost > 0 {
+		if _, err := h.apiKeyRepo.DeductQuota(*apiKeyID, cost); err != nil {
+			log.Printf("[Quota] API Key %d 扣减额度失败: %v", *apiKeyID, err)
+		}
 	}
 }
 

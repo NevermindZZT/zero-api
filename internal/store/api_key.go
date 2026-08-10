@@ -27,11 +27,16 @@ func (r *APIKeyRepo) InvalidateAPIKeyCache() {
 
 // APIKey API 密钥
 type APIKey struct {
-	ID        int64     `json:"id"`
-	Key       string    `json:"key"`
-	Name      string    `json:"name"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"created_at"`
+	ID            int64     `json:"id"`
+	Key           string    `json:"key"`
+	Name          string    `json:"name"`
+	Enabled       bool      `json:"enabled"`
+	// 额度管理（余额制）
+	QuotaEnabled  bool      `json:"quota_enabled"`  // 是否启用额度限制
+	QuotaBalance  float64   `json:"quota_balance"`  // 剩余额度（$）
+	QuotaUsed     float64   `json:"quota_used"`     // 累计已用（$）
+	AllowedModels string    `json:"allowed_models"` // 允许的模型列表 JSON 数组，空=全部允许
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 type APIKeyRepo struct {
@@ -42,8 +47,11 @@ func NewAPIKeyRepo(db *DB) *APIKeyRepo {
 	return &APIKeyRepo{db: db}
 }
 
+// keyColumns 常用查询列
+const keyColumns = `id, key, name, enabled, quota_enabled, quota_balance, quota_used, allowed_models, created_at`
+
 func (r *APIKeyRepo) List() ([]APIKey, error) {
-	rows, err := r.db.Query(`SELECT id, key, name, enabled, created_at FROM api_keys ORDER BY id`)
+	rows, err := r.db.Query(`SELECT ` + keyColumns + ` FROM api_keys ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +60,7 @@ func (r *APIKeyRepo) List() ([]APIKey, error) {
 	var keys []APIKey
 	for rows.Next() {
 		var k APIKey
-		if err := rows.Scan(&k.ID, &k.Key, &k.Name, &k.Enabled, &k.CreatedAt); err != nil {
+		if err := rows.Scan(&k.ID, &k.Key, &k.Name, &k.Enabled, &k.QuotaEnabled, &k.QuotaBalance, &k.QuotaUsed, &k.AllowedModels, &k.CreatedAt); err != nil {
 			return nil, err
 		}
 		keys = append(keys, k)
@@ -72,8 +80,8 @@ func (r *APIKeyRepo) GetByKey(key string) (*APIKey, error) {
 
 	k := &APIKey{}
 	err := r.db.QueryRow(
-		`SELECT id, key, name, enabled, created_at FROM api_keys WHERE key = ? AND enabled = 1`, key,
-	).Scan(&k.ID, &k.Key, &k.Name, &k.Enabled, &k.CreatedAt)
+		`SELECT `+keyColumns+` FROM api_keys WHERE key = ? AND enabled = 1`, key,
+	).Scan(&k.ID, &k.Key, &k.Name, &k.Enabled, &k.QuotaEnabled, &k.QuotaBalance, &k.QuotaUsed, &k.AllowedModels, &k.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -105,8 +113,8 @@ func (r *APIKeyRepo) Create(name string) (*APIKey, error) {
 func (r *APIKeyRepo) getByID(id int64) (*APIKey, error) {
 	k := &APIKey{}
 	err := r.db.QueryRow(
-		`SELECT id, key, name, enabled, created_at FROM api_keys WHERE id = ?`, id,
-	).Scan(&k.ID, &k.Key, &k.Name, &k.Enabled, &k.CreatedAt)
+		`SELECT `+keyColumns+` FROM api_keys WHERE id = ?`, id,
+	).Scan(&k.ID, &k.Key, &k.Name, &k.Enabled, &k.QuotaEnabled, &k.QuotaBalance, &k.QuotaUsed, &k.AllowedModels, &k.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +129,47 @@ func (r *APIKeyRepo) Toggle(id int64) error {
 func (r *APIKeyRepo) Delete(id int64) error {
 	_, err := r.db.Exec(`DELETE FROM api_keys WHERE id = ?`, id)
 	return err
+}
+
+// UpdateConfig 更新 API Key 的额度与模型配置
+// 返回更新后的密钥
+func (r *APIKeyRepo) UpdateConfig(id int64, quotaEnabled bool, quotaBalance float64, allowedModels string) (*APIKey, error) {
+	_, err := r.db.Exec(
+		`UPDATE api_keys SET quota_enabled = ?, quota_balance = ?, allowed_models = ? WHERE id = ?`,
+		quotaEnabled, quotaBalance, allowedModels, id,
+	)
+	if err != nil {
+		return nil, err
+	}
+	r.InvalidateAPIKeyCache()
+	return r.getByID(id)
+}
+
+// DeductQuota 扣减 API Key 额度（按实际用量 cost）
+// 原子操作：balance 减 cost，used 加 cost
+// 返回扣减后的余额；如果扣减后为负则限制为 0（不会负余额）
+func (r *APIKeyRepo) DeductQuota(id int64, cost float64) (float64, error) {
+	if cost <= 0 {
+		return 0, nil
+	}
+	// 原子扣减，限制余额不低于 0
+	_, err := r.db.Exec(
+		`UPDATE api_keys SET
+			quota_balance = MAX(0, quota_balance - ?),
+			quota_used = quota_used + ?
+		 WHERE id = ? AND quota_enabled = 1`,
+		cost, cost, id,
+	)
+	if err != nil {
+		return 0, err
+	}
+	// 读取最新余额
+	var balance float64
+	err = r.db.QueryRow(`SELECT quota_balance FROM api_keys WHERE id = ?`, id).Scan(&balance)
+	if err != nil {
+		return 0, err
+	}
+	return balance, nil
 }
 
 // generateAPIKey 生成随机 API Key（sk- 前缀 + 48 位十六进制）
