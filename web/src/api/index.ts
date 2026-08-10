@@ -42,6 +42,16 @@ export const channelApi = {
   syncModels: (id: number) => api.post(`/channels/${id}/sync`),
 }
 
+// ===== Balance API（余额/订阅状态）=====
+export const balanceApi = {
+  list: () => api.get('/balances'),
+  providers: () => api.get('/balances/providers'),
+  getByChannel: (id: number) => api.get(`/channels/${id}/balance`),
+  refresh: (id: number) => api.post(`/channels/${id}/balance/refresh`),
+  setManual: (id: number, balance: number, currency: string) => api.post(`/channels/${id}/balance`, { balance, currency }),
+  refreshAll: () => api.post('/balances/refresh-all'),
+}
+
 // ===== Model API =====
 export const modelApi = {
   list: (channelId?: number) =>

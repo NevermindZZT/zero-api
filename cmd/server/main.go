@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/never/zero-api/internal/balance"
 	"github.com/never/zero-api/internal/config"
 	"github.com/never/zero-api/internal/handler"
 	"github.com/never/zero-api/internal/mcp"
@@ -73,6 +74,10 @@ func main() {
 	apiKeyH := handler.NewAPIKeyHandler(svc.APIKey)
 	dbH := handler.NewDatabaseHandler(db, cfg.Database.Path)
 
+	// 初始化余额查询服务
+	balanceSvc := balance.NewService(svc.Channel, svc.ChannelBalance)
+	balanceH := handler.NewBalanceHandler(balanceSvc)
+
 	// 初始化技能管理
 	skillFS := store.NewSkillFS(cfg.MCP.SkillsDir)
 	skillH := handler.NewSkillHandler(svc.Skill, svc.SkillCombination, svc.ProxyConfig, skillFS)
@@ -121,6 +126,14 @@ func main() {
 		api.GET("/proxy/config", proxyConfigH.GetConfig)
 		api.PUT("/proxy/config", proxyConfigH.UpdateConfig)
 		api.GET("/proxy/cert/download", proxyConfigH.DownloadCert)
+
+		// 余额/订阅状态管理
+		api.GET("/balances", balanceH.ListBalances)
+		api.GET("/balances/providers", balanceH.ListProviders)
+		api.GET("/channels/:id/balance", balanceH.GetBalance)
+		api.POST("/channels/:id/balance/refresh", balanceH.RefreshBalance)
+		api.POST("/channels/:id/balance", balanceH.SetManualBalance)
+		api.POST("/balances/refresh-all", balanceH.RefreshAllBalances)
 
 		// API 密钥管理
 		api.GET("/api-keys", apiKeyH.List)

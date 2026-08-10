@@ -3,11 +3,11 @@ import { h, onMounted, ref, computed } from 'vue'
 import {
   NButton, NCard, NDataTable, NModal, NForm, NFormItem,
   NInput, NInputNumber, NSelect, NSpace, NTag, NPopconfirm, NMessageProvider,
-  useMessage, NSpin, NIcon, NSwitch,
+  useMessage, NSpin, NIcon, NSwitch, NDescriptions, NDescriptionsItem, NPopover, NTooltip, NDivider,
 } from 'naive-ui'
-import { GlobeSharp } from '@vicons/ionicons5'
+import { GlobeSharp, RefreshSharp, WalletSharp } from '@vicons/ionicons5'
 import api from '@/api'
-import { channelApi } from '@/api'
+import { channelApi, balanceApi } from '@/api'
 
 const message = useMessage()
 const loading = ref(true)
@@ -15,7 +15,18 @@ const channels = ref<any[]>([])
 const showModal = ref(false)
 const editing = ref<any>(null)
 const syncingId = ref<number | null>(null)
-const form = ref({ name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99, use_proxy: false, failover_enabled: true, test_model: '' })
+const refreshingId = ref<number | null>(null)
+const refreshingAll = ref(false)
+const balances = ref<Record<number, any>>({}) // channel_id -> balance
+const showBalanceModal = ref(false)
+const balanceDetail = ref<any>(null)
+const balanceProviders = ref<{ name: string }[]>([])
+// 手动余额维护状态
+const manualBalanceVisible = ref(false)
+const manualBalanceVal = ref(0)
+const manualCurrency = ref('USD')
+const savingManualBalance = ref(false)
+const form = ref({ name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99, use_proxy: false, failover_enabled: true, test_model: '', balance_api: 'auto' })
 
 const channelTypes = [
   { label: 'OpenAI 兼容 (chat/completions)', value: 'openai' },
@@ -23,6 +34,19 @@ const channelTypes = [
   { label: 'Google Gemini (generateContent)', value: 'gemini' },
   { label: 'OpenAI Responses (responses)', value: 'responses' },
 ]
+
+// 余额查询方式选项（auto=按域名推断，其余为具体适配器）
+const balanceAPIOptions = computed(() => {
+  const options = [
+    { label: '自动检测 (auto)', value: 'auto' },
+    { label: '不查询 (none)', value: 'none' },
+  ]
+  for (const p of balanceProviders.value) {
+    if (p.name === 'auto' || p.name === 'none') continue
+    options.push({ label: p.name, value: p.name })
+  }
+  return options
+})
 
 // 规范化 Base URL（与后端 normalizeBaseURL 保持一致）
 function normalizeBaseURL(url: string) {
@@ -62,6 +86,12 @@ const columns = [
     },
   },
   { title: 'Base URL', key: 'base_url', ellipsis: true },
+  {
+    title: '余额/订阅',
+    key: 'balance',
+    width: 140,
+    render: (r: any) => renderBalance(r),
+  },
   { title: '优先级', key: 'priority', width: 90, sorter: 'default' as const, defaultSortOrder: 'ascend' as const },
   {
     title: '状态',
@@ -122,8 +152,13 @@ const columns = [
   },
 ]
 
-onMounted(loadChannels)
+onMounted(() => {
+  loadChannels()
+  loadBalances()
+  loadBalanceProviders()
+})
 
+// 加载渠道列表
 async function loadChannels() {
   loading.value = true
   try {
@@ -134,9 +169,132 @@ async function loadChannels() {
   }
 }
 
+// 加载余额列表
+async function loadBalances() {
+  try {
+    const res = await balanceApi.list()
+    const map: Record<number, any> = {}
+    for (const b of res.data || []) map[b.channel_id] = b
+    balances.value = map
+  } catch { /* 余额查询失败不影响渠道列表 */ }
+}
+
+// 加载可用适配器
+async function loadBalanceProviders() {
+  try {
+    const res = await balanceApi.providers()
+    balanceProviders.value = res.data || []
+  } catch { /* ignore */ }
+}
+
+// 刷新单个渠道余额
+async function refreshBalance(id: number) {
+  refreshingId.value = id
+  try {
+    const res = await balanceApi.refresh(id)
+    balances.value = { ...balances.value, [id]: res.data }
+    message.success('余额已刷新')
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '刷新失败')
+  } finally {
+    refreshingId.value = null
+  }
+}
+
+// 批量刷新所有余额
+async function refreshAllBalances() {
+  refreshingAll.value = true
+  try {
+    const res = await balanceApi.refreshAll()
+    const map: Record<number, any> = {}
+    for (const b of res.data || []) map[b.channel_id] = b
+    balances.value = { ...balances.value, ...map }
+    message.success('已批量刷新')
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '批量刷新失败')
+  } finally {
+    refreshingAll.value = false
+  }
+}
+
+// 打开余额详情
+function openBalanceDetail(ch: any) {
+  const b = balances.value[ch.id]
+  if (!b) {
+    message.info('该渠道暂无余额记录，请先刷新')
+    return
+  }
+  balanceDetail.value = b
+  manualBalanceVisible.value = false
+  manualBalanceVal.value = b.balance || 0
+  manualCurrency.value = b.currency || 'USD'
+  showBalanceModal.value = true
+}
+
+// 保存手动余额
+async function saveManualBalance() {
+  savingManualBalance.value = true
+  try {
+    const res = await balanceApi.setManual(balanceDetail.value.channel_id, manualBalanceVal.value, manualCurrency.value)
+    balances.value = { ...balances.value, [balanceDetail.value.channel_id]: res.data }
+    balanceDetail.value = res.data
+    manualBalanceVisible.value = false
+    message.success('余额已手动更新')
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '保存失败')
+  } finally {
+    savingManualBalance.value = false
+  }
+}
+
+// 格式化金额
+function formatCurrency(v: number | undefined, cur: string | undefined) {
+  if (v === undefined || v === null) return '-'
+  const symbol = cur === 'CNY' ? '¥' : cur === 'USD' ? '$' : ''
+  return `${symbol}${v.toFixed(4)}`
+}
+
+// 渲染余额单元格
+function renderBalance(r: any) {
+  const b = balances.value[r.id]
+  if (!b) {
+    return h('div', { style: 'display:flex;align-items:center;gap:6px' }, [
+      h('span', { style: 'color:#64748b;font-size:12px' }, '未查询'),
+      h(NButton, { size: 'tiny', quaternary: true, loading: refreshingId.value === r.id, disabled: refreshingId.value !== null, onClick: () => refreshBalance(r.id) }, { icon: () => h(NIcon, null, { default: () => h(RefreshSharp) }) }),
+    ])
+  }
+
+  let content: any
+  const color = b.status === 'error' ? '#f87171' : b.status === 'warning' ? '#fbbf24' : b.status === 'unsupported' ? '#94a3b8' : '#22c55e'
+  if (b.status === 'error') {
+    content = h(NTooltip, { trigger: 'hover' }, {
+      trigger: () => h('span', { style: 'color:#f87171;font-size:12px' }, '查询失败'),
+      default: () => b.error_msg || '查询失败',
+    })
+  } else if (b.status === 'unsupported') {
+    content = h(NTooltip, { trigger: 'hover' }, {
+      trigger: () => h('span', { style: 'color:#94a3b8;font-size:12px' }, '手动维护'),
+      default: () => '该供应商无公开余额接口，点击查看详情可手动维护余额',
+    })
+  } else if (b.status === 'manual') {
+    content = h('span', { style: 'font-size:12px;color:#94a3b8' }, `${formatCurrency(b.balance, b.currency)} (手动)`)
+  } else if (b.plan_type) {
+    content = h('span', { style: 'font-size:12px' }, `${b.plan_type} · ${b.plan_status || ''}`)
+  } else if (b.balance !== undefined && b.balance !== null) {
+    content = h('span', { style: 'font-size:12px' }, formatCurrency(b.balance, b.currency))
+  } else {
+    content = h('span', { style: 'color:#64748b;font-size:12px' }, '—')
+  }
+
+  return h('div', { style: 'display:flex;align-items:center;gap:6px;cursor:pointer' }, [
+    h('div', { onClick: () => openBalanceDetail(r) }, [content]),
+    h(NButton, { size: 'tiny', quaternary: true, loading: refreshingId.value === r.id, disabled: refreshingId.value !== null, onClick: () => refreshBalance(r.id) }, { icon: () => h(NIcon, null, { default: () => h(RefreshSharp) }) }),
+  ])
+}
+
 function openCreate() {
   editing.value = null
-  form.value = { name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99, use_proxy: false, failover_enabled: true, test_model: '' }
+  form.value = { name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99, use_proxy: false, failover_enabled: true, test_model: '', balance_api: 'auto' }
   showModal.value = true
 }
 
@@ -201,12 +359,18 @@ async function toggleChannel(ch: any) {
 <template>
   <NSpin :show="loading">
     <NSpace vertical size="large">
-      <div class="page-header" style="display:flex;justify-content:space-between;align-items:center">
+        <div class="page-header" style="display:flex;justify-content:space-between;align-items:center">
         <h2>
           <NIcon size="20" color="#667eea" style="vertical-align:-2px;margin-right:6px"><GlobeSharp /></NIcon>
           渠道管理
         </h2>
-        <NButton type="primary" @click="openCreate">添加渠道</NButton>
+        <NSpace>
+          <NButton size="small" :loading="refreshingAll" @click="refreshAllBalances">
+            <template #icon><NIcon size="14"><RefreshSharp /></NIcon></template>
+            刷新全部余额
+          </NButton>
+          <NButton type="primary" @click="openCreate">添加渠道</NButton>
+        </NSpace>
       </div>
       <NCard style="width:100%">
         <NDataTable :columns="columns" :data="channels" :bordered="false" :scroll-x="1000" />
@@ -252,12 +416,71 @@ async function toggleChannel(ch: any) {
           <NFormItem label="测试模型" label-description="熔断探测用模型，留空则使用该渠道最高优先级的活跃模型">
             <NInput v-model:value="form.test_model" placeholder="留空自动选取" />
           </NFormItem>
+          <NFormItem label="余额查询" label-description="自动=按域名识别供应商，或手动指定">
+            <NSelect v-model:value="form.balance_api" :options="balanceAPIOptions" />
+          </NFormItem>
         </NForm>
         <template #footer>
           <NSpace justify="end">
             <NButton @click="showModal = false">取消</NButton>
             <NButton type="primary" @click="save">保存</NButton>
           </NSpace>
+        </template>
+      </NModal>
+
+      <!-- 余额详情弹窗 -->
+      <NModal v-model:show="showBalanceModal" title="余额/订阅详情" preset="card" style="width:520px;max-width:calc(100vw - 32px);">
+        <template v-if="balanceDetail">
+          <NDescriptions :column="2" bordered size="small" label-placement="left">
+            <NDescriptionsItem label="状态">
+              <NTag :type="balanceDetail.status === 'error' ? 'error' : balanceDetail.status === 'warning' ? 'warning' : balanceDetail.status === 'unsupported' ? 'default' : 'success'" size="small">
+                {{ balanceDetail.status === 'manual' ? '手动维护' : balanceDetail.status === 'unsupported' ? '不支持查询' : balanceDetail.status }}
+              </NTag>
+            </NDescriptionsItem>
+            <NDescriptionsItem label="适配器">{{ balanceDetail.provider || '-' }}</NDescriptionsItem>
+            <template v-if="balanceDetail.balance !== undefined && balanceDetail.balance !== null && balanceDetail.balance > 0">
+              <NDescriptionsItem label="可用余额">{{ formatCurrency(balanceDetail.balance, balanceDetail.currency) }}</NDescriptionsItem>
+              <NDescriptionsItem label="已使用">{{ formatCurrency(balanceDetail.used_amount, balanceDetail.currency) }}</NDescriptionsItem>
+            </template>
+            <template v-if="balanceDetail.plan_type">
+              <NDescriptionsItem label="订阅计划">{{ balanceDetail.plan_type }}</NDescriptionsItem>
+              <NDescriptionsItem label="订阅状态">{{ balanceDetail.plan_status || '-' }}</NDescriptionsItem>
+              <NDescriptionsItem v-if="balanceDetail.renews_at" label="续费时间">{{ balanceDetail.renews_at }}</NDescriptionsItem>
+              <NDescriptionsItem v-if="balanceDetail.expires_at" label="到期时间">{{ balanceDetail.expires_at }}</NDescriptionsItem>
+            </template>
+            <template v-if="balanceDetail.token_quota > 0">
+              <NDescriptionsItem label="Token 配额">{{ balanceDetail.token_quota }}</NDescriptionsItem>
+              <NDescriptionsItem label="Token 剩余">{{ balanceDetail.token_remaining }}</NDescriptionsItem>
+            </template>
+            <NDescriptionsItem v-if="balanceDetail.error_msg" label="说明" :span="2">
+              <span style="color:#94a3b8;word-break:break-all">{{ balanceDetail.error_msg }}</span>
+            </NDescriptionsItem>
+            <NDescriptionsItem label="查询时间" :span="2">{{ balanceDetail.last_checked_at || '-' }}</NDescriptionsItem>
+            <NDescriptionsItem v-if="balanceDetail.raw_data && balanceDetail.raw_data !== '{}'" label="原始响应" :span="2">
+              <pre style="white-space:pre-wrap;font-size:12px;color:#94a3b8;max-height:200px;overflow:auto">{{ balanceDetail.raw_data }}</pre>
+            </NDescriptionsItem>
+          </NDescriptions>
+
+          <!-- 手动维护余额（用于无公开余额 API 的供应商，如 OpenCode） -->
+          <NDivider style="margin:12px 0" />
+          <div v-if="!manualBalanceVisible" style="display:flex;justify-content:flex-end;gap:8px">
+            <NButton size="small" @click="manualBalanceVisible = true">手动维护余额</NButton>
+            <NButton size="small" @click="refreshBalance(balanceDetail.channel_id)">
+              <template #icon><NIcon size="14"><RefreshSharp /></NIcon></template>
+              重新刷新
+            </NButton>
+          </div>
+          <div v-else style="display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:13px;color:#94a3b8;width:60px">余额</span>
+              <NInputNumber v-model:value="manualBalanceVal" :min="0" style="flex:1" placeholder="当前余额" />
+              <NSelect v-model:value="manualCurrency" :options="[{label:'USD',value:'USD'},{label:'CNY',value:'CNY'}]" style="width:90px" />
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:8px">
+              <NButton size="small" :loading="savingManualBalance" type="primary" @click="saveManualBalance">保存</NButton>
+              <NButton size="small" @click="manualBalanceVisible = false">取消</NButton>
+            </div>
+          </div>
         </template>
       </NModal>
     </NSpace>

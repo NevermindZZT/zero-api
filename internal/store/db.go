@@ -174,6 +174,29 @@ func (d *DB) migrate() error {
 			cost REAL DEFAULT 0,
 			PRIMARY KEY (date, api_key_id, request_model)
 		)`,
+
+		// 渠道余额/订阅状态表（一个渠道一条）
+		`CREATE TABLE IF NOT EXISTS channel_balances (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			channel_id INTEGER NOT NULL UNIQUE,
+			balance REAL DEFAULT 0,
+			currency TEXT DEFAULT '',
+			used_amount REAL DEFAULT 0,
+			plan_type TEXT DEFAULT '',
+			plan_status TEXT DEFAULT '',
+			renews_at TEXT DEFAULT '',
+			expires_at TEXT DEFAULT '',
+			token_quota INTEGER DEFAULT 0,
+			token_used INTEGER DEFAULT 0,
+			token_remaining INTEGER DEFAULT 0,
+			provider TEXT DEFAULT '',
+			status TEXT DEFAULT 'ok',
+			error_msg TEXT DEFAULT '',
+			raw_data TEXT DEFAULT '{}',
+			last_checked_at DATETIME,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
+		)`,
 	}
 
 	// 迁移：添加 cache_hit_tokens 列（如果不存在）
@@ -214,6 +237,8 @@ func (d *DB) migrate() error {
 	// 迁移：添加渠道熔断相关字段
 	d.Exec(`ALTER TABLE channels ADD COLUMN failover_enabled INTEGER DEFAULT 1`)
 	d.Exec(`ALTER TABLE channels ADD COLUMN test_model TEXT DEFAULT ''`)
+	// 迁移：添加余额查询方式字段到 channels 表（auto=按域名推断 / 具体适配器名 / none=不查询）
+	d.Exec(`ALTER TABLE channels ADD COLUMN balance_api TEXT DEFAULT 'auto'`)
 	// 迁移：添加系统配置字段到 proxy_config（熔断探针 + 请求超时）
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN probe_api_key TEXT DEFAULT ''`)
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN request_timeout_seconds INTEGER DEFAULT 60`)

@@ -9,6 +9,7 @@ type Service struct {
 	APIKey           *APIKeyRepo
 	Skill            *SkillRepo
 	SkillCombination *SkillCombinationRepo
+	ChannelBalance   *ChannelBalanceRepo
 
 	DB *DB
 }
@@ -22,6 +23,7 @@ func NewService(db *DB) *Service {
 		APIKey:           NewAPIKeyRepo(db),
 		Skill:            NewSkillRepo(db),
 		SkillCombination: NewSkillCombinationRepo(db),
+		ChannelBalance:   NewChannelBalanceRepo(db),
 		DB:               db,
 	}
 }
