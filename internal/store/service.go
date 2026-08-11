@@ -10,6 +10,7 @@ type Service struct {
 	Skill            *SkillRepo
 	SkillCombination *SkillCombinationRepo
 	ChannelBalance   *ChannelBalanceRepo
+	VirtualModel     *VirtualModelRepo
 
 	DB *DB
 }
@@ -24,6 +25,7 @@ func NewService(db *DB) *Service {
 		Skill:            NewSkillRepo(db),
 		SkillCombination: NewSkillCombinationRepo(db),
 		ChannelBalance:   NewChannelBalanceRepo(db),
+		VirtualModel:     NewVirtualModelRepo(db),
 		DB:               db,
 	}
 }

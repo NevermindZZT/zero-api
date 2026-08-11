@@ -28,6 +28,12 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/virtual-models',
+      name: 'virtual-models',
+      component: () => import('@/views/VirtualModels.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/proxy',
       name: 'proxy',
       component: () => import('@/views/ProxySettings.vue'),

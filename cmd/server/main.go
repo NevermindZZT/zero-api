@@ -65,7 +65,7 @@ func main() {
 	channelH := handler.NewChannelHandler(svc.Channel, svc.Model)
 	modelH := handler.NewModelHandler(svc.Model)
 	usageH := handler.NewUsageHandler(svc.Usage)
-	proxyH := handler.NewProxyHandler(svc.Channel, svc.Model, svc.Usage, svc.APIKey, svc.ProxyConfig)
+	proxyH := handler.NewProxyHandler(svc.Channel, svc.Model, svc.Usage, svc.APIKey, svc.ProxyConfig, svc.VirtualModel)
 	proxyConfigH := handler.NewProxyConfigHandler(svc.ProxyConfig, "certs")
 	// 代理配置更新后通知 ProxyHandler 刷新缓存
 	proxyConfigH.SetOnUpdate(proxyH.InvalidateProxyConfig)
@@ -77,6 +77,9 @@ func main() {
 	// 初始化余额查询服务
 	balanceSvc := balance.NewService(svc.Channel, svc.ChannelBalance)
 	balanceH := handler.NewBalanceHandler(balanceSvc)
+
+	// 初始化虚拟模型管理
+	virtualModelH := handler.NewVirtualModelHandler(svc.VirtualModel)
 
 	// 初始化技能管理
 	skillFS := store.NewSkillFS(cfg.MCP.SkillsDir)
@@ -134,6 +137,13 @@ func main() {
 		api.POST("/channels/:id/balance/refresh", balanceH.RefreshBalance)
 		api.POST("/channels/:id/balance", balanceH.SetManualBalance)
 		api.POST("/balances/refresh-all", balanceH.RefreshAllBalances)
+
+		// 虚拟模型（模型路由）管理
+		api.GET("/virtual-models", virtualModelH.List)
+		api.POST("/virtual-models", virtualModelH.Create)
+		api.PUT("/virtual-models/:id", virtualModelH.Update)
+		api.DELETE("/virtual-models/:id", virtualModelH.Delete)
+		api.POST("/virtual-models/:id/toggle", virtualModelH.Toggle)
 
 		// API 密钥管理
 		api.GET("/api-keys", apiKeyH.List)
@@ -293,7 +303,7 @@ func main() {
 			router := proxy.NewRequestRouter(interceptDomains, smartDomains, mitmAll)
 
 			// 初始化代理适配器
-			pAdapter := proxy.NewProxyAdapter(svc.Channel, svc.Model, svc.Usage, svc.APIKey, requestTimeout)
+			pAdapter := proxy.NewProxyAdapter(svc.Channel, svc.Model, svc.Usage, svc.APIKey, svc.VirtualModel, requestTimeout)
 			// 加载模型映射配置
 			if err == nil && len(proxyCfg.ModelMappings) > 0 {
 				mappings := make(map[string]proxy.ModelMappingConfig)

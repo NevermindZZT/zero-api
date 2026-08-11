@@ -13,6 +13,7 @@ const saving = ref(false)
 
 const config = ref({
   request_timeout_seconds: 60,
+  vision_timeout_seconds: 60,
   probe_api_key: '',
   failover_enabled: true,
 })
@@ -27,6 +28,7 @@ async function loadConfig() {
     const res = await proxyApi.getConfig()
     config.value = {
       request_timeout_seconds: res.data.request_timeout_seconds || 60,
+      vision_timeout_seconds: res.data.vision_timeout_seconds || 60,
       probe_api_key: res.data.probe_api_key || '',
       failover_enabled: res.data.failover_enabled !== false,
     }
@@ -42,6 +44,7 @@ async function saveConfig() {
     const fullRes = await proxyApi.getConfig()
     const fullConfig = fullRes.data
     fullConfig.request_timeout_seconds = config.value.request_timeout_seconds
+    fullConfig.vision_timeout_seconds = config.value.vision_timeout_seconds
     fullConfig.probe_api_key = config.value.probe_api_key
     fullConfig.failover_enabled = config.value.failover_enabled
     await proxyApi.updateConfig(fullConfig)
@@ -79,6 +82,19 @@ async function saveConfig() {
               placeholder="60"
             />
             <span style="color:#94a3b8;font-size:13px;margin-left:8px">秒（10-300）</span>
+          </NFormItem>
+          <NFormItem label="识图超时">
+            <NInputNumber
+              v-model:value="config.vision_timeout_seconds"
+              :min="10"
+              :max="600"
+              :step="10"
+              style="width:200px"
+              placeholder="60"
+            />
+            <span style="color:#94a3b8;font-size:13px;margin-left:8px">
+              秒（10-600）。虚拟模型有图请求时识图模型的调用超时，识图模型推理耗时可能达 30-60s
+            </span>
           </NFormItem>
         </NForm>
       </NCard>

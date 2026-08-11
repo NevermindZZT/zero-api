@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/never/zero-api/internal/pricing"
+	"github.com/never/zero-api/internal/router"
 
 	"github.com/gin-gonic/gin"
 	"github.com/never/zero-api/internal/adapter"
@@ -28,27 +29,39 @@ type ProxyHandler struct {
 	usageRepo         *store.UsageRepo
 	apiKeyRepo        *store.APIKeyRepo
 	proxyConfigRepo   *store.ProxyConfigRepo
+	virtualModelRepo  *store.VirtualModelRepo
 	breaker           *CircuitBreaker
 	proxyConfigCache  *store.ProxyConfigData
 	modelsCache       []byte          // /v1/models 响应缓存
 	modelsCacheTime   time.Time       // 缓存时间
 	modelsCacheMu     sync.RWMutex
 	modelsCacheTTL    time.Duration   // 缓存有效期
+	// routers 模型路由规则链（虚拟模型等，支持后续扩展新规则）
+	routers []router.Rule
 }
 
-func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo, proxyConfigRepo *store.ProxyConfigRepo) *ProxyHandler {
+func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo, proxyConfigRepo *store.ProxyConfigRepo, virtualModelRepo *store.VirtualModelRepo) *ProxyHandler {
 	h := &ProxyHandler{
-		channelRepo:     channelRepo,
-		modelRepo:       modelRepo,
-		usageRepo:       usageRepo,
-		apiKeyRepo:      apiKeyRepo,
-		proxyConfigRepo: proxyConfigRepo,
-		breaker:         NewCircuitBreaker(),
-		modelsCacheTTL:  60 * time.Second,
+		channelRepo:      channelRepo,
+		modelRepo:        modelRepo,
+		usageRepo:        usageRepo,
+		apiKeyRepo:       apiKeyRepo,
+		proxyConfigRepo:  proxyConfigRepo,
+		virtualModelRepo: virtualModelRepo,
+		breaker:          NewCircuitBreaker(),
+		modelsCacheTTL:   60 * time.Second,
 	}
 	cfg, err := proxyConfigRepo.Get()
 	if err == nil {
 		h.proxyConfigCache = cfg
+	}
+
+	// 构建模型路由规则链：后续新增路由规则在此注册
+	vmRouter := router.NewVirtualModelRouter(virtualModelRepo, modelRepo, channelRepo, h.getProxyConfig)
+	vmRouter.SetUsageRepo(usageRepo)
+	vmRouter.SetAPIKeyRepo(apiKeyRepo)
+	h.routers = []router.Rule{
+		vmRouter,
 	}
 	return h
 }
@@ -67,7 +80,7 @@ func (h *ProxyHandler) getProxyConfig() *store.ProxyConfigData {
 	}
 	cfg, err := h.proxyConfigRepo.Get()
 	if err != nil {
-		return &store.ProxyConfigData{RequestTimeoutSeconds: 60, FailoverEnabled: true}
+		return &store.ProxyConfigData{RequestTimeoutSeconds: 60, VisionTimeoutSeconds: 60, FailoverEnabled: true}
 	}
 	h.proxyConfigCache = cfg
 	return cfg
@@ -179,6 +192,59 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 
 		data = append(data, entry)
 	}
+
+	// 合并虚拟模型（模型路由）：以主模型的能力为基础构建条目
+	// 虚拟模型在 /v1/models 中展示为 supports_vision=true（因为识图扩展让下游"能看图"）
+	if vms, verr := h.virtualModelRepo.List(); verr == nil {
+		modelByName := make(map[string]*store.Model)
+		for i := range models {
+			modelByName[models[i].ModelID] = &models[i]
+		}
+		for _, vm := range vms {
+			if vm.Status != "active" {
+				continue
+			}
+			main := modelByName[vm.MainModel]
+			if main == nil {
+				continue
+			}
+			displayName := vm.DisplayName
+			if displayName == "" {
+				displayName = vm.Name
+			}
+			entry := gin.H{
+				"id":              vm.Name,
+				"name":            displayName,
+				"created":         main.CreatedAt.Unix(),
+				"description":     fmt.Sprintf("虚拟模型: 路由到 %s（识图扩展: %s）", vm.MainModel, vm.VisionModel),
+				"context_length":  main.ContextWindow,
+				"architecture": gin.H{
+					"modality":          "text+image->text",
+					"input_modalities":  []string{"text", "image"},
+					"output_modalities": []string{"text"},
+					"tokenizer":         "Custom",
+					"instruct_type":     nil,
+				},
+				"pricing": gin.H{
+					"prompt":     fmt.Sprintf("%.9f", main.PricingInput/1000000),
+					"completion": fmt.Sprintf("%.9f", main.PricingOutput/1000000),
+				},
+				"top_provider": gin.H{
+					"context_length":        main.ContextWindow,
+					"max_completion_tokens": main.MaxOutputTokens,
+					"is_moderated":          false,
+				},
+				"per_request_limits":   nil,
+				"supported_parameters": []string{"max_tokens", "temperature", "top_p", "seed", "stop"},
+				"default_parameters":   gin.H{},
+				"supported_voices":     nil,
+				"knowledge_cutoff":     nil,
+				"expiration_date":      nil,
+			}
+			data = append(data, entry)
+		}
+	}
+
 	if data == nil {
 		data = []gin.H{}
 	}
@@ -420,6 +486,41 @@ func (h *ProxyHandler) handleCompletion(c *gin.Context, rawBody []byte, downstre
 	if err := h.checkAPIKeyModelAccess(apiKey, reqBody.Model); err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
+	}
+
+	// 模型路由规则（虚拟模型等）：命中规则时转换请求或直接处理
+	// 规则链可扩展：后续新路由规则注册到 h.routers 即可
+	// 流式预响应：规则在耗时操作（识图）前先向客户端发送提示帧，
+	// 避免下游长时间无响应（仅 OpenAI chat 协议支持，透传不适用）
+	var streamPreface func(model, content string) error
+	if reqBody.Stream && downstream.Protocol() == "openai" && !downstream.IsPassthrough() {
+		streamPreface = h.writeStreamPreface(c, reqBody.Model)
+	}
+	if res := router.ApplyRules(h.routers, &router.Context{
+		Protocol:      downstream.Protocol(),
+		RawBody:       rawBody,
+		Model:         reqBody.Model,
+		APIKeyID:      apiKeyID,
+		ClientAuth:    c.GetHeader("Authorization"),
+		Stream:        reqBody.Stream,
+		StreamPreface: streamPreface,
+	}); res != nil {
+		if res.Handled {
+			// 规则已完全接管（写响应）
+			c.Data(res.StatusCode, "application/json", res.RespBody)
+			return
+		}
+		if res.NewBody != nil {
+			// 规则转换了请求体（如模型名替换/图片替换），继续走普通链路
+			rawBody = res.NewBody
+			var rb struct {
+				Model  string `json:"model"`
+				Stream bool   `json:"stream"`
+			}
+			if err := json.Unmarshal(rawBody, &rb); err == nil && rb.Model != "" {
+				reqBody = rb
+			}
+		}
 	}
 
 	allModels, err := h.modelRepo.List(0)
@@ -798,6 +899,10 @@ func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *
 	}
 
 	// === 非流式响应（原逻辑）===
+	// 清除 HTTP Server WriteTimeout：虚拟模型两阶段路由（识图+主模型）可能超过默认 60s，
+	// 非流式路径不设 WriteTimeout，改由上游 client 的 requestTimeout 控制总时长
+	http.NewResponseController(c.Writer).SetWriteDeadline(time.Time{})
+
 	latencyMs := int(time.Since(startTime).Milliseconds())
 	totalDurationMs := latencyMs
 	respBytes, err := io.ReadAll(resp.Body)
@@ -1035,4 +1140,56 @@ func filterHopByHop(headers map[string][]string) map[string][]string {
 		}
 	}
 	return result
+}
+
+// writeStreamPreface 构造流式预响应回调（OpenAI chat 协议 SSE 帧）
+// 在识图等耗时操作前向客户端发送提示帧，避免下游长时间无响应。
+// 返回的回调负责：设置 SSE 响应头 → 写入并冲刷一个 chat.completion.chunk 帧。
+// 注意：之后 streamResponse 会再次设置响应头/状态码（已发送则无效，无害）。
+func (h *ProxyHandler) writeStreamPreface(c *gin.Context, model string) func(model, content string) error {
+	return func(displayModel, content string) error {
+		// 设置 SSE 响应头（prelude 仅调用一次；之后 streamResponse 的设置已发送无效，无害）
+		c.Header("Content-Type", "text/event-stream")
+		c.Header("Cache-Control", "no-cache")
+		c.Header("Connection", "keep-alive")
+		c.Status(http.StatusOK)
+		// 清除 http.Server.WriteTimeout（流式可能持续较长时间）
+		http.NewResponseController(c.Writer).SetWriteDeadline(time.Time{})
+
+		flusher, ok := c.Writer.(http.Flusher)
+		if !ok {
+			return fmt.Errorf("ResponseWriter 不支持 Flusher")
+		}
+
+		chunk := map[string]interface{}{
+			"id":      "chatcmpl-" + time.Now().Format("150405"),
+			"object":  "chat.completion.chunk",
+			"created": time.Now().Unix(),
+			"model":   displayModel,
+			"choices": []map[string]interface{}{
+				{
+					"index":         0,
+					"delta":         map[string]interface{}{"role": "assistant", "content": content},
+					"finish_reason": nil,
+				},
+			},
+		}
+		data, err := json.Marshal(chunk)
+		if err != nil {
+			return fmt.Errorf("序列化预响应失败: %w", err)
+		}
+
+		if _, err := c.Writer.Write([]byte("data: ")); err != nil {
+			return err
+		}
+		if _, err := c.Writer.Write(data); err != nil {
+			return err
+		}
+		if _, err := c.Writer.Write([]byte("\n\n")); err != nil {
+			return err
+		}
+		flusher.Flush()
+		log.Printf("[流式] 预响应已发送: %q", content)
+		return nil
+	}
 }

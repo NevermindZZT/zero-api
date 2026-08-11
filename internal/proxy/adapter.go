@@ -14,6 +14,7 @@ import (
 
 	"github.com/never/zero-api/internal/adapter"
 	"github.com/never/zero-api/internal/pricing"
+	"github.com/never/zero-api/internal/router"
 	"github.com/never/zero-api/internal/store"
 	"github.com/never/zero-api/internal/upstream"
 )
@@ -31,22 +32,42 @@ type ModelMappingConfig struct {
 
 // ProxyAdapter 代理适配器，处理拦截后的请求转发
 type ProxyAdapter struct {
-	channelRepo   *store.ChannelRepo
-	modelRepo     *store.ModelRepo
-	usageRepo     *store.UsageRepo
-	apiKeyRepo    *store.APIKeyRepo
-	modelMappings map[string]ModelMappingConfig
+	channelRepo    *store.ChannelRepo
+	modelRepo      *store.ModelRepo
+	usageRepo      *store.UsageRepo
+	apiKeyRepo     *store.APIKeyRepo
+	virtualModelRepo *store.VirtualModelRepo
+	modelMappings  map[string]ModelMappingConfig
 	requestTimeout time.Duration
+	// routers 模型路由规则链（虚拟模型等，与 HTTP 中转侧共用 internal/router 包）
+	routers []router.Rule
 }
 
-func NewProxyAdapter(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo, requestTimeout time.Duration) *ProxyAdapter {
-	return &ProxyAdapter{
-		channelRepo:   channelRepo,
-		modelRepo:     modelRepo,
-		usageRepo:     usageRepo,
-		apiKeyRepo:    apiKeyRepo,
-		modelMappings: make(map[string]ModelMappingConfig),
+func NewProxyAdapter(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo, virtualModelRepo *store.VirtualModelRepo, requestTimeout time.Duration) *ProxyAdapter {
+	pa := &ProxyAdapter{
+		channelRepo:    channelRepo,
+		modelRepo:      modelRepo,
+		usageRepo:      usageRepo,
+		apiKeyRepo:     apiKeyRepo,
+		virtualModelRepo: virtualModelRepo,
+		modelMappings:  make(map[string]ModelMappingConfig),
 		requestTimeout: requestTimeout,
+	}
+	// 构建模型路由规则链：后续新增路由规则在此注册
+	vmRouter := router.NewVirtualModelRouter(virtualModelRepo, modelRepo, channelRepo, pa.getProxyConfig)
+	vmRouter.SetUsageRepo(usageRepo)
+	vmRouter.SetAPIKeyRepo(apiKeyRepo)
+	pa.routers = []router.Rule{
+		vmRouter,
+	}
+	return pa
+}
+
+// getProxyConfig 获取代理配置（MITM 侧使用默认超时，渠道余额查询等不涉及）
+func (pa *ProxyAdapter) getProxyConfig() *store.ProxyConfigData {
+	return &store.ProxyConfigData{
+		RequestTimeoutSeconds: int(pa.requestTimeout / time.Second),
+		VisionTimeoutSeconds:  60,
 	}
 }
 
@@ -178,6 +199,57 @@ func (pa *ProxyAdapter) HandleModelsRequest(headers map[string]string) (statusCo
 		}
 		data = append(data, entry)
 	}
+
+	// 合并虚拟模型（模型路由）：以主模型能力为基础构建条目，识图扩展后展示为多模态
+	if vms, verr := pa.virtualModelRepo.List(); verr == nil {
+		modelByName := make(map[string]*store.Model)
+		for i := range allModels {
+			modelByName[allModels[i].ModelID] = &allModels[i]
+		}
+		for _, vm := range vms {
+			if vm.Status != "active" {
+				continue
+			}
+			main := modelByName[vm.MainModel]
+			if main == nil {
+				continue
+			}
+			displayName := vm.DisplayName
+			if displayName == "" {
+				displayName = vm.Name
+			}
+			data = append(data, modelEntry{
+				ID:            vm.Name,
+				Name:          displayName,
+				Created:       now,
+				Description:   fmt.Sprintf("虚拟模型: 路由到 %s（识图扩展: %s）", vm.MainModel, vm.VisionModel),
+				ContextLength: main.ContextWindow,
+				Architecture: architecture{
+					Modality:         "text+image->text",
+					InputModalities:  []string{"text", "image"},
+					OutputModalities: []string{"text"},
+					Tokenizer:        "Custom",
+					InstructType:     nil,
+				},
+				Pricing: map[string]string{
+					"prompt":     fmt.Sprintf("%.9f", main.PricingInput/1000000),
+					"completion": fmt.Sprintf("%.9f", main.PricingOutput/1000000),
+				},
+				TopProvider: topProvider{
+					ContextLength:       main.ContextWindow,
+					MaxCompletionTokens: main.MaxOutputTokens,
+					IsModerated:         false,
+				},
+				PerRequestLimits:    nil,
+				SupportedParameters: []string{"max_tokens", "temperature", "top_p", "seed", "stop"},
+				DefaultParameters:   map[string]interface{}{},
+				SupportedVoices:     nil,
+				KnowledgeCutoff:     nil,
+				ExpirationDate:      nil,
+			})
+		}
+	}
+
 	if data == nil {
 		data = []modelEntry{}
 	}
@@ -229,6 +301,28 @@ func (pa *ProxyAdapter) HandleLLMRequest(method, path string, headers map[string
 	// 模型访问校验（allowed_models 限制，用原始请求模型名校验）
 	if err := pa.checkAPIKeyModelAccess(apiKey, originalModel); err != nil {
 		return 403, nil, nil, err
+	}
+
+	// 模型路由规则（虚拟模型等）：命中规则时转换请求或直接处理
+	if res := router.ApplyRules(pa.routers, &router.Context{
+		Protocol:   downstreamProtocolFromPath(path),
+		RawBody:    body,
+		Model:      originalModel,
+		APIKeyID:   apiKeyID,
+		ClientAuth: authFromHeaders(headers),
+		Stream:     isStreamRequest(body),
+	}); res != nil {
+		if res.Handled {
+			respHeaders := map[string]string{"Content-Type": "application/json"}
+			return res.StatusCode, respHeaders, res.RespBody, nil
+		}
+		if res.NewBody != nil {
+			// 规则转换了请求体（模型名替换/图片替换），重新解析模型名
+			body = res.NewBody
+			if m, ok := parsedBodyModel(body); ok {
+				originalModel = m
+			}
+		}
 	}
 
 	// 查找所有启用的匹配模型（列表已按 c.priority 排序）
@@ -341,6 +435,38 @@ func downstreamProtocolFromPath(path string) string {
 	default: // /v1/chat/completions 等
 		return "openai"
 	}
+}
+
+// authFromHeaders 从请求头提取 Authorization（供路由规则的识图请求透传）
+func authFromHeaders(headers map[string]string) string {
+	for k, v := range headers {
+		if strings.EqualFold(k, "authorization") {
+			return v
+		}
+	}
+	return ""
+}
+
+// parsedBodyModel 从请求体解析 model 字段
+func parsedBodyModel(body []byte) (string, bool) {
+	var parsed struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", false
+	}
+	return parsed.Model, parsed.Model != ""
+}
+
+// isStreamRequest 判断请求是否为流式
+func isStreamRequest(body []byte) bool {
+	var parsed struct {
+		Stream bool `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return false
+	}
+	return parsed.Stream
 }
 
 // tryForwardModel 尝试将请求转发到指定渠道，成功返回响应，失败返回 error

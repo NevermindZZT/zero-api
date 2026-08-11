@@ -47,6 +47,7 @@ const menuOptions = [
     children: [
       { label: '渠道管理', key: '/channels', icon: renderIcon(GlobeSharp) },
       { label: '模型管理', key: '/models', icon: renderIcon(HardwareChipSharp) },
+      { label: '虚拟模型', key: '/virtual-models', icon: renderIcon(LayersSharp) },
       { label: 'API 密钥', key: '/api-keys', icon: renderIcon(KeySharp) },
       { label: 'Chat 测试', key: '/chat', icon: renderIcon(ChatbubbleEllipsesSharp) },
     ],

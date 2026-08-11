@@ -179,6 +179,19 @@ func (d *DB) migrate() error {
 			PRIMARY KEY (date, api_key_id, request_model)
 		)`,
 
+		// 虚拟模型（模型路由）：下游用虚拟模型名，按规则路由到实际模型
+		`CREATE TABLE IF NOT EXISTS virtual_models (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE,
+			display_name TEXT DEFAULT '',
+			main_model TEXT NOT NULL,
+			vision_model TEXT DEFAULT '',
+			description TEXT DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'active',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+
 		// 渠道余额/订阅状态表（一个渠道一条）
 		`CREATE TABLE IF NOT EXISTS channel_balances (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -252,6 +265,7 @@ func (d *DB) migrate() error {
 	// 迁移：添加系统配置字段到 proxy_config（熔断探针 + 请求超时）
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN probe_api_key TEXT DEFAULT ''`)
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN request_timeout_seconds INTEGER DEFAULT 60`)
+	d.Exec(`ALTER TABLE proxy_config ADD COLUMN vision_timeout_seconds INTEGER DEFAULT 60`)
 	// 迁移：添加全局熔断开关（默认启用）
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN failover_enabled INTEGER DEFAULT 1`)
 	// 索引：加速 API Key 验证查询
