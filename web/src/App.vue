@@ -187,6 +187,28 @@ body {
 .n-data-table-base-table-body::-webkit-scrollbar-thumb:hover {
   background: rgba(148, 163, 184, 0.4);
 }
+
+/* NPopover 内自定义滚动容器（如模型映射弹窗里的模型选择列表）统一深色细条：
+   这类容器是自定义 div（overflow-y:auto），不在 naive-ui 组件选择器范围内，
+   需要通配覆盖；scrollbar-color 是继承属性，作用于 .n-popover 即可 */
+.n-popover {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.2) transparent;
+}
+.n-popover *::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.n-popover *::-webkit-scrollbar-track {
+  background: transparent;
+}
+.n-popover *::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 3px;
+}
+.n-popover *::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.4);
+}
 .content-container {
   width: 100%;
   max-width: 1400px;

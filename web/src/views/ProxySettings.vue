@@ -6,7 +6,7 @@ import {
   useMessage, NAlert, NSpin, NIcon, NDataTable,
 } from 'naive-ui'
 import { ShieldCheckmarkSharp, SwapHorizontalSharp, ChevronDownSharp } from '@vicons/ionicons5'
-import { proxyApi, modelApi } from '@/api'
+import api, { proxyApi, modelApi } from '@/api'
 
 const message = useMessage()
 const loading = ref(true)
@@ -101,7 +101,7 @@ const modelOptions = computed(() => {
     const id = m.model_id || ''
     if (id && !seen.has(id)) {
       seen.add(id)
-      options.push({ label: `${id} (${m.display_name || ''})`, value: id })
+      options.push({ label: `${id}${m.is_virtual ? ' (虚拟模型)' : ''}${m.supports_vision ? ' 📷' : ''} (${m.display_name || ''})`, value: id })
     }
   }
   options.sort((a, b) => a.value.localeCompare(b.value))
@@ -155,7 +155,22 @@ onMounted(() => {
 async function loadAllModels() {
   try {
     const res = await modelApi.list()
-    allModels.value = res.data || []
+    const models = res.data || []
+    // 合并虚拟模型（虚拟模型也是下游可请求的模型名，源/目标模型都应可选）
+    try {
+      const vRes = await api.get('/virtual-models')
+      const vms = vRes.data || []
+      for (const vm of vms) {
+        if (vm.status !== 'active') continue
+        models.push({
+          model_id: vm.name,
+          display_name: vm.display_name || vm.name,
+          supports_vision: true, // 有识图扩展，主模型能“看图”
+          is_virtual: true,
+        })
+      }
+    } catch { /* 虚拟模型接口失败不影响主列表 */ }
+    allModels.value = models
   } catch {
     // 静默失败
   }
@@ -398,16 +413,18 @@ async function downloadCert(format: string) {
                   <div style="padding:4px 0">
                     <NInput v-model:value="modelSearch" placeholder="搜索模型…" clearable style="margin-bottom:8px" />
                     <div v-if="filteredModelOptions.length === 0" style="color:#888;padding:8px;text-align:center;font-size:13px">无匹配模型</div>
-                    <div
-                      v-for="m in filteredModelOptions"
-                      :key="m.value"
-                      style="padding:6px 10px;cursor:pointer;border-radius:4px;font-size:13px"
-                      @click="pickSourceModel(m.value)"
-                      @mouseenter="(e: any) => e.target.style.background='rgba(255,255,255,0.06)'"
-                      @mouseleave="(e: any) => e.target.style.background='transparent'"
-                    >
-                      <span style="color:#e2e8f0">{{ m.value }}</span>
-                      <span v-if="m.label !== m.value" style="color:#888;margin-left:8px;font-size:12px">{{ m.label.replace(m.value + ' (', '').replace(')', '') }}</span>
+                    <div style="max-height:280px;overflow-y:auto;overscroll-behavior:contain">
+                      <div
+                        v-for="m in filteredModelOptions"
+                        :key="m.value"
+                        style="padding:6px 10px;cursor:pointer;border-radius:4px;font-size:13px"
+                        @click="pickSourceModel(m.value)"
+                        @mouseenter="(e: any) => e.target.style.background='rgba(255,255,255,0.06)'"
+                        @mouseleave="(e: any) => e.target.style.background='transparent'"
+                      >
+                        <span style="color:#e2e8f0">{{ m.value }}</span>
+                        <span v-if="m.label !== m.value" style="color:#888;margin-left:8px;font-size:12px">{{ m.label.replace(m.value + ' (', '').replace(')', '') }}</span>
+                      </div>
                     </div>
                   </div>
                 </NPopover>
@@ -434,16 +451,18 @@ async function downloadCert(format: string) {
                     <div style="padding:4px 0">
                       <NInput v-model:value="modelSearch" placeholder="搜索模型…" clearable style="margin-bottom:8px" />
                       <div v-if="filteredModelOptions.length === 0" style="color:#888;padding:8px;text-align:center;font-size:13px">无匹配模型</div>
-                      <div
-                        v-for="m in filteredModelOptions"
-                        :key="m.value"
-                        style="padding:6px 10px;cursor:pointer;border-radius:4px;font-size:13px"
-                        @click="pickTargetModel(m.value)"
-                        @mouseenter="(e: any) => e.target.style.background='rgba(255,255,255,0.06)'"
-                        @mouseleave="(e: any) => e.target.style.background='transparent'"
-                      >
-                        <span style="color:#e2e8f0">{{ m.value }}</span>
-                        <span v-if="m.label !== m.value" style="color:#888;margin-left:8px;font-size:12px">{{ m.label.replace(m.value + ' (', '').replace(')', '') }}</span>
+                      <div style="max-height:280px;overflow-y:auto;overscroll-behavior:contain">
+                        <div
+                          v-for="m in filteredModelOptions"
+                          :key="m.value"
+                          style="padding:6px 10px;cursor:pointer;border-radius:4px;font-size:13px"
+                          @click="pickTargetModel(m.value)"
+                          @mouseenter="(e: any) => e.target.style.background='rgba(255,255,255,0.06)'"
+                          @mouseleave="(e: any) => e.target.style.background='transparent'"
+                        >
+                          <span style="color:#e2e8f0">{{ m.value }}</span>
+                          <span v-if="m.label !== m.value" style="color:#888;margin-left:8px;font-size:12px">{{ m.label.replace(m.value + ' (', '').replace(')', '') }}</span>
+                        </div>
                       </div>
                     </div>
                   </NPopover>
