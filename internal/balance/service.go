@@ -46,13 +46,11 @@ func (s *Service) List() ([]store.ChannelBalance, error) {
 }
 
 // Refresh 刷新单个渠道余额，返回更新后的记录
+// 不限制渠道启用状态：禁用渠道也允许查询余额（余额查询是旁路操作，不影响转发）
 func (s *Service) Refresh(channelID int64) (*store.ChannelBalance, error) {
 	ch, err := s.channelRepo.GetByID(channelID)
 	if err != nil {
 		return nil, fmt.Errorf("获取渠道失败: %w", err)
-	}
-	if ch.Status != "active" {
-		return nil, fmt.Errorf("渠道已禁用")
 	}
 
 	result := s.query(ch)

@@ -137,8 +137,9 @@ const columns = [
     title: '累计使用',
     key: 'quota_used',
     render: (r: any) => {
-      if (!r.quota_enabled) return h('span', { style: 'color:#64748b;font-size:12px' }, '-')
-      return h('span', { style: 'font-size:12px;color:#94a3b8' }, `$${(r.quota_used || 0).toFixed(4)}`)
+      // 无论是否启用额度都显示累计使用（后端 DeductQuota 对不限额 key 也统计 quota_used）
+      const used = r.quota_used || 0
+      return h('span', { style: 'font-size:12px;color:#94a3b8' }, `$${used.toFixed(4)}`)
     },
   },
   {

@@ -145,19 +145,22 @@ func (r *APIKeyRepo) UpdateConfig(id int64, quotaEnabled bool, quotaBalance floa
 	return r.getByID(id)
 }
 
-// DeductQuota 扣减 API Key 额度（按实际用量 cost）
-// 原子操作：balance 减 cost，used 加 cost
-// 返回扣减后的余额；如果扣减后为负则限制为 0（不会负余额）
+// DeductQuota 记录 API Key 用量（按实际用量 cost）
+// 原子操作：
+//   - quota_used（累计已用）始终累加——不限额度的 key 也统计使用额度
+//   - quota_balance（剩余额度）仅在启用额度限制时扣减（MIN 0，不会负余额）
+//
+// 返回扣减后的余额（未启用额度时返回当前 quota_used）
 func (r *APIKeyRepo) DeductQuota(id int64, cost float64) (float64, error) {
 	if cost <= 0 {
 		return 0, nil
 	}
-	// 原子扣减，限制余额不低于 0
+	// 原子更新：quota_used 无条件累加；quota_balance 仅 quota_enabled=1 时扣减
 	_, err := r.db.Exec(
 		`UPDATE api_keys SET
-			quota_balance = MAX(0, quota_balance - ?),
-			quota_used = quota_used + ?
-		 WHERE id = ? AND quota_enabled = 1`,
+			quota_used = quota_used + ?,
+			quota_balance = CASE WHEN quota_enabled = 1 THEN MAX(0, quota_balance - ?) ELSE quota_balance END
+		 WHERE id = ?`,
 		cost, cost, id,
 	)
 	if err != nil {

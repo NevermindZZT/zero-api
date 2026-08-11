@@ -88,7 +88,7 @@ func TestAPIKeyDeductQuota(t *testing.T) {
 	}
 }
 
-// 测试未启用额度时扣减不影响
+// 测试未启用额度时扣减：余额不变，但累计已用仍统计
 func TestAPIKeyDeductQuotaDisabled(t *testing.T) {
 	db := setupAPIKeyTestDB(t)
 	repo := NewAPIKeyRepo(db)
@@ -104,6 +104,21 @@ func TestAPIKeyDeductQuotaDisabled(t *testing.T) {
 	}
 	if bal != 0 {
 		t.Errorf("未启用额度时余额应为 0，got %v", bal)
+	}
+
+	// 再扣 0.3，累计已用应累加为 0.8（即使未启用额度）
+	if _, err := repo.DeductQuota(k.ID, 0.3); err != nil {
+		t.Fatalf("再次扣减失败: %v", err)
+	}
+	got, err := repo.GetByKey(k.Key)
+	if err != nil {
+		t.Fatalf("GetByKey 失败: %v", err)
+	}
+	if got.QuotaUsed < 0.79 || got.QuotaUsed > 0.81 {
+		t.Errorf("未启用额度时累计已用应统计为 0.8，got %v", got.QuotaUsed)
+	}
+	if got.QuotaBalance != 0 {
+		t.Errorf("未启用额度时余额应保持 0，got %v", got.QuotaBalance)
 	}
 }
 
