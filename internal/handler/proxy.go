@@ -212,6 +212,22 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 			if displayName == "" {
 				displayName = vm.Name
 			}
+			// 虚拟模型继承主模型的能力：工具调用 / 思考 / 视觉
+			vmParams := []string{"max_tokens", "temperature", "top_p", "seed", "stop", "response_format", "structured_outputs"}
+			if main.SupportsTools {
+				vmParams = append(vmParams, "tools", "tool_choice")
+			}
+			if main.SupportsThinking {
+				vmParams = append(vmParams, "reasoning", "include_reasoning")
+			}
+			// 视觉能力：配置了识图模型（识图扩展）或主模型本身支持视觉时，宣称支持 image
+			// 否则按纯文本声明（避免下游误认为可识图）
+			modality := "text->text"
+			inputMods := []string{"text"}
+			if vm.VisionModel != "" || main.SupportsVision {
+				modality = "text+image->text"
+				inputMods = []string{"text", "image"}
+			}
 			entry := gin.H{
 				"id":              vm.Name,
 				"name":            displayName,
@@ -219,8 +235,8 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 				"description":     fmt.Sprintf("虚拟模型: 路由到 %s（识图扩展: %s）", vm.MainModel, vm.VisionModel),
 				"context_length":  main.ContextWindow,
 				"architecture": gin.H{
-					"modality":          "text+image->text",
-					"input_modalities":  []string{"text", "image"},
+					"modality":          modality,
+					"input_modalities":  inputMods,
 					"output_modalities": []string{"text"},
 					"tokenizer":         "Custom",
 					"instruct_type":     nil,
@@ -235,11 +251,18 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 					"is_moderated":          false,
 				},
 				"per_request_limits":   nil,
-				"supported_parameters": []string{"max_tokens", "temperature", "top_p", "seed", "stop"},
+				"supported_parameters": vmParams,
 				"default_parameters":   gin.H{},
 				"supported_voices":     nil,
 				"knowledge_cutoff":     nil,
 				"expiration_date":      nil,
+			}
+			// reasoning 字段（与普通模型一致）
+			if main.SupportsThinking {
+				entry["reasoning"] = gin.H{
+					"mandatory":       false,
+					"default_enabled": true,
+				}
 			}
 			data = append(data, entry)
 		}

@@ -218,6 +218,23 @@ func (pa *ProxyAdapter) HandleModelsRequest(headers map[string]string) (statusCo
 			if displayName == "" {
 				displayName = vm.Name
 			}
+			// 虚拟模型继承主模型的能力：工具调用 / 思考 / 视觉
+			vmParams := []string{
+				"max_tokens", "temperature", "top_p", "stop",
+				"frequency_penalty", "presence_penalty",
+				"tool_choice", "tools", "top_k",
+			}
+			if main.SupportsThinking {
+				vmParams = append(vmParams, "reasoning", "include_reasoning")
+			}
+			// 视觉能力：配置了识图模型（识图扩展）或主模型本身支持视觉时，宣称支持 image
+			// 否则按纯文本声明（避免下游误认为可识图）
+			modality := "text->text"
+			inputMods := []string{"text"}
+			if vm.VisionModel != "" || main.SupportsVision {
+				modality = "text+image->text"
+				inputMods = []string{"text", "image"}
+			}
 			data = append(data, modelEntry{
 				ID:            vm.Name,
 				Name:          displayName,
@@ -225,8 +242,8 @@ func (pa *ProxyAdapter) HandleModelsRequest(headers map[string]string) (statusCo
 				Description:   fmt.Sprintf("虚拟模型: 路由到 %s（识图扩展: %s）", vm.MainModel, vm.VisionModel),
 				ContextLength: main.ContextWindow,
 				Architecture: architecture{
-					Modality:         "text+image->text",
-					InputModalities:  []string{"text", "image"},
+					Modality:         modality,
+					InputModalities:  inputMods,
 					OutputModalities: []string{"text"},
 					Tokenizer:        "Custom",
 					InstructType:     nil,
@@ -241,8 +258,15 @@ func (pa *ProxyAdapter) HandleModelsRequest(headers map[string]string) (statusCo
 					IsModerated:         false,
 				},
 				PerRequestLimits:    nil,
-				SupportedParameters: []string{"max_tokens", "temperature", "top_p", "seed", "stop"},
-				DefaultParameters:   map[string]interface{}{},
+				SupportedParameters: vmParams,
+				DefaultParameters: map[string]interface{}{
+					"temperature":        nil,
+					"top_p":              nil,
+					"top_k":              nil,
+					"frequency_penalty":  nil,
+					"presence_penalty":   nil,
+					"repetition_penalty": nil,
+				},
 				SupportedVoices:     nil,
 				KnowledgeCutoff:     nil,
 				ExpirationDate:      nil,

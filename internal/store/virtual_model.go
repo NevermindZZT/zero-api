@@ -83,6 +83,18 @@ func (r *VirtualModelRepo) Delete(id int64) error {
 	return err
 }
 
+// GetByID 按 ID 查询
+func (r *VirtualModelRepo) GetByID(id int64) (*VirtualModel, error) {
+	var m VirtualModel
+	err := r.db.QueryRow(
+		`SELECT id, name, display_name, main_model, vision_model, description, status, created_at, updated_at FROM virtual_models WHERE id = ?`, id,
+	).Scan(&m.ID, &m.Name, &m.DisplayName, &m.MainModel, &m.VisionModel, &m.Description, &m.Status, &m.CreatedAt, &m.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
 // ToggleStatus 切换启用/禁用状态
 func (r *VirtualModelRepo) ToggleStatus(id int64) error {
 	_, err := r.db.Exec(`UPDATE virtual_models SET status = CASE WHEN status='active' THEN 'inactive' ELSE 'active' END, updated_at=CURRENT_TIMESTAMP WHERE id = ?`, id)

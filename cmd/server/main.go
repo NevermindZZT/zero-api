@@ -80,6 +80,8 @@ func main() {
 
 	// 初始化虚拟模型管理
 	virtualModelH := handler.NewVirtualModelHandler(svc.VirtualModel)
+	// 虚拟模型变更后刷新 /v1/models 缓存（模型列表会合并虚拟模型）
+	virtualModelH.SetOnUpdate(proxyH.InvalidateModelsCache)
 
 	// 初始化技能管理
 	skillFS := store.NewSkillFS(cfg.MCP.SkillsDir)

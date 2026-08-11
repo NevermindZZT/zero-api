@@ -14,11 +14,24 @@ import (
 
 // VirtualModelHandler 虚拟模型（模型路由）管理
 type VirtualModelHandler struct {
-	repo *store.VirtualModelRepo
+	repo     *store.VirtualModelRepo
+	onUpdate func() // 数据变更后的回调（通知 ProxyHandler 刷新 /v1/models 缓存）
 }
 
 func NewVirtualModelHandler(repo *store.VirtualModelRepo) *VirtualModelHandler {
 	return &VirtualModelHandler{repo: repo}
+}
+
+// SetOnUpdate 设置数据变更后的回调（虚拟模型 CRUD 后调用，刷新模型列表缓存）
+func (h *VirtualModelHandler) SetOnUpdate(fn func()) {
+	h.onUpdate = fn
+}
+
+// invalidateCache 数据变更后通知回调
+func (h *VirtualModelHandler) invalidateCache() {
+	if h.onUpdate != nil {
+		h.onUpdate()
+	}
 }
 
 func (h *VirtualModelHandler) List(c *gin.Context) {
@@ -51,6 +64,7 @@ func (h *VirtualModelHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	h.invalidateCache()
 	vm.ID = id
 	c.JSON(http.StatusCreated, vm)
 }
@@ -63,10 +77,20 @@ func (h *VirtualModelHandler) Update(c *gin.Context) {
 		return
 	}
 	vm.ID = id
+	// status 未传（空）时保留原值：避免 PUT 部分字段更新把状态覆盖为空
+	if vm.Status == "" {
+		existing, err := h.repo.GetByID(id)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "虚拟模型不存在"})
+			return
+		}
+		vm.Status = existing.Status
+	}
 	if err := h.repo.Update(&vm); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	h.invalidateCache()
 	c.JSON(http.StatusOK, vm)
 }
 
@@ -76,6 +100,7 @@ func (h *VirtualModelHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	h.invalidateCache()
 	c.Status(http.StatusNoContent)
 }
 
@@ -85,5 +110,6 @@ func (h *VirtualModelHandler) Toggle(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	h.invalidateCache()
 	c.Status(http.StatusNoContent)
 }
