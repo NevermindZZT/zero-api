@@ -83,16 +83,22 @@ func (r *VirtualModelRouter) Transform(ctx *Context) *Result {
 		return ErrorResult(http.StatusNotFound, "虚拟模型 %s 已禁用", vm.Name)
 	}
 
-	// 协议感知的图片提取
-	images := ExtractImages(ctx.Protocol, ctx.RawBody)
+	// 协议感知的图片提取：只检测最后一条 user 消息的图片（多轮会话的历史图片不触发识图）
+	// 历史消息中的图片已有上一轮 assistant 回复覆盖，重复识图浪费且延迟
+	images := ExtractLatestUserImages(ctx.Protocol, ctx.RawBody)
 	usable := extractImageRefsToUsable(images)
-	log.Printf("[路由:虚拟模型] %s 请求: 图片数=%d stream=%v 协议=%s", vm.Name, len(images), ctx.Stream, ctx.Protocol)
+	log.Printf("[路由:虚拟模型] %s 请求: 最新图片数=%d stream=%v 协议=%s", vm.Name, len(images), ctx.Stream, ctx.Protocol)
 
-	// 无图请求：直接替换模型名
+	// 无图请求：替换模型名；历史消息中可能残留上一轮的图片，需替换为占位文本
+	// （避免纯文本主模型收到原始图片），用空描述列表 → 历史图片→占位、无最新图片不处理
 	if len(images) == 0 {
-		newBody := ReplaceModel(ctx.RawBody, vm.MainModel)
+		newBody := ReplaceImages(ctx.Protocol, ctx.RawBody, vm.MainModel, nil)
 		if newBody == nil {
 			return nil // 无法解析，交给普通链路报错
+		}
+		logImageReplaceSummary(ctx, vm, 0, nil, newBody)
+		if os.Getenv("ZERO_API_DEBUG_ROUTER") == "1" {
+			log.Printf("[路由:虚拟模型] %s 无图请求替换后请求体:\n%s", vm.Name, string(newBody))
 		}
 		return &Result{NewBody: newBody}
 	}
@@ -102,8 +108,9 @@ func (r *VirtualModelRouter) Transform(ctx *Context) *Result {
 		return ErrorResult(http.StatusBadRequest, "虚拟模型 %s 未配置识图模型，无法处理图片请求", vm.Name)
 	}
 	if len(usable) == 0 {
-		// 有图片但无可识别引用（如 responses file_id），交给主模型处理
-		newBody := ReplaceModel(ctx.RawBody, vm.MainModel)
+		// 有图片但无可识别引用（如 responses file_id），交给主模型处理：
+		// 同样替换所有 user 图片为占位（无可识别引用的图片无法识图，不能透传原始图）
+		newBody := ReplaceImages(ctx.Protocol, ctx.RawBody, vm.MainModel, nil)
 		if newBody == nil {
 			return nil
 		}
@@ -112,7 +119,7 @@ func (r *VirtualModelRouter) Transform(ctx *Context) *Result {
 
 	// 流式预响应：先告知下游"正在分析图片"，再开始耗时识图（避免长时间无响应）
 	if ctx.Stream && ctx.StreamPreface != nil {
-		if err := ctx.StreamPreface(vm.Name, "正在分析图片..."); err != nil {
+		if err := ctx.StreamPreface(vm.Name, "正在分析图片...\n"); err != nil {
 			log.Printf("[路由:虚拟模型] %s 预响应客户端断开: %v", vm.Name, err)
 			return ErrorResult(http.StatusBadRequest, "客户端已断开")
 		}

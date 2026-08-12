@@ -296,3 +296,128 @@ func TestApplyRules(t *testing.T) {
 		t.Fatalf("应返回 nil: %+v", res)
 	}
 }
+
+// ===== 多轮会话：历史图片不触发识图，仅最后一条 user 消息的图片触发 =====
+
+// 多轮会话请求：第一轮带图（历史），第二轮（最后一条 user）无图
+const multiTurnReq = `{
+  "model": "text-vision",
+  "messages": [
+    {"role": "user", "content": [
+      {"type": "text", "text": "第一轮带图"},
+      {"type": "image_url", "image_url": {"url": "https://example.com/history.png"}}
+    ]},
+    {"role": "assistant", "content": "第一轮的回复"},
+    {"role": "user", "content": "第二轮纯文本追问"}
+  ]
+}`
+
+func TestExtractLatestUserImagesMultiTurn(t *testing.T) {
+	// 全部消息提取：2 张图（含历史）
+	all := ExtractImages(ProtocolOpenAI, []byte(multiTurnReq))
+	if len(all) != 1 {
+		t.Fatalf("全部消息应提取 1 张图（历史图），got %d", len(all))
+	}
+	// 最后一条 user：0 张图（不触发识图）
+	latest := ExtractLatestUserImages(ProtocolOpenAI, []byte(multiTurnReq))
+	if len(latest) != 0 {
+		t.Fatalf("最后一条 user 应无图（不触发识图），got %d", len(latest))
+	}
+}
+
+func TestReplaceImagesMultiTurnHistoryPlaceholder(t *testing.T) {
+	// 无图触发（nil 描述）：历史图片应替换为占位文本，不残留原始图片
+	out := ReplaceImages(ProtocolOpenAI, []byte(multiTurnReq), "deepseek-v4-flash", nil)
+	if out == nil {
+		t.Fatal("替换失败")
+	}
+	var parsed map[string]interface{}
+	json.Unmarshal(out, &parsed)
+	msgs := parsed["messages"].([]interface{})
+	// 第一条 user（历史带图）：应替换为占位
+	content0 := msgs[0].(map[string]interface{})["content"]
+	raw0, _ := json.Marshal(content0)
+	if !strings.Contains(string(raw0), historyImagePlaceholder) {
+		t.Errorf("历史图片应替换为占位文本: %s", string(raw0))
+	}
+	if strings.Contains(string(raw0), "image_url") {
+		t.Errorf("历史图片不应残留 image_url: %s", string(raw0))
+	}
+	// 最后一条 user（纯文本）：content 保持字符串不变
+	content2 := msgs[2].(map[string]interface{})["content"]
+	if content2 != "第二轮纯文本追问" {
+		t.Errorf("纯文本 user 消息不应被修改: %v", content2)
+	}
+}
+
+// 单轮带图（最后一条 user 有图）：ExtractLatestUserImages 应提取
+func TestExtractLatestUserImagesSingleTurn(t *testing.T) {
+	latest := ExtractLatestUserImages(ProtocolOpenAI, []byte(openAIReq))
+	if len(latest) != 2 {
+		t.Fatalf("单轮最后一条 user 应提取 2 张图，got %d", len(latest))
+	}
+}
+
+// Anthropic 多轮
+const anthropicMultiTurnReq = `{
+  "model": "text-vision",
+  "messages": [
+    {"role": "user", "content": [
+      {"type": "text", "text": "第一轮"},
+      {"type": "image", "source": {"type": "url", "url": "https://example.com/h.png"}}
+    ]},
+    {"role": "assistant", "content": [{"type": "text", "text": "回复"}]},
+    {"role": "user", "content": [{"type": "text", "text": "第二轮"}]}
+  ]
+}`
+
+func TestExtractLatestUserImagesAnthropicMultiTurn(t *testing.T) {
+	latest := ExtractLatestUserImages(ProtocolAnthropic, []byte(anthropicMultiTurnReq))
+	if len(latest) != 0 {
+		t.Fatalf("Anthropic 最后一条 user 应无图，got %d", len(latest))
+	}
+	out := ReplaceImages(ProtocolAnthropic, []byte(anthropicMultiTurnReq), "deepseek-v4-flash", nil)
+	if out == nil {
+		t.Fatal("替换失败")
+	}
+	var parsed map[string]interface{}
+	json.Unmarshal(out, &parsed)
+	msgs := parsed["messages"].([]interface{})
+	content0 := msgs[0].(map[string]interface{})["content"]
+	raw0, _ := json.Marshal(content0)
+	if !strings.Contains(string(raw0), historyImagePlaceholder) {
+		t.Errorf("Anthropic 历史图片应替换为占位: %s", string(raw0))
+	}
+}
+
+// Responses 多轮
+const responsesMultiTurnReq = `{
+  "model": "text-vision",
+  "input": [
+    {"role": "user", "content": [
+      {"type": "input_text", "text": "第一轮"},
+      {"type": "input_image", "image_url": "https://example.com/h.png"}
+    ]},
+    {"role": "assistant", "content": [{"type": "output_text", "text": "回复"}]},
+    {"role": "user", "content": [{"type": "input_text", "text": "第二轮"}]}
+  ]
+}`
+
+func TestExtractLatestUserImagesResponsesMultiTurn(t *testing.T) {
+	latest := ExtractLatestUserImages(ProtocolResponses, []byte(responsesMultiTurnReq))
+	if len(latest) != 0 {
+		t.Fatalf("Responses 最后一条 user 应无图，got %d", len(latest))
+	}
+	out := ReplaceImages(ProtocolResponses, []byte(responsesMultiTurnReq), "deepseek-v4-flash", nil)
+	if out == nil {
+		t.Fatal("替换失败")
+	}
+	var parsed map[string]interface{}
+	json.Unmarshal(out, &parsed)
+	input := parsed["input"].([]interface{})
+	content0 := input[0].(map[string]interface{})["content"]
+	raw0, _ := json.Marshal(content0)
+	if !strings.Contains(string(raw0), historyImagePlaceholder) {
+		t.Errorf("Responses 历史图片应替换为占位: %s", string(raw0))
+	}
+}

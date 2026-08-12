@@ -46,6 +46,45 @@ func ExtractImages(protocol string, body []byte) []ImageRef {
 	}
 }
 
+// ExtractLatestUserImages 按下游协议提取【最后一条 user 消息】中的图片。
+// 用于触发识图判断：多轮会话时客户端会携带完整历史（含第一轮的图片消息），
+// 但只有最后一条 user 消息（当前轮次的输入）才是需要识图的新图片，
+// 历史消息中的图片已有上一轮 assistant 回复覆盖，不应重复触发识图。
+func ExtractLatestUserImages(protocol string, body []byte) []ImageRef {
+	switch protocol {
+	case ProtocolAnthropic:
+		return extractLatestUserImagesAnthropic(body)
+	case ProtocolResponses:
+		return extractLatestUserImagesResponses(body)
+	default:
+		return extractLatestUserImagesOpenAI(body)
+	}
+}
+
+// historyImagePlaceholder 历史 user 消息中图片的占位文本（不触发识图、不透传给主模型）
+const historyImagePlaceholder = "[历史消息中的图片：内容已在此前对话中描述]"
+
+// isLastUserMessageMap 判断消息数组中的指定索引是否为最后一条 user 消息
+// msgs 为 []interface{} 的 map 切片（ReplaceImages 解析后的结构）
+func isLastUserMessageMap(msgs []interface{}, idx int) bool {
+	mm, ok := msgs[idx].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	role, _ := mm["role"].(string)
+	if role != "user" {
+		return false
+	}
+	for i := idx + 1; i < len(msgs); i++ {
+		if m, ok := msgs[i].(map[string]interface{}); ok {
+			if r, _ := m["role"].(string); r == "user" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // ReplaceModel 替换请求中的 model 字段（三种协议均为顶层 model 字段）
 func ReplaceModel(body []byte, toModel string) []byte {
 	var parsed map[string]interface{}
@@ -115,6 +154,23 @@ func extractImagesOpenAI(body []byte) []ImageRef {
 	return refs
 }
 
+// extractLatestUserImagesOpenAI 从最后一条 user 消息提取图片
+func extractLatestUserImagesOpenAI(body []byte) []ImageRef {
+	var req struct {
+		Messages []openAIChatMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil
+	}
+	// 从后往前找最后一条 user 消息
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			return extractOpenAIContentImages(req.Messages[i].Content)
+		}
+	}
+	return nil
+}
+
 func extractOpenAIContentImages(content json.RawMessage) []ImageRef {
 	if len(content) == 0 || string(content) == "null" {
 		return nil
@@ -160,13 +216,19 @@ func replaceOpenAIImages(parsed map[string]interface{}, descriptions []string) {
 		if err := json.Unmarshal(raw, &parts); err != nil {
 			continue
 		}
+		// 是否最后一条 user 消息：是 → 用识图描述；否（历史消息）→ 用占位文本
+		isLatest := isLastUserMessageMap(msgs, i)
 		changed := false
 		var newParts []openAIContentPart
 		for _, p := range parts {
 			if p.Type == "image_url" && p.ImageURL.URL != "" {
-				desc := descAt(descriptions, imgIdx)
-				imgIdx++
-				newParts = append(newParts, openAIContentPart{Type: "text", Text: desc})
+				if isLatest {
+					desc := descAt(descriptions, imgIdx)
+					imgIdx++
+					newParts = append(newParts, openAIContentPart{Type: "text", Text: desc})
+				} else {
+					newParts = append(newParts, openAIContentPart{Type: "text", Text: historyImagePlaceholder})
+				}
 				changed = true
 			} else {
 				newParts = append(newParts, p)
@@ -211,26 +273,51 @@ func extractImagesAnthropic(body []byte) []ImageRef {
 	}
 	var refs []ImageRef
 	for _, m := range req.Messages {
-		// 字符串形式无图片
-		var str string
-		if err := json.Unmarshal(m.Content, &str); err == nil {
+		refs = append(refs, extractAnthropicContentImages(m.Content)...)
+	}
+	return refs
+}
+
+// extractLatestUserImagesAnthropic 从最后一条 user 消息提取图片
+func extractLatestUserImagesAnthropic(body []byte) []ImageRef {
+	var req struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil
+	}
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			return extractAnthropicContentImages(req.Messages[i].Content)
+		}
+	}
+	return nil
+}
+
+func extractAnthropicContentImages(content json.RawMessage) []ImageRef {
+	// 字符串形式无图片
+	var str string
+	if err := json.Unmarshal(content, &str); err == nil {
+		return nil
+	}
+	var blocks []anthropicImageBlock
+	if err := json.Unmarshal(content, &blocks); err != nil {
+		return nil
+	}
+	var refs []ImageRef
+	for _, b := range blocks {
+		if b.Type != "image" {
 			continue
 		}
-		var blocks []anthropicImageBlock
-		if err := json.Unmarshal(m.Content, &blocks); err != nil {
-			continue
-		}
-		for _, b := range blocks {
-			if b.Type != "image" {
-				continue
-			}
-			switch b.Source.Type {
-			case "base64":
-				refs = append(refs, ImageRef{Base64: b.Source.Data, MediaType: b.Source.MediaType})
-			case "url":
-				if b.Source.URL != "" {
-					refs = append(refs, ImageRef{URL: b.Source.URL, usableURL: b.Source.URL})
-				}
+		switch b.Source.Type {
+		case "base64":
+			refs = append(refs, ImageRef{Base64: b.Source.Data, MediaType: b.Source.MediaType})
+		case "url":
+			if b.Source.URL != "" {
+				refs = append(refs, ImageRef{URL: b.Source.URL, usableURL: b.Source.URL})
 			}
 		}
 	}
@@ -265,14 +352,20 @@ func replaceAnthropicImages(parsed map[string]interface{}, descriptions []string
 		if err := json.Unmarshal(raw, &blocks); err != nil {
 			continue
 		}
+		// 是否最后一条 user 消息：是 → 用识图描述；否（历史消息）→ 用占位文本
+		isLatest := isLastUserMessageMap(msgs, i)
 		changed := false
 		var newBlocks []map[string]interface{}
 		for _, b := range blocks {
 			typ, _ := b["type"].(string)
 			if typ == "image" {
-				desc := descAt(descriptions, imgIdx)
-				imgIdx++
-				newBlocks = append(newBlocks, map[string]interface{}{"type": "text", "text": desc})
+				if isLatest {
+					desc := descAt(descriptions, imgIdx)
+					imgIdx++
+					newBlocks = append(newBlocks, map[string]interface{}{"type": "text", "text": desc})
+				} else {
+					newBlocks = append(newBlocks, map[string]interface{}{"type": "text", "text": historyImagePlaceholder})
+				}
 				changed = true
 			} else {
 				newBlocks = append(newBlocks, b)
@@ -307,23 +400,48 @@ func extractImagesResponses(body []byte) []ImageRef {
 	}
 	var refs []ImageRef
 	for _, item := range req.Input {
-		// content 可为字符串或块数组
-		var str string
-		if err := json.Unmarshal(item.Content, &str); err == nil {
-			continue
+		refs = append(refs, extractResponsesContentImages(item.Content)...)
+	}
+	return refs
+}
+
+// extractLatestUserImagesResponses 从最后一条 user 消息（input item）提取图片
+func extractLatestUserImagesResponses(body []byte) []ImageRef {
+	var req struct {
+		Input []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil
+	}
+	for i := len(req.Input) - 1; i >= 0; i-- {
+		if req.Input[i].Role == "user" {
+			return extractResponsesContentImages(req.Input[i].Content)
 		}
-		var blocks []responsesInputImageBlock
-		if err := json.Unmarshal(item.Content, &blocks); err != nil {
-			continue
-		}
-		for _, b := range blocks {
-			if b.Type == "input_image" {
-				if b.ImageURL != "" {
-					refs = append(refs, ImageRef{URL: b.ImageURL, usableURL: b.ImageURL})
-				} else if b.FileID != "" {
-					// file_id 引用无法直接识图，跳过（保留原块，由主模型处理）
-					continue
-				}
+	}
+	return nil
+}
+
+func extractResponsesContentImages(content json.RawMessage) []ImageRef {
+	// content 可为字符串或块数组
+	var str string
+	if err := json.Unmarshal(content, &str); err == nil {
+		return nil
+	}
+	var blocks []responsesInputImageBlock
+	if err := json.Unmarshal(content, &blocks); err != nil {
+		return nil
+	}
+	var refs []ImageRef
+	for _, b := range blocks {
+		if b.Type == "input_image" {
+			if b.ImageURL != "" {
+				refs = append(refs, ImageRef{URL: b.ImageURL, usableURL: b.ImageURL})
+			} else if b.FileID != "" {
+				// file_id 引用无法直接识图，跳过（保留原块，由主模型处理）
+				continue
 			}
 		}
 	}
@@ -357,14 +475,20 @@ func replaceResponsesImages(parsed map[string]interface{}, descriptions []string
 		if err := json.Unmarshal(raw, &blocks); err != nil {
 			continue
 		}
+		// 是否最后一条 user item：是 → 用识图描述；否（历史消息）→ 用占位文本
+		isLatest := isLastUserMessageMap(input, i)
 		changed := false
 		var newBlocks []map[string]interface{}
 		for _, b := range blocks {
 			typ, _ := b["type"].(string)
 			if typ == "input_image" {
-				desc := descAt(descriptions, imgIdx)
-				imgIdx++
-				newBlocks = append(newBlocks, map[string]interface{}{"type": "input_text", "text": desc})
+				if isLatest {
+					desc := descAt(descriptions, imgIdx)
+					imgIdx++
+					newBlocks = append(newBlocks, map[string]interface{}{"type": "input_text", "text": desc})
+				} else {
+					newBlocks = append(newBlocks, map[string]interface{}{"type": "input_text", "text": historyImagePlaceholder})
+				}
 				changed = true
 			} else {
 				newBlocks = append(newBlocks, b)
