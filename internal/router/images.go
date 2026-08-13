@@ -3,6 +3,7 @@ package router
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 )
 
@@ -61,29 +62,50 @@ func ExtractLatestUserImages(protocol string, body []byte) []ImageRef {
 	}
 }
 
-// historyImagePlaceholder 历史 user 消息中图片的占位文本（不触发识图、不透传给主模型）
-const historyImagePlaceholder = "[历史消息中的图片：内容已在此前对话中描述]"
-
-// isLastUserMessageMap 判断消息数组中的指定索引是否为最后一条 user 消息
-// msgs 为 []interface{} 的 map 切片（ReplaceImages 解析后的结构）
-func isLastUserMessageMap(msgs []interface{}, idx int) bool {
-	mm, ok := msgs[idx].(map[string]interface{})
-	if !ok {
-		return false
-	}
-	role, _ := mm["role"].(string)
-	if role != "user" {
-		return false
-	}
-	for i := idx + 1; i < len(msgs); i++ {
-		if m, ok := msgs[i].(map[string]interface{}); ok {
-			if r, _ := m["role"].(string); r == "user" {
-				return false
-			}
+// logMessageImageProfile 打印请求中每条消息的角色 + 图片数（调试多轮识图触发用）
+func logMessageImageProfile(protocol string, body []byte) {
+	switch protocol {
+	case ProtocolAnthropic:
+		var req struct {
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			return
+		}
+		for i, m := range req.Messages {
+			log.Printf("[路由:虚拟模型]  消息[%d] role=%s 图片数=%d", i, m.Role, len(extractAnthropicContentImages(m.Content)))
+		}
+	case ProtocolResponses:
+		var req struct {
+			Input []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"input"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			return
+		}
+		for i, item := range req.Input {
+			log.Printf("[路由:虚拟模型]  input[%d] role=%s 图片数=%d", i, item.Role, len(extractResponsesContentImages(item.Content)))
+		}
+	default:
+		var req struct {
+			Messages []openAIChatMessage `json:"messages"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			return
+		}
+		for i, m := range req.Messages {
+			log.Printf("[路由:虚拟模型]  消息[%d] role=%s 图片数=%d", i, m.Role, len(extractOpenAIContentImages(m.Content)))
 		}
 	}
-	return true
 }
+
+// historyImagePlaceholder 历史 user 消息中图片的占位文本（不触发识图、不透传给主模型）
+const historyImagePlaceholder = "[历史消息中的图片：内容已在此前对话中描述]"
 
 // ReplaceModel 替换请求中的 model 字段（三种协议均为顶层 model 字段）
 func ReplaceModel(body []byte, toModel string) []byte {
@@ -154,7 +176,14 @@ func extractImagesOpenAI(body []byte) []ImageRef {
 	return refs
 }
 
-// extractLatestUserImagesOpenAI 从最后一条 user 消息提取图片
+// extractLatestUserImagesOpenAI 提取【本轮新增】的图片
+// 判断标准：从后往前找最后一条带图片的 user 消息——
+//   - 若其后没有 assistant 回复（本轮新输入，如 agent 在带图 user 后又追加纯文本指令/工具结果）→ 触发识图
+//   - 若其后已有 assistant 回复（历史图片已被回复覆盖）→ 不触发（避免重复识图）
+//
+// 注意：reasonix 等 reasoning agent 可能在带图 user 后追加 assistant 思考内容
+// （role=assistant 但只是 reasoning 过程，非真正回复），此时也应触发——
+// 见 extractLatestUserImagesOpenAI 的 assistantCovered 判定。
 func extractLatestUserImagesOpenAI(body []byte) []ImageRef {
 	var req struct {
 		Messages []openAIChatMessage `json:"messages"`
@@ -162,11 +191,21 @@ func extractLatestUserImagesOpenAI(body []byte) []ImageRef {
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil
 	}
-	// 从后往前找最后一条 user 消息
 	for i := len(req.Messages) - 1; i >= 0; i-- {
-		if req.Messages[i].Role == "user" {
-			return extractOpenAIContentImages(req.Messages[i].Content)
+		if req.Messages[i].Role != "user" {
+			continue
 		}
+		refs := extractOpenAIContentImages(req.Messages[i].Content)
+		if len(refs) == 0 {
+			continue // 无图 user，继续往前找
+		}
+		// 找到带图 user：检查其后是否有 assistant 回复（历史覆盖）
+		for j := i + 1; j < len(req.Messages); j++ {
+			if req.Messages[j].Role == "assistant" {
+				return nil // 已有回复覆盖 → 历史图片，不触发
+			}
+		}
+		return refs // 本轮新图 → 触发
 	}
 	return nil
 }
@@ -180,14 +219,33 @@ func extractOpenAIContentImages(content json.RawMessage) []ImageRef {
 	if err := json.Unmarshal(content, &str); err == nil {
 		return nil
 	}
-	var parts []openAIContentPart
+	// 用宽松结构解析 content 块（兼容 image_url 为对象或字符串两种形式）
+	var parts []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL json.RawMessage `json:"image_url"`
+	}
 	if err := json.Unmarshal(content, &parts); err != nil {
 		return nil
 	}
 	var refs []ImageRef
 	for _, p := range parts {
-		if p.Type == "image_url" && p.ImageURL.URL != "" {
-			refs = append(refs, ImageRef{URL: p.ImageURL.URL, usableURL: p.ImageURL.URL})
+		if p.Type != "image_url" {
+			continue
+		}
+		// image_url 可能为：{"url":"..."} 对象，或 "https://..." 字符串
+		var urlStr string
+		if err := json.Unmarshal(p.ImageURL, &urlStr); err == nil {
+			if urlStr != "" {
+				refs = append(refs, ImageRef{URL: urlStr, usableURL: urlStr})
+			}
+			continue
+		}
+		var urlObj struct {
+			URL string `json:"url"`
+		}
+		if err := json.Unmarshal(p.ImageURL, &urlObj); err == nil && urlObj.URL != "" {
+			refs = append(refs, ImageRef{URL: urlObj.URL, usableURL: urlObj.URL})
 		}
 	}
 	return refs
@@ -198,9 +256,13 @@ func replaceOpenAIImages(parsed map[string]interface{}, descriptions []string) {
 	if !ok {
 		return
 	}
+	// 从后往前处理：第一条【含图】的 user 消息的所有图片分配描述（本轮新图），
+	// 更早历史消息的图片分配占位（避免"最后一条 user 是纯文本指令、带图在倒数第二"的 agent 结构漏检，
+	// 也避免历史图片重复识别/透传）
 	imgIdx := 0
-	for i, m := range msgs {
-		mm, ok := m.(map[string]interface{})
+	latestMsgDone := false
+	for i := len(msgs) - 1; i >= 0; i-- {
+		mm, ok := msgs[i].(map[string]interface{})
 		if !ok {
 			continue
 		}
@@ -212,30 +274,49 @@ func replaceOpenAIImages(parsed map[string]interface{}, descriptions []string) {
 		if err != nil {
 			continue
 		}
-		var parts []openAIContentPart
-		if err := json.Unmarshal(raw, &parts); err != nil {
+		// content 为字符串形式 → 无图
+		var str string
+		if err := json.Unmarshal(raw, &str); err == nil {
 			continue
 		}
-		// 是否最后一条 user 消息：是 → 用识图描述；否（历史消息）→ 用占位文本
-		isLatest := isLastUserMessageMap(msgs, i)
+		var blocks []map[string]interface{}
+		if err := json.Unmarshal(raw, &blocks); err != nil {
+			continue
+		}
+		// 本条消息是否含图（image_url 兼容对象/字符串形式）
+		hasImg := false
+		for _, b := range blocks {
+			if t, _ := b["type"].(string); t == "image_url" && imageURLValue(rawOf(b, "image_url")) != "" {
+				hasImg = true
+				break
+			}
+		}
+		if !hasImg {
+			continue
+		}
+		// 从后往前第一条含图消息 → 描述；更早 → 占位
+		isLatest := !latestMsgDone
+		latestMsgDone = true
 		changed := false
-		var newParts []openAIContentPart
-		for _, p := range parts {
-			if p.Type == "image_url" && p.ImageURL.URL != "" {
+		var newBlocks []map[string]interface{}
+		for _, b := range blocks {
+			typ, _ := b["type"].(string)
+			if typ == "image_url" && imageURLValue(rawOf(b, "image_url")) != "" {
+				text := ""
 				if isLatest {
-					desc := descAt(descriptions, imgIdx)
+					text = descAt(descriptions, imgIdx)
 					imgIdx++
-					newParts = append(newParts, openAIContentPart{Type: "text", Text: desc})
 				} else {
-					newParts = append(newParts, openAIContentPart{Type: "text", Text: historyImagePlaceholder})
+					text = historyImagePlaceholder
 				}
+				newBlocks = append(newBlocks, map[string]interface{}{"type": "text", "text": text})
 				changed = true
 			} else {
-				newParts = append(newParts, p)
+				newBlocks = append(newBlocks, b) // 保留非图片块原样
 			}
 		}
 		if changed {
-			if b, err := json.Marshal(newParts); err == nil {
+			if b, err := json.Marshal(newBlocks); err == nil {
 				mm["content"] = json.RawMessage(b)
 				msgs[i] = mm
 			}
@@ -278,7 +359,7 @@ func extractImagesAnthropic(body []byte) []ImageRef {
 	return refs
 }
 
-// extractLatestUserImagesAnthropic 从最后一条 user 消息提取图片
+// extractLatestUserImagesAnthropic 提取【本轮新增】的图片（带图 user 后无 assistant 回复才触发）
 func extractLatestUserImagesAnthropic(body []byte) []ImageRef {
 	var req struct {
 		Messages []struct {
@@ -290,9 +371,19 @@ func extractLatestUserImagesAnthropic(body []byte) []ImageRef {
 		return nil
 	}
 	for i := len(req.Messages) - 1; i >= 0; i-- {
-		if req.Messages[i].Role == "user" {
-			return extractAnthropicContentImages(req.Messages[i].Content)
+		if req.Messages[i].Role != "user" {
+			continue
 		}
+		refs := extractAnthropicContentImages(req.Messages[i].Content)
+		if len(refs) == 0 {
+			continue
+		}
+		for j := i + 1; j < len(req.Messages); j++ {
+			if req.Messages[j].Role == "assistant" {
+				return nil
+			}
+		}
+		return refs
 	}
 	return nil
 }
@@ -329,9 +420,11 @@ func replaceAnthropicImages(parsed map[string]interface{}, descriptions []string
 	if !ok {
 		return
 	}
+	// 从后往前：第一条【含图】消息的所有图片分配描述，更早历史图片分配占位
 	imgIdx := 0
-	for i, m := range msgs {
-		mm, ok := m.(map[string]interface{})
+	latestMsgDone := false
+	for i := len(msgs) - 1; i >= 0; i-- {
+		mm, ok := msgs[i].(map[string]interface{})
 		if !ok {
 			continue
 		}
@@ -352,8 +445,18 @@ func replaceAnthropicImages(parsed map[string]interface{}, descriptions []string
 		if err := json.Unmarshal(raw, &blocks); err != nil {
 			continue
 		}
-		// 是否最后一条 user 消息：是 → 用识图描述；否（历史消息）→ 用占位文本
-		isLatest := isLastUserMessageMap(msgs, i)
+		hasImg := false
+		for _, b := range blocks {
+			if t, _ := b["type"].(string); t == "image" {
+				hasImg = true
+				break
+			}
+		}
+		if !hasImg {
+			continue
+		}
+		isLatest := !latestMsgDone
+		latestMsgDone = true
 		changed := false
 		var newBlocks []map[string]interface{}
 		for _, b := range blocks {
@@ -405,11 +508,15 @@ func extractImagesResponses(body []byte) []ImageRef {
 	return refs
 }
 
-// extractLatestUserImagesResponses 从最后一条 user 消息（input item）提取图片
+// extractLatestUserImagesResponses 提取【本轮新增】的图片（带图 user 后无 assistant 回复才触发）
+// 注意：Responses API 的 input item 可省略 role（缺省 = user），
+// 且 type 为 "message" 或缺失时也视为用户输入。
+// 只有显式 type="function_call_output" / "function_call" 不是 user。
 func extractLatestUserImagesResponses(body []byte) []ImageRef {
 	var req struct {
 		Input []struct {
 			Role    string          `json:"role"`
+			Type    string          `json:"type"`
 			Content json.RawMessage `json:"content"`
 		} `json:"input"`
 	}
@@ -417,9 +524,24 @@ func extractLatestUserImagesResponses(body []byte) []ImageRef {
 		return nil
 	}
 	for i := len(req.Input) - 1; i >= 0; i-- {
-		if req.Input[i].Role == "user" {
-			return extractResponsesContentImages(req.Input[i].Content)
+		item := req.Input[i]
+		// role 显式指定时按 role 判断；省略 role 时 type=message/缺省视为 user
+		isUser := item.Role == "user" ||
+			(item.Role == "" && item.Type != "function_call_output" && item.Type != "function_call")
+		if !isUser {
+			continue
 		}
+		refs := extractResponsesContentImages(item.Content)
+		if len(refs) == 0 {
+			continue
+		}
+		for j := i + 1; j < len(req.Input); j++ {
+			it := req.Input[j]
+			if it.Role == "assistant" || it.Type == "message" || it.Type == "" {
+				return nil
+			}
+		}
+		return refs
 	}
 	return nil
 }
@@ -453,9 +575,11 @@ func replaceResponsesImages(parsed map[string]interface{}, descriptions []string
 	if !ok {
 		return
 	}
+	// 从后往前：第一条【含图】input 的所有图片分配描述，更早历史图片分配占位
 	imgIdx := 0
-	for i, item := range input {
-		im, ok := item.(map[string]interface{})
+	latestMsgDone := false
+	for i := len(input) - 1; i >= 0; i-- {
+		im, ok := input[i].(map[string]interface{})
 		if !ok {
 			continue
 		}
@@ -475,8 +599,18 @@ func replaceResponsesImages(parsed map[string]interface{}, descriptions []string
 		if err := json.Unmarshal(raw, &blocks); err != nil {
 			continue
 		}
-		// 是否最后一条 user item：是 → 用识图描述；否（历史消息）→ 用占位文本
-		isLatest := isLastUserMessageMap(input, i)
+		hasImg := false
+		for _, b := range blocks {
+			if t, _ := b["type"].(string); t == "input_image" {
+				hasImg = true
+				break
+			}
+		}
+		if !hasImg {
+			continue
+		}
+		isLatest := !latestMsgDone
+		latestMsgDone = true
 		changed := false
 		var newBlocks []map[string]interface{}
 		for _, b := range blocks {
@@ -506,12 +640,44 @@ func replaceResponsesImages(parsed map[string]interface{}, descriptions []string
 
 // descAt 获取第 idx 张图片的描述（越界时给出通用占位）
 // 注入格式包含明确的指令：视觉内容已由视觉模型识别，主模型不应再尝试读取图片文件或调用工具看图
+// imageURLValue 提取 image_url 字段的值（兼容对象 {"url":"..."} 或字符串 "https://..."）
+func imageURLValue(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var urlStr string
+	if err := json.Unmarshal(raw, &urlStr); err == nil {
+		return urlStr
+	}
+	var urlObj struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(raw, &urlObj); err == nil {
+		return urlObj.URL
+	}
+	return ""
+}
+
+// rawOf 从 map 中提取指定 key 的 JSON 原始字节
+func rawOf(m map[string]interface{}, key string) json.RawMessage {
+	v, ok := m[key]
+	if !ok {
+		return nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
 func descAt(descriptions []string, idx int) string {
 	label := fmt.Sprintf("[图片%d]", idx+1)
 	if idx < len(descriptions) {
 		return fmt.Sprintf("%s 视觉内容（由视觉模型识别，以下内容即图片的全部视觉信息）:\n%s", label, descriptions[idx])
 	}
-	return fmt.Sprintf("%s 视觉内容无法识别", label)
+	// 越界（描述为空，如无图分支调用 ReplaceImages(nil)）：统一用历史占位文本
+	return historyImagePlaceholder
 }
 
 // VisionInstruction 图片替换时注入给主模型的系统指令（附在首条替换描述前）

@@ -46,7 +46,11 @@ func TestReplaceImagesOpenAI(t *testing.T) {
 	msgs := parsed["messages"].([]interface{})
 	content := msgs[1].(map[string]interface{})["content"]
 	raw, _ := json.Marshal(content)
-	var parts []openAIContentPart
+	var parts []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL json.RawMessage `json:"image_url"`
+	}
 	if err := json.Unmarshal(raw, &parts); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +65,7 @@ func TestReplaceImagesOpenAI(t *testing.T) {
 		t.Errorf("图片2替换错误: %+v", parts[2])
 	}
 	// 描述块不应残留 image_url 空对象
-	if parts[1].ImageURL != nil || parts[2].ImageURL != nil {
+	if len(parts[1].ImageURL) > 0 || len(parts[2].ImageURL) > 0 {
 		t.Errorf("text 块不应带 image_url: %+v %+v", parts[1], parts[2])
 	}
 }
@@ -419,5 +423,120 @@ func TestExtractLatestUserImagesResponsesMultiTurn(t *testing.T) {
 	raw0, _ := json.Marshal(content0)
 	if !strings.Contains(string(raw0), historyImagePlaceholder) {
 		t.Errorf("Responses 历史图片应替换为占位: %s", string(raw0))
+	}
+}
+
+// ===== Responses 协议省略 role（OpenAI SDK 常见） =====
+
+// 省略 role 的 input item：type=message（缺省 role=user），第二轮带图
+const responsesNoRoleReq = `{
+  "model": "text-vision",
+  "input": [
+    {"type": "message", "content": [{"type": "input_text", "text": "第一轮文本"}]},
+    {"type": "message", "content": [
+      {"type": "input_text", "text": "第二轮带图"},
+      {"type": "input_image", "image_url": "https://example.com/new.png"}
+    ]}
+  ]
+}`
+
+func TestExtractLatestUserImagesResponsesNoRole(t *testing.T) {
+	// 省略 role 时也应识别最后一条 message 中的图片
+	latest := ExtractLatestUserImages(ProtocolResponses, []byte(responsesNoRoleReq))
+	if len(latest) != 1 {
+		t.Fatalf("省略 role 的 input 应提取 1 张图，got %d", len(latest))
+	}
+	// 替换：最后一条 message 图片用描述
+	out := ReplaceImages(ProtocolResponses, []byte(responsesNoRoleReq), "deepseek-v4-flash", []string{"新图描述"})
+	if out == nil {
+		t.Fatal("替换失败")
+	}
+	var parsed map[string]interface{}
+	json.Unmarshal(out, &parsed)
+	input := parsed["input"].([]interface{})
+	// 第二条（带图）→ 应替换为描述
+	c1 := input[1].(map[string]interface{})["content"]
+	raw1, _ := json.Marshal(c1)
+	if !strings.Contains(string(raw1), "新图描述") {
+		t.Errorf("带图 input 应替换为描述: %s", string(raw1))
+	}
+	if strings.Contains(string(raw1), "image_url") || strings.Contains(string(raw1), "input_image") {
+		t.Errorf("带图 input 不应残留图片: %s", string(raw1))
+	}
+}
+
+// ===== 本轮新增图片判定（agent 多轮） =====
+
+// 场景1：带图 user 后无 assistant 回复（本轮新图）→ 应触发
+const agentNewImageReq = `{
+  "model": "text-vision",
+  "messages": [
+    {"role": "user", "content": "第一轮"},
+    {"role": "assistant", "content": "回复1"},
+    {"role": "user", "content": [
+      {"type": "text", "text": "看图"},
+      {"type": "image_url", "image_url": {"url": "https://example.com/new.png"}}
+    ]},
+    {"role": "user", "content": "请详细描述"}
+  ]
+}`
+
+// 场景2：带图 user 后有 assistant 回复（历史图片）→ 不触发
+const agentHistoryImageReq = `{
+  "model": "text-vision",
+  "messages": [
+    {"role": "user", "content": [
+      {"type": "text", "text": "看图"},
+      {"type": "image_url", "image_url": {"url": "https://example.com/old.png"}}
+    ]},
+    {"role": "assistant", "content": "回复1"},
+    {"role": "user", "content": "追问"}
+  ]
+}`
+
+func TestExtractLatestUserImagesAgentNewImage(t *testing.T) {
+	// 带图 user 后无 assistant 回复 → 触发（用户本次诉求）
+	refs := ExtractLatestUserImages(ProtocolOpenAI, []byte(agentNewImageReq))
+	if len(refs) != 1 {
+		t.Fatalf("本轮新图应触发识图，got %d", len(refs))
+	}
+}
+
+func TestExtractLatestUserImagesAgentHistoryImage(t *testing.T) {
+	// 带图 user 后有 assistant 回复 → 不触发（用户上次诉求：历史不重复识别）
+	refs := ExtractLatestUserImages(ProtocolOpenAI, []byte(agentHistoryImageReq))
+	if len(refs) != 0 {
+		t.Fatalf("历史图片不应触发识图，got %d", len(refs))
+	}
+}
+
+// ===== 字符串形式 image_url（部分 SDK/框架格式） =====
+
+const stringImageURLReq = `{
+  "model": "text-vision",
+  "messages": [
+    {"role": "user", "content": [
+      {"type": "text", "text": "看图"},
+      {"type": "image_url", "image_url": "data:image/png;base64,AAA"}
+    ]}
+  ]
+}`
+
+func TestExtractImagesStringImageURL(t *testing.T) {
+	// 字符串形式 image_url 应能提取
+	refs := ExtractLatestUserImages(ProtocolOpenAI, []byte(stringImageURLReq))
+	if len(refs) != 1 {
+		t.Fatalf("字符串 image_url 应提取 1 张图，got %d", len(refs))
+	}
+	// 替换后应无图片残留
+	out := ReplaceImages(ProtocolOpenAI, []byte(stringImageURLReq), "deepseek-v4-flash", []string{"描述"})
+	if out == nil {
+		t.Fatal("替换失败")
+	}
+	if len(ExtractImages(ProtocolOpenAI, out)) != 0 {
+		t.Error("替换后不应残留图片")
+	}
+	if !strings.Contains(string(out), "描述") {
+		t.Error("替换后应含描述")
 	}
 }

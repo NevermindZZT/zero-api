@@ -16,6 +16,8 @@ var llmInferencePaths = []string{
 	"/v1/chat",
 	"/chat",
 	"/v1/messages",
+	"/responses",
+	"/v1/responses",
 }
 
 // LLM 请求体特征字段
@@ -23,6 +25,8 @@ var llmFields = []string{
 	"messages", "prompt", "max_tokens", "stream",
 	"temperature", "top_p", "frequency_penalty",
 	"presence_penalty", "n", "stop",
+	// Responses API 字段（reasonix 等 agent 框架使用）
+	"input", "max_output_tokens", "instructions", "previous_response_id", "include",
 }
 
 // RequestRouter 请求路由器，判断是否需要拦截

@@ -328,23 +328,27 @@ func (pa *ProxyAdapter) HandleLLMRequest(method, path string, headers map[string
 	}
 
 	// 模型路由规则（虚拟模型等）：命中规则时转换请求或直接处理
-	if res := router.ApplyRules(pa.routers, &router.Context{
-		Protocol:   downstreamProtocolFromPath(path),
-		RawBody:    body,
-		Model:      originalModel,
-		APIKeyID:   apiKeyID,
-		ClientAuth: authFromHeaders(headers),
-		Stream:     isStreamRequest(body),
-	}); res != nil {
-		if res.Handled {
-			respHeaders := map[string]string{"Content-Type": "application/json"}
-			return res.StatusCode, respHeaders, res.RespBody, nil
-		}
-		if res.NewBody != nil {
-			// 规则转换了请求体（模型名替换/图片替换），重新解析模型名
-			body = res.NewBody
-			if m, ok := parsedBodyModel(body); ok {
-				originalModel = m
+	// 注意：若用户为虚拟模型名配置了显式 target 映射（target 非空），尊重映射优先，
+	// 跳过虚拟模型识图路由（用户显式指定了转发目标）
+	if !(hasMapping && mapping.TargetModel != "") {
+		if res := router.ApplyRules(pa.routers, &router.Context{
+			Protocol:   downstreamProtocolFromPath(path),
+			RawBody:    body,
+			Model:      originalModel,
+			APIKeyID:   apiKeyID,
+			ClientAuth: authFromHeaders(headers),
+			Stream:     isStreamRequest(body),
+		}); res != nil {
+			if res.Handled {
+				respHeaders := map[string]string{"Content-Type": "application/json"}
+				return res.StatusCode, respHeaders, res.RespBody, nil
+			}
+			if res.NewBody != nil {
+				// 规则转换了请求体（模型名替换/图片替换），重新解析模型名
+				body = res.NewBody
+				if m, ok := parsedBodyModel(body); ok {
+					originalModel = m
+				}
 			}
 		}
 	}

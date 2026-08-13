@@ -88,6 +88,14 @@ func (r *VirtualModelRouter) Transform(ctx *Context) *Result {
 	images := ExtractLatestUserImages(ctx.Protocol, ctx.RawBody)
 	usable := extractImageRefsToUsable(images)
 	log.Printf("[路由:虚拟模型] %s 请求: 最新图片数=%d stream=%v 协议=%s", vm.Name, len(images), ctx.Stream, ctx.Protocol)
+	// 调试：打印消息角色序列和各消息图片数（定位 agent 多轮场景的识图触发问题）
+	logMessageImageProfile(ctx.Protocol, ctx.RawBody)
+	// 请求中所有图片数（含历史）——若大于 0 但未触发识图，说明被"历史图片"规则拦截
+	allImages := ExtractImages(ctx.Protocol, ctx.RawBody)
+	if len(allImages) > 0 && len(images) == 0 {
+		log.Printf("[路由:虚拟模型] ⚠️ %s 请求含 %d 张图片但未触发识图（可能被历史图片规则拦截，最后带图 user 后已有 assistant 回复）", vm.Name, len(allImages))
+		logMessageImageProfile(ctx.Protocol, ctx.RawBody)
+	}
 
 	// 无图请求：替换模型名；历史消息中可能残留上一轮的图片，需替换为占位文本
 	// （避免纯文本主模型收到原始图片），用空描述列表 → 历史图片→占位、无最新图片不处理
