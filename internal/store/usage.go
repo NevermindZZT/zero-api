@@ -626,17 +626,23 @@ type YearHeatmapItem struct {
 }
 
 // GetYearHeatmapData 获取过去一年每日 Tokens 用量
+// 使用 usage_records 实时聚合，通过 tzMod 确保日期按浏览器本地时区显示
 func (r *UsageRepo) GetYearHeatmapData(tzOffsetMinutes int) ([]YearHeatmapItem, error) {
+	tzMod := sqlTz(tzOffsetMinutes)
 	end := time.Now().In(tzLoc(tzOffsetMinutes))
 	start := end.AddDate(-1, 0, 0)
 	startStr := start.Format("2006-01-02")
 	endStr := end.Format("2006-01-02")
 
+	// 用 usage_records 按本地时区日期聚合，避免 usage_daily 的 UTC 日期偏移
+	todayUTCStart, _ := localDateToUTCRange(startStr, tzOffsetMinutes)
+	_, todayUTCEnd := localDateToUTCRange(endStr, tzOffsetMinutes)
+
 	rows, err := r.db.Query(
-		`SELECT date, COALESCE(SUM(total_tokens), 0)
-		 FROM usage_daily
-		 WHERE date >= ? AND date <= ?
-		 GROUP BY date ORDER BY date`, startStr, endStr)
+		`SELECT date(created_at, '`+tzMod+`') as local_date, COALESCE(SUM(total_tokens), 0)
+		 FROM usage_records
+		 WHERE created_at >= ? AND created_at <= ?
+		 GROUP BY local_date ORDER BY local_date`, todayUTCStart, todayUTCEnd)
 	if err != nil {
 		return nil, err
 	}
