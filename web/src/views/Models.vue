@@ -590,6 +590,9 @@ async function batchAction(action: string) {
               <div v-if="getParsedRules().length === 0" style="color:#94a3b8;font-size:13px;padding:8px 0">
                 未设置定价规则，将使用固定定价
               </div>
+              <NAlert v-if="getParsedRules().some((r: any) => r.type === 'time_range')" type="info" size="small" style="margin-bottom:8px">
+                时间段条件基于 <b>UTC 时间</b>，请按 UTC 时区填写时间。例如北京时区 16:00 对应 UTC 08:00。
+              </NAlert>
               <div v-for="(rule, idx) in getParsedRules()" :key="rule.id" style="background:rgba(30,41,59,0.5);border:1px solid rgba(102,126,234,0.2);border-radius:8px;padding:12px;margin-bottom:8px">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
                   <div style="display:flex;align-items:center;gap:8px">
@@ -611,6 +614,7 @@ async function batchAction(action: string) {
                     <NInput size="small" style="width:68px" :value="rule.start_time" placeholder="00:00" @update:value="v => { rule.start_time = v; updateRule(idx, {...rule}) }" />
                     <span style="color:#94a3b8">—</span>
                     <NInput size="small" style="width:68px" :value="rule.end_time" placeholder="08:00" @update:value="v => { rule.end_time = v; updateRule(idx, {...rule}) }" />
+                    <span style="color:#22c55e;font-size:11px;margin-left:4px">UTC</span>
                   </div>
                   <div style="display:flex;align-items:center;gap:4px;flex:1">
                     <span style="color:#94a3b8;font-size:12px">星期</span>

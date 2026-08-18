@@ -760,7 +760,7 @@ func (pa *ProxyAdapter) recordUsage(requestModel string, rawResp, convertedResp 
 		_, resolved := pricing.ResolvePricing(
 			model.ParsedPricingRules(),
 			flat,
-			time.Now(),
+			time.Now().UTC(),
 			usage.PromptTokens,
 			usage.TotalTokens,
 		)

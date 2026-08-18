@@ -53,7 +53,7 @@ const recordColumns = [
 
 const statCards = [
   { label: '请求数', value: 'total_requests', icon: SendSharp, color: '#667eea', bg: 'rgba(102,126,234,0.15)' },
-  { label: 'Tokens', value: 'total_tokens', icon: DocumentTextSharp, color: '#22c55e', bg: 'rgba(34,197,94,0.15)', format: 'tokens' },
+  { label: 'Tokens', value: 'total_tokens', icon: DocumentTextSharp, color: '#22c55e', bg: 'rgba(34,197,94,0.15)', format: 'tokens', subLabel: '总 Tokens', subLeft: '入', subLeftKey: 'total_prompt_tokens', subRight: '出', subRightKey: 'total_output_tokens', subLeftColor: '#3b82f6', subRightColor: '#f97316' },
   { label: '费用', value: 'total_cost', icon: CashSharp, color: '#eab308', bg: 'rgba(250,204,21,0.15)', format: 'cost' },
   { label: '活跃渠道', value: 'active_channels', icon: CubeSharp, color: '#a855f7', bg: 'rgba(168,85,247,0.15)' },
 ]
@@ -390,7 +390,7 @@ function formatTokens(n: number) {
 
       <NGrid :x-gap="16" :y-gap="16" :cols="statCols">
         <NGi v-for="card in statCards" :key="card.label">
-          <NCard class="stat-card" hoverable>
+          <NCard class="stat-card" hoverable style="height:100%">
             <div class="stat-icon" :style="{ background: card.bg, color: card.color }">
               <NIcon :size="20"><component :is="card.icon" /></NIcon>
             </div>
@@ -399,6 +399,11 @@ function formatTokens(n: number) {
               <template v-if="card.format === 'tokens'">{{ formatTokens(overview[card.value]) }}</template>
               <template v-else-if="card.format === 'cost'">${{ (overview[card.value] || 0).toFixed(6) }}</template>
               <template v-else>{{ overview[card.value] || 0 }}</template>
+            </p>
+            <p v-if="card.subLeftKey" class="stat-sub">
+              <span :style="{ color: card.subLeftColor }">{{ card.subLeft }} {{ formatTokens(overview[card.subLeftKey]) }}</span>
+              <span style="color:#64748b;margin:0 4px">/</span>
+              <span :style="{ color: card.subRightColor }">{{ card.subRight }} {{ formatTokens(overview[card.subRightKey]) }}</span>
             </p>
           </NCard>
         </NGi>
@@ -521,11 +526,18 @@ function formatTokens(n: number) {
   font-size: 15px;
   font-weight: 600;
 }
+/* 保持同行 stat 卡片等高：NGi stretch + NCard height:100% */
+:deep(.n-gi) { align-items: stretch; }
+:deep(.n-card.n-card--hoverable) { height: 100%; }
+.n-card.stat-card {
+  height: 100%;
+}
 .stat-card {
   padding: 8px;
   cursor: default;
   transition: transform 0.2s, box-shadow 0.2s;
   text-align: center;
+  min-height: 130px;
 }
 .stat-card:hover {
   transform: translateY(-3px);
@@ -544,6 +556,11 @@ function formatTokens(n: number) {
   color: #94a3b8;
   font-size: 13px;
   margin: 0 0 6px 0;
+}
+.stat-sub {
+  color: #94a3b8;
+  font-size: 12px;
+  margin: 6px 0 0 0;
 }
 .stat-value {
   font-size: 26px;

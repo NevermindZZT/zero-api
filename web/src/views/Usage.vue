@@ -151,6 +151,11 @@ function now() {
   const d = new Date()
   return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}`
 }
+
+function formatNum(n: number | undefined | null) {
+  if (!n) return '0'
+  return n.toLocaleString()
+}
 </script>
 
 <template>
@@ -196,15 +201,17 @@ function now() {
           </NCard>
         </NGi>
       </NGrid>
-      <NGrid :x-gap="16" :y-gap="16" :cols="usageDetailCols">
+      <NGrid class="token-card-grid" :x-gap="16" :y-gap="16" :cols="usageDetailCols">
         <NGi>
           <NCard title="今日 Tokens" hoverable>
             <NStatistic :value="overview.today_tokens?.toLocaleString() || '0'" />
+            <p style="margin:4px 0 0;font-size:12px;color:#94a3b8">入 <span style="color:#3b82f6;font-weight:600">{{ formatNum(overview.today_prompt_tokens) }}</span> &nbsp;/&nbsp; 出 <span style="color:#f97316;font-weight:600">{{ formatNum(overview.today_output_tokens) }}</span></p>
           </NCard>
         </NGi>
         <NGi>
           <NCard title="总 Tokens" hoverable>
             <NStatistic :value="overview.total_tokens?.toLocaleString() || '0'" />
+            <p style="margin:4px 0 0;font-size:12px;color:#94a3b8">入 <span style="color:#3b82f6;font-weight:600">{{ formatNum(overview.total_prompt_tokens) }}</span> &nbsp;/&nbsp; 出 <span style="color:#f97316;font-weight:600">{{ formatNum(overview.total_output_tokens) }}</span></p>
           </NCard>
         </NGi>
         <NGi>
@@ -234,3 +241,32 @@ function now() {
     </NSpace>
   </NSpin>
 </template>
+
+<style scoped>
+:deep(.n-card.n-card--hoverable) {
+  height: 100%;
+}
+.token-card-grid :deep(.n-gi) {
+  display: flex;
+}
+.token-card-grid :deep(.n-card) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.token-card-grid :deep(.n-card .n-card__content) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.token-card-grid :deep(.n-card .n-statistic) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+.token-card-grid :deep(.n-card .n-statistic .n-statistic-value__content) {
+  flex-shrink: 0;
+}
+</style>

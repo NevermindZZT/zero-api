@@ -175,15 +175,19 @@ type DailyStats struct {
 
 // OverviewStats 总览统计
 type OverviewStats struct {
-	TotalRequests    int64   `json:"total_requests"`
-	TotalTokens      int64   `json:"total_tokens"`
-	TotalCost        float64 `json:"total_cost"`
-	ActiveChannels   int     `json:"active_channels"`
-	ActiveModels     int     `json:"active_models"`
-	TodayTokens      int64   `json:"today_tokens"`
-	TodayRequests    int64   `json:"today_requests"`
-	TotalCacheHits   int64   `json:"total_cache_hits"`
-	CacheHitRate     float64 `json:"cache_hit_rate"`
+	TotalRequests      int64   `json:"total_requests"`
+	TotalTokens        int64   `json:"total_tokens"`
+	TotalPromptTokens  int64   `json:"total_prompt_tokens"`
+	TotalOutputTokens  int64   `json:"total_output_tokens"`
+	TotalCost          float64 `json:"total_cost"`
+	ActiveChannels     int     `json:"active_channels"`
+	ActiveModels       int     `json:"active_models"`
+	TodayTokens        int64   `json:"today_tokens"`
+	TodayPromptTokens  int64   `json:"today_prompt_tokens"`
+	TodayOutputTokens  int64   `json:"today_output_tokens"`
+	TodayRequests      int64   `json:"today_requests"`
+	TotalCacheHits     int64   `json:"total_cache_hits"`
+	CacheHitRate       float64 `json:"cache_hit_rate"`
 }
 
 type UsageRepo struct {
@@ -274,9 +278,12 @@ func (r *UsageRepo) GetOverview(apiKeyID, startDate, endDate string, tzOffsetMin
 		COALESCE(COUNT(*), 0),
 		COALESCE(SUM(total_tokens), 0),
 		COALESCE(SUM(cost), 0),
-		COALESCE(SUM(cache_hit_tokens), 0)
+		COALESCE(SUM(cache_hit_tokens), 0),
+		COALESCE(SUM(prompt_tokens), 0),
+		COALESCE(SUM(completion_tokens), 0)
 		FROM usage_records`+where, args...).Scan(
 		&stats.TotalRequests, &stats.TotalTokens, &stats.TotalCost, &stats.TotalCacheHits,
+		&stats.TotalPromptTokens, &stats.TotalOutputTokens,
 	)
 	if err != nil {
 		return nil, err
@@ -305,9 +312,11 @@ func (r *UsageRepo) GetOverview(apiKeyID, startDate, endDate string, tzOffsetMin
 		todayArgs = append(todayArgs, apiKeyID)
 	}
 	err = r.db.QueryRow(
-		`SELECT COALESCE(COUNT(*), 0), COALESCE(SUM(total_tokens), 0) FROM usage_records`+todayWhere,
+		`SELECT COALESCE(COUNT(*), 0), COALESCE(SUM(total_tokens), 0),
+			COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0)
+		FROM usage_records`+todayWhere,
 		todayArgs...,
-	).Scan(&stats.TodayRequests, &stats.TodayTokens)
+	).Scan(&stats.TodayRequests, &stats.TodayTokens, &stats.TodayPromptTokens, &stats.TodayOutputTokens)
 	if err != nil {
 		// 降级：可能是 usage_records 表还不存在
 		stats.TodayRequests = 0

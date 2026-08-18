@@ -357,7 +357,7 @@ func (r *VirtualModelRouter) recordVisionUsage(model *store.Model, channelID int
 			_, resolved := pricing.ResolvePricing(
 				model.ParsedPricingRules(),
 				flat,
-				time.Now(),
+				time.Now().UTC(),
 				usage.PromptTokens,
 				usage.TotalTokens,
 			)
