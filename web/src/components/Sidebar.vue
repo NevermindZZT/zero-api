@@ -19,6 +19,7 @@ import {
   LayersSharp,
   GitNetworkSharp,
   CodeSlashSharp,
+  TerminalSharp,
 } from '@vicons/ionicons5'
 
 const props = defineProps<{
@@ -72,6 +73,15 @@ const menuOptions = [
       { label: '数据库管理', key: '/database', icon: renderIcon(ServerSharp) },
       { label: '系统设置', key: '/settings', icon: renderIcon(SettingsSharp) },
       { label: 'MCP 设置', key: '/mcp-settings', icon: renderIcon(CodeSlashSharp) },
+    ],
+  },
+  {
+    type: 'group' as const,
+    label: 'CLIProxyAPI',
+    key: 'group-cpa',
+    children: [
+      { label: '运行管理', key: '/cpa', icon: renderIcon(TerminalSharp) },
+      { label: '订阅登录', key: '/cpa/auth', icon: renderIcon(KeySharp) },
     ],
   },
 ]

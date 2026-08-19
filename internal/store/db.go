@@ -214,6 +214,28 @@ func (d *DB) migrate() error {
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
 		)`,
+
+		// CLIProxyAPI sidecar 配置（单行）
+		`CREATE TABLE IF NOT EXISTS cpa_config (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			enabled INTEGER DEFAULT 1,
+			auto_start INTEGER DEFAULT 1,
+			host TEXT DEFAULT '127.0.0.1',
+			port INTEGER DEFAULT 8317,
+			api_keys TEXT DEFAULT '[]',
+			proxy_url TEXT DEFAULT '',
+			request_retry INTEGER DEFAULT 3,
+			debug INTEGER DEFAULT 0,
+			enable_codex INTEGER DEFAULT 1,
+			codex_prefix TEXT DEFAULT '',
+			enable_claude INTEGER DEFAULT 0,
+			enable_gemini INTEGER DEFAULT 0,
+			enable_grok INTEGER DEFAULT 0,
+			enable_antigravity INTEGER DEFAULT 0,
+			data_dir TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}
 
 	// 迁移：添加 cache_hit_tokens 列（如果不存在）

@@ -234,3 +234,19 @@ export const mcpApi = {
   status: () => api.get('/mcp/status'),
   updateGitHubToken: (token: string) => api.put('/mcp/github-token', { github_token: token }),
 }
+
+// ===== CLIProxyAPI Sidecar API =====
+export const cpaApi = {
+  getConfig: () => api.get('/cpa'),
+  saveConfig: (data: any) => api.put('/cpa', data),
+  status: () => api.get('/cpa/status'),
+  start: () => api.post('/cpa/start'),
+  stop: () => api.post('/cpa/stop'),
+  restart: () => api.post('/cpa/restart'),
+  installBinary: (force = false) => api.post('/cpa/binary/install', null, { params: { force } }),
+  checkUpdate: () => api.get('/cpa/binary/update'),
+  authStatus: () => api.get('/cpa/auth/status'),
+  startAuth: (provider: string, device = false, noBrowser = false) =>
+    api.post('/cpa/auth/login', { provider, device, no_browser: noBrowser }),
+  stopAuth: () => api.post('/cpa/auth/stop'),
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"io/fs"
 	"log"
@@ -15,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/never/zero-api/internal/balance"
 	"github.com/never/zero-api/internal/config"
+	"github.com/never/zero-api/internal/cpa"
 	"github.com/never/zero-api/internal/handler"
 	"github.com/never/zero-api/internal/mcp"
 	"github.com/never/zero-api/internal/middleware"
@@ -50,6 +52,37 @@ func main() {
 	defer db.Close()
 
 	svc := store.NewService(db)
+
+	// CLIProxyAPI 作为独立 sidecar 运行，由 zero-api 管理配置和生命周期。
+	cpaDataDir := filepath.Join(filepath.Dir(cfg.Database.Path), "cliproxyapi")
+	if err := svc.CPAConfig.Init(cpaDataDir); err != nil {
+		log.Printf("[CPA] 初始化配置失败: %v", err)
+	}
+	cpaCfg, err := svc.CPAConfig.Get()
+	if err != nil {
+		log.Printf("[CPA] 读取配置失败，sidecar 管理不可用: %v", err)
+	}
+	cpaHost, cpaPort := "127.0.0.1", 8317
+	if cpaCfg != nil {
+		if cpaCfg.Host != "" {
+			cpaHost = cpaCfg.Host
+		}
+		if cpaCfg.Port > 0 {
+			cpaPort = cpaCfg.Port
+		}
+	}
+	cpaManager := cpa.NewManager(cpaDataDir, cpaHost, cpaPort)
+	cpaH := handler.NewCPAHandler(svc.CPAConfig, cpaManager)
+	if cpaCfg != nil {
+		if err := cpaH.PrepareConfig(); err != nil {
+			log.Printf("[CPA] 生成配置失败: %v", err)
+		}
+		if cpaCfg.Enabled && cpaCfg.AutoStart && cpaManager.BinExists() {
+			if err := cpaManager.Start(); err != nil {
+				log.Printf("[CPA] 自动启动失败: %v", err)
+			}
+		}
+	}
 	// 启动 usage 批量写入协程
 	store.InitUsageBuffer(db)
 	// 启动后异步回填 usage_daily（修正时区后首次运行需要重算历史数据）
@@ -157,6 +190,19 @@ func main() {
 		// 数据库管理
 		api.GET("/database/backup", dbH.Backup)
 		api.POST("/database/restore", dbH.Restore)
+
+		// CLIProxyAPI sidecar 管理
+		api.GET("/cpa", cpaH.GetConfig)
+		api.PUT("/cpa", cpaH.SaveConfig)
+		api.GET("/cpa/status", cpaH.Status)
+		api.POST("/cpa/start", cpaH.Start)
+		api.POST("/cpa/stop", cpaH.Stop)
+		api.POST("/cpa/restart", cpaH.Restart)
+		api.POST("/cpa/binary/install", cpaH.InstallBinary)
+		api.GET("/cpa/binary/update", cpaH.CheckUpdate)
+		api.GET("/cpa/auth/status", cpaH.AuthStatus)
+		api.POST("/cpa/auth/login", cpaH.StartAuth)
+		api.POST("/cpa/auth/stop", cpaH.StopAuth)
 
 		// MCP 配置
 		api.GET("/mcp/status", mcpCfgH.GetMCPStatus)
@@ -378,4 +424,12 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("正在关闭服务...")
+	if err := cpaManager.Stop(); err != nil {
+		log.Printf("[CPA] 停止 sidecar 失败: %v", err)
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := apiServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("API 服务关闭失败: %v", err)
+	}
 }

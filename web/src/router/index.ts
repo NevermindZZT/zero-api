@@ -93,6 +93,18 @@ const router = createRouter({
       component: () => import('@/views/MCPSettings.vue'),
       meta: { requiresAuth: true },
     },
+    {
+      path: '/cpa',
+      name: 'cpa',
+      component: () => import('@/views/CPA.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/cpa/auth',
+      name: 'cpa-auth',
+      component: () => import('@/views/CPAAuth.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 
