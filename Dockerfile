@@ -16,10 +16,14 @@ COPY --from=frontend-builder /build/web/dist ./cmd/server/web/dist
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /build/zero-api ./cmd/server/
 
 # ===== Final Stage: 运行镜像 =====
-FROM alpine:3.21
+# CLIProxyAPI 官方 Linux 二进制依赖 glibc（/lib64/ld-linux-x86-64.so.2）。
+# 使用 Debian slim 而非 Alpine/musl，确保 sidecar 下载后可直接执行。
+FROM debian:bookworm-slim
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=go-builder /build/zero-api .
 COPY --from=go-builder /build/configs/config.yaml ./configs/config.yaml

@@ -334,5 +334,19 @@ func validateBinary(path string) error {
 	if f.Machine != want {
 		return fmt.Errorf("CLIProxyAPI 二进制架构不匹配: 文件=%s, 当前系统=%s/%s，请强制重新下载正确平台版本", f.Machine, runtime.GOOS, runtime.GOARCH)
 	}
+	// 官方 release 使用 glibc 动态链接。Alpine/musl 没有该加载器，
+	// exec 会返回误导性的 "no such file or directory"。
+	if runtime.GOARCH == "amd64" {
+		if _, err := os.Stat("/lib64/ld-linux-x86-64.so.2"); err != nil {
+			if _, fallbackErr := os.Stat("/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"); fallbackErr != nil {
+				return fmt.Errorf("CLIProxyAPI 需要 glibc 动态加载器，但当前容器未提供 /lib64/ld-linux-x86-64.so.2；请使用 Debian/Ubuntu 镜像，不要使用 Alpine/musl")
+			}
+		}
+	}
+	if runtime.GOARCH == "arm64" {
+		if _, err := os.Stat("/lib/ld-linux-aarch64.so.1"); err != nil {
+			return fmt.Errorf("CLIProxyAPI 需要 glibc 动态加载器，但当前容器未提供 /lib/ld-linux-aarch64.so.1；请使用 Debian/Ubuntu 镜像，不要使用 Alpine/musl")
+		}
+	}
 	return nil
 }

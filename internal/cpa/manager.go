@@ -118,6 +118,10 @@ func (m *Manager) Start() error {
 		m.mu.Unlock()
 		return fmt.Errorf("CLIProxyAPI 二进制不存在: %s（请先下载或放置二进制）", m.binPath)
 	}
+	if err := validateBinary(m.binPath); err != nil {
+		m.mu.Unlock()
+		return err
+	}
 	if err := m.EnsureDirs(); err != nil {
 		m.mu.Unlock()
 		return err

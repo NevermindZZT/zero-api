@@ -71,6 +71,9 @@ services:
       - ./data:/app/data
       - ./certs:/app/certs
       - ./configs:/app/configs:ro
+    # 允许容器内的 CLIProxyAPI 使用宿主机上的出站代理
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - TZ=Asia/Shanghai
 EOF
@@ -89,8 +92,8 @@ docker compose up -d
 git clone <your-repo-url> zero-api
 cd zero-api
 
-# 2. 启动（自动构建镜像）
-docker compose up -d
+# 2. 构建并启动镜像
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 
 # 3. 访问管理面板
 # http://localhost:8080
