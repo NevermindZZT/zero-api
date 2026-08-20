@@ -19,23 +19,23 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/never/zero-api/internal/adapter"
-	"github.com/never/zero-api/internal/upstream"
 	"github.com/never/zero-api/internal/store"
+	"github.com/never/zero-api/internal/upstream"
 )
 
 type ProxyHandler struct {
-	channelRepo       *store.ChannelRepo
-	modelRepo         *store.ModelRepo
-	usageRepo         *store.UsageRepo
-	apiKeyRepo        *store.APIKeyRepo
-	proxyConfigRepo   *store.ProxyConfigRepo
-	virtualModelRepo  *store.VirtualModelRepo
-	breaker           *CircuitBreaker
-	proxyConfigCache  *store.ProxyConfigData
-	modelsCache       []byte          // /v1/models 响应缓存
-	modelsCacheTime   time.Time       // 缓存时间
-	modelsCacheMu     sync.RWMutex
-	modelsCacheTTL    time.Duration   // 缓存有效期
+	channelRepo      *store.ChannelRepo
+	modelRepo        *store.ModelRepo
+	usageRepo        *store.UsageRepo
+	apiKeyRepo       *store.APIKeyRepo
+	proxyConfigRepo  *store.ProxyConfigRepo
+	virtualModelRepo *store.VirtualModelRepo
+	breaker          *CircuitBreaker
+	proxyConfigCache *store.ProxyConfigData
+	modelsCache      []byte    // /v1/models 响应缓存
+	modelsCacheTime  time.Time // 缓存时间
+	modelsCacheMu    sync.RWMutex
+	modelsCacheTTL   time.Duration // 缓存有效期
 	// routers 模型路由规则链（虚拟模型等，支持后续扩展新规则）
 	routers []router.Rule
 }
@@ -147,20 +147,20 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 
 		// 构建 default_parameters（OpenRouter 格式）
 		defaultParams := gin.H{
-			"temperature":          nil,
-			"top_p":                nil,
-			"top_k":                nil,
-			"frequency_penalty":    nil,
-			"presence_penalty":     nil,
-			"repetition_penalty":   nil,
+			"temperature":        nil,
+			"top_p":              nil,
+			"top_k":              nil,
+			"frequency_penalty":  nil,
+			"presence_penalty":   nil,
+			"repetition_penalty": nil,
 		}
 
 		entry := gin.H{
-			"id":              m.ModelID,
-			"name":            displayName,
-			"created":         m.CreatedAt.Unix(),
-			"description":     fmt.Sprintf("zero-api model: %s via %s", m.ModelID, m.ChannelName),
-			"context_length":  m.ContextWindow,
+			"id":             m.ModelID,
+			"name":           displayName,
+			"created":        m.CreatedAt.Unix(),
+			"description":    fmt.Sprintf("zero-api model: %s via %s", m.ModelID, m.ChannelName),
+			"context_length": m.ContextWindow,
 			"architecture": gin.H{
 				"modality":          "text->text",
 				"input_modalities":  inputModalities,
@@ -168,7 +168,7 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 				"tokenizer":         "Custom",
 				"instruct_type":     nil,
 			},
-			"pricing":             pricing,
+			"pricing": pricing,
 			"top_provider": gin.H{
 				"context_length":        m.ContextWindow,
 				"max_completion_tokens": m.MaxOutputTokens,
@@ -229,11 +229,11 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 				inputMods = []string{"text", "image"}
 			}
 			entry := gin.H{
-				"id":              vm.Name,
-				"name":            displayName,
-				"created":         main.CreatedAt.Unix(),
-				"description":     fmt.Sprintf("虚拟模型: 路由到 %s（识图扩展: %s）", vm.MainModel, vm.VisionModel),
-				"context_length":  main.ContextWindow,
+				"id":             vm.Name,
+				"name":           displayName,
+				"created":        main.CreatedAt.Unix(),
+				"description":    fmt.Sprintf("虚拟模型: 路由到 %s（识图扩展: %s）", vm.MainModel, vm.VisionModel),
+				"context_length": main.ContextWindow,
 				"architecture": gin.H{
 					"modality":          modality,
 					"input_modalities":  inputMods,
@@ -789,9 +789,9 @@ func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *
 	// 保存真实下游协议（透传替换后 Protocol() 会变，必须在替换前保存）
 	downstreamProtocol := downstream.Protocol()
 
-	// 透传判断：以模型支持的协议为准（模型声明或继承渠道 type）
-	// 模型支持下游协议时一定直接转发（不过协议转换），保留协议原生特性
-	if matchedModel.SupportsProtocol(downstreamProtocol, ch.Type) {
+	// 透传判断：同协议渠道强制原样透传；其他情况再依据模型声明的协议列表判断。
+	// 同为 Responses 时必须保留 previous_response_id、function_call_output 等原生字段。
+	if ch.Type == downstreamProtocol || matchedModel.SupportsProtocol(downstreamProtocol, ch.Type) {
 		downstream = adapter.NewPassthroughDownstreamAdapter(downstreamProtocol)
 	}
 
@@ -1123,8 +1123,6 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 	return nil
 }
 
-
-
 // splitAuth 解析 Authorization 头
 func splitAuth(auth string) []string {
 	for i := 0; i < len(auth); i++ {
@@ -1140,14 +1138,14 @@ func splitAuth(auth string) []string {
 
 // isHopByHop 判断是否为逐跳头，不应转发给客户端
 var hopByHopHeaders = map[string]bool{
-	"transfer-encoding":    true,
-	"connection":           true,
-	"keep-alive":           true,
-	"te":                   true,
-	"trailer":              true,
-	"upgrade":              true,
-	"proxy-authorization":  true,
-	"proxy-authenticate":   true,
+	"transfer-encoding":   true,
+	"connection":          true,
+	"keep-alive":          true,
+	"te":                  true,
+	"trailer":             true,
+	"upgrade":             true,
+	"proxy-authorization": true,
+	"proxy-authenticate":  true,
 }
 
 func isHopByHop(key string) bool {

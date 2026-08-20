@@ -32,26 +32,26 @@ type ModelMappingConfig struct {
 
 // ProxyAdapter 代理适配器，处理拦截后的请求转发
 type ProxyAdapter struct {
-	channelRepo    *store.ChannelRepo
-	modelRepo      *store.ModelRepo
-	usageRepo      *store.UsageRepo
-	apiKeyRepo     *store.APIKeyRepo
+	channelRepo      *store.ChannelRepo
+	modelRepo        *store.ModelRepo
+	usageRepo        *store.UsageRepo
+	apiKeyRepo       *store.APIKeyRepo
 	virtualModelRepo *store.VirtualModelRepo
-	modelMappings  map[string]ModelMappingConfig
-	requestTimeout time.Duration
+	modelMappings    map[string]ModelMappingConfig
+	requestTimeout   time.Duration
 	// routers 模型路由规则链（虚拟模型等，与 HTTP 中转侧共用 internal/router 包）
 	routers []router.Rule
 }
 
 func NewProxyAdapter(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo, virtualModelRepo *store.VirtualModelRepo, requestTimeout time.Duration) *ProxyAdapter {
 	pa := &ProxyAdapter{
-		channelRepo:    channelRepo,
-		modelRepo:      modelRepo,
-		usageRepo:      usageRepo,
-		apiKeyRepo:     apiKeyRepo,
+		channelRepo:      channelRepo,
+		modelRepo:        modelRepo,
+		usageRepo:        usageRepo,
+		apiKeyRepo:       apiKeyRepo,
 		virtualModelRepo: virtualModelRepo,
-		modelMappings:  make(map[string]ModelMappingConfig),
-		requestTimeout: requestTimeout,
+		modelMappings:    make(map[string]ModelMappingConfig),
+		requestTimeout:   requestTimeout,
 	}
 	// 构建模型路由规则链：后续新增路由规则在此注册
 	vmRouter := router.NewVirtualModelRouter(virtualModelRepo, modelRepo, channelRepo, pa.getProxyConfig)
@@ -93,11 +93,11 @@ func (pa *ProxyAdapter) HandleModelsRequest(headers map[string]string) (statusCo
 
 	// ★ 精确匹配 ModelProxy 的模型条目结构（openai-adapter.js handleModels）
 	type architecture struct {
-		Modality        string   `json:"modality"`
-		InputModalities []string `json:"input_modalities"`
+		Modality         string   `json:"modality"`
+		InputModalities  []string `json:"input_modalities"`
 		OutputModalities []string `json:"output_modalities"`
-		Tokenizer       string   `json:"tokenizer"`
-		InstructType    *string  `json:"instruct_type"`
+		Tokenizer        string   `json:"tokenizer"`
+		InstructType     *string  `json:"instruct_type"`
 	}
 
 	type topProvider struct {
@@ -107,20 +107,20 @@ func (pa *ProxyAdapter) HandleModelsRequest(headers map[string]string) (statusCo
 	}
 
 	type modelEntry struct {
-		ID                 string            `json:"id"`
-		Name               string            `json:"name"`
-		Created            int64             `json:"created"`
-		Description        string            `json:"description"`
-		ContextLength      int               `json:"context_length"`
-		Architecture       architecture      `json:"architecture"`
-		Pricing            map[string]string `json:"pricing"`
-		TopProvider        topProvider       `json:"top_provider"`
-		PerRequestLimits   *string           `json:"per_request_limits"`
-		SupportedParameters []string         `json:"supported_parameters"`
-		DefaultParameters  map[string]interface{} `json:"default_parameters"`
-		SupportedVoices    *string           `json:"supported_voices"`
-		KnowledgeCutoff    *string           `json:"knowledge_cutoff"`
-		ExpirationDate     *string           `json:"expiration_date"`
+		ID                  string                 `json:"id"`
+		Name                string                 `json:"name"`
+		Created             int64                  `json:"created"`
+		Description         string                 `json:"description"`
+		ContextLength       int                    `json:"context_length"`
+		Architecture        architecture           `json:"architecture"`
+		Pricing             map[string]string      `json:"pricing"`
+		TopProvider         topProvider            `json:"top_provider"`
+		PerRequestLimits    *string                `json:"per_request_limits"`
+		SupportedParameters []string               `json:"supported_parameters"`
+		DefaultParameters   map[string]interface{} `json:"default_parameters"`
+		SupportedVoices     *string                `json:"supported_voices"`
+		KnowledgeCutoff     *string                `json:"knowledge_cutoff"`
+		ExpirationDate      *string                `json:"expiration_date"`
 	}
 
 	var data []modelEntry
@@ -167,8 +167,8 @@ func (pa *ProxyAdapter) HandleModelsRequest(headers map[string]string) (statusCo
 			},
 			Pricing: func() map[string]string {
 				p := map[string]string{
-					"prompt":           fmt.Sprintf("%.9f", m.PricingInput/1000000),
-					"completion":       fmt.Sprintf("%.9f", m.PricingOutput/1000000),
+					"prompt":     fmt.Sprintf("%.9f", m.PricingInput/1000000),
+					"completion": fmt.Sprintf("%.9f", m.PricingOutput/1000000),
 				}
 				if m.PricingCacheRead > 0 {
 					p["input_cache_read"] = fmt.Sprintf("%.9f", m.PricingCacheRead/1000000)
@@ -193,9 +193,9 @@ func (pa *ProxyAdapter) HandleModelsRequest(headers map[string]string) (statusCo
 				"presence_penalty":   nil,
 				"repetition_penalty": nil,
 			},
-			SupportedVoices:     nil,
-			KnowledgeCutoff:     nil,
-			ExpirationDate:      nil,
+			SupportedVoices: nil,
+			KnowledgeCutoff: nil,
+			ExpirationDate:  nil,
 		}
 		data = append(data, entry)
 	}
@@ -267,9 +267,9 @@ func (pa *ProxyAdapter) HandleModelsRequest(headers map[string]string) (statusCo
 					"presence_penalty":   nil,
 					"repetition_penalty": nil,
 				},
-				SupportedVoices:     nil,
-				KnowledgeCutoff:     nil,
-				ExpirationDate:      nil,
+				SupportedVoices: nil,
+				KnowledgeCutoff: nil,
+				ExpirationDate:  nil,
 			})
 		}
 	}
@@ -510,9 +510,12 @@ func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, 
 	// 选择适配器
 	adapt := adapter.NewAdapter(ch.Type)
 
-	// 下游协议推导 + 透传判断（以模型支持的协议为准；gemini 渠道始终走转换）
+	// 下游协议推导
 	downstreamProtocol := downstreamProtocolFromPath(path)
-	passthrough := ch.Type != "gemini" && matchedModel.SupportsProtocol(downstreamProtocol, ch.Type)
+
+	// 下游协议与渠道协议相同必须透传，避免丢失 Responses 原生工具调用/会话字段。
+	// 其他协议仅在模型声明支持时透传；Gemini 渠道仍使用专用转换。
+	passthrough := ch.Type != "gemini" && (ch.Type == downstreamProtocol || matchedModel.SupportsProtocol(downstreamProtocol, ch.Type))
 
 	// 请求体：透传模式不做协议转换（仅模型映射/参数注入），否则走规范格式转换
 	var bodyBytes []byte
@@ -908,7 +911,8 @@ func (pa *ProxyAdapter) HandleLLMStreamRequest(headers map[string]string, body [
 
 // tryForwardModelStream 流式转发到指定渠道，SSE 数据直接写入 conn
 // 返回 (wroteData, error)
-//   wroteData=true 表示已向连接写入数据（此时调用方禁止 failover）
+//
+//	wroteData=true 表示已向连接写入数据（此时调用方禁止 failover）
 func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]string, body []byte, originalModel string, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64) (bool, error) {
 	// 检查模型映射
 	mapping, hasMapping := pa.modelMappings[originalModel]

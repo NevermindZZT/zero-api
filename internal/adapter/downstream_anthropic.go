@@ -12,7 +12,7 @@ import (
 // 内部转换为 OpenAI 规范格式处理，响应再转回 Anthropic 格式。
 type AnthropicDownstreamAdapter struct{}
 
-func (a *AnthropicDownstreamAdapter) Protocol() string   { return "anthropic" }
+func (a *AnthropicDownstreamAdapter) Protocol() string    { return "anthropic" }
 func (a *AnthropicDownstreamAdapter) IsPassthrough() bool { return false }
 
 // ===== 请求转换：Anthropic → OpenAI 规范格式 =====
@@ -34,9 +34,9 @@ type anthropicDownContentBlock struct {
 }
 
 type anthropicDownTool struct {
-	Name         string          `json:"name"`
-	Description  string          `json:"description"`
-	InputSchema  json.RawMessage `json:"input_schema"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"input_schema"`
 }
 
 type anthropicDownRequest struct {
@@ -54,10 +54,10 @@ type anthropicDownRequest struct {
 
 // openAICanonicalMessage OpenAI 规范消息
 type openAICanonicalMessage struct {
-	Role       string             `json:"role"`
-	Content    string             `json:"content"`
-	ToolCalls  []openAIToolCall   `json:"tool_calls,omitempty"`
-	ToolCallID string             `json:"tool_call_id,omitempty"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
 }
 
 type openAIToolCall struct {
@@ -72,7 +72,7 @@ type openAIFunction struct {
 }
 
 type openAITool struct {
-	Type     string          `json:"type"`
+	Type     string            `json:"type"`
 	Function openAIFunctionDef `json:"function"`
 }
 
@@ -83,14 +83,15 @@ type openAIFunctionDef struct {
 }
 
 type openAICanonicalRequest struct {
-	Model       string                 `json:"model"`
-	Messages    []openAICanonicalMessage `json:"messages"`
-	MaxTokens   int                    `json:"max_tokens,omitempty"`
-	Temperature *float64               `json:"temperature,omitempty"`
-	TopP        *float64               `json:"top_p,omitempty"`
-	Stop        interface{}            `json:"stop,omitempty"`
-	Stream      bool                   `json:"stream,omitempty"`
-	Tools       []openAITool           `json:"tools,omitempty"`
+	Model              string                   `json:"model"`
+	PreviousResponseID string                   `json:"previous_response_id,omitempty"`
+	Messages           []openAICanonicalMessage `json:"messages"`
+	MaxTokens          int                      `json:"max_tokens,omitempty"`
+	Temperature        *float64                 `json:"temperature,omitempty"`
+	TopP               *float64                 `json:"top_p,omitempty"`
+	Stop               interface{}              `json:"stop,omitempty"`
+	Stream             bool                     `json:"stream,omitempty"`
+	Tools              []openAITool             `json:"tools,omitempty"`
 }
 
 func (a *AnthropicDownstreamAdapter) RequestToCanonical(body []byte) ([]byte, error) {
@@ -277,12 +278,12 @@ type openAIRespChoice struct {
 }
 
 type openAICanonicalResponse struct {
-	ID      string           `json:"id"`
-	Object  string           `json:"object"`
-	Created int64            `json:"created"`
-	Model   string           `json:"model"`
+	ID      string             `json:"id"`
+	Object  string             `json:"object"`
+	Created int64              `json:"created"`
+	Model   string             `json:"model"`
 	Choices []openAIRespChoice `json:"choices"`
-	Usage   openAIRespUsage  `json:"usage"`
+	Usage   openAIRespUsage    `json:"usage"`
 }
 
 type anthropicDownResponse struct {
@@ -367,8 +368,8 @@ type openAICanonicalChunk struct {
 	Object  string `json:"object"`
 	Model   string `json:"model"`
 	Choices []struct {
-		Index        int `json:"index"`
-		Delta        struct {
+		Index int `json:"index"`
+		Delta struct {
 			Role      string `json:"role"`
 			Content   string `json:"content"`
 			ToolCalls []struct {
@@ -477,8 +478,8 @@ func (c *anthropicStreamConverter) Convert(line []byte) []byte {
 	if delta.Content != "" {
 		if !c.textStarted {
 			writeAnthropicEvent(&out, "content_block_start", map[string]interface{}{
-				"type":         "content_block_start",
-				"index":        c.blockIndex,
+				"type":  "content_block_start",
+				"index": c.blockIndex,
 				"content_block": map[string]interface{}{
 					"type": "text",
 					"text": "",
@@ -501,12 +502,12 @@ func (c *anthropicStreamConverter) Convert(line []byte) []byte {
 	for _, tc := range delta.ToolCalls {
 		if !c.toolStarted[tc.Index] {
 			writeAnthropicEvent(&out, "content_block_start", map[string]interface{}{
-				"type":         "content_block_start",
-				"index":        c.blockIndex,
+				"type":  "content_block_start",
+				"index": c.blockIndex,
 				"content_block": map[string]interface{}{
-					"type": "tool_use",
-					"id":   tc.ID,
-					"name": tc.Function.Name,
+					"type":  "tool_use",
+					"id":    tc.ID,
+					"name":  tc.Function.Name,
 					"input": map[string]interface{}{},
 				},
 			})

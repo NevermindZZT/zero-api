@@ -333,3 +333,30 @@ func TestResponsesDownstreamStreamConverter(t *testing.T) {
 		t.Errorf("缺少 response.completed:\n%s", output)
 	}
 }
+
+func TestResponsesDownstreamPreservesPreviousResponseID(t *testing.T) {
+	a := &ResponsesDownstreamAdapter{}
+	body := []byte(`{"model":"gpt-5","previous_response_id":"resp_prev","input":[{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`)
+	canonical, err := a.RequestToCanonical(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req openAICanonicalRequest
+	if err := json.Unmarshal(canonical, &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.PreviousResponseID != "resp_prev" {
+		t.Fatalf("previous_response_id lost: %q", req.PreviousResponseID)
+	}
+}
+
+func TestResponsesDownstreamStreamUsagePreserved(t *testing.T) {
+	conv := (&ResponsesDownstreamAdapter{}).NewStreamConverter()
+	if got := conv.Convert([]byte(`data: {"id":"c1","model":"gpt-5","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}],"usage":{"prompt_tokens":123,"completion_tokens":45,"total_tokens":168}}` + "\n")); got == nil {
+		t.Fatal("expected converted stream chunk")
+	}
+	finish := string(conv.Finish())
+	if !strings.Contains(finish, `"input_tokens":123`) || !strings.Contains(finish, `"output_tokens":45`) || !strings.Contains(finish, `"total_tokens":168`) {
+		t.Fatalf("stream usage was not preserved: %s", finish)
+	}
+}

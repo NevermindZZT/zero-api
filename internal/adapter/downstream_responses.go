@@ -12,35 +12,36 @@ import (
 // 内部转换为 OpenAI 规范格式（Chat Completions）处理，响应再转回 Responses 格式。
 type ResponsesDownstreamAdapter struct{}
 
-func (a *ResponsesDownstreamAdapter) Protocol() string   { return "responses" }
+func (a *ResponsesDownstreamAdapter) Protocol() string    { return "responses" }
 func (a *ResponsesDownstreamAdapter) IsPassthrough() bool { return false }
 
 // ===== 请求转换：Responses → OpenAI 规范格式 =====
 
 type responsesDownInput struct {
-	Type       string          `json:"type"`
-	Role       string          `json:"role"`
-	Content    json.RawMessage `json:"content"`
-	CallID     string          `json:"call_id"`
-	Name       string          `json:"name"`
-	Arguments  string          `json:"arguments"`
-	Output     string          `json:"output"`
-	ItemID     string          `json:"item_id"`
-	Type2      string          `json:"type_2,omitempty"` // 占位避免误用
+	Type      string          `json:"type"`
+	Role      string          `json:"role"`
+	Content   json.RawMessage `json:"content"`
+	CallID    string          `json:"call_id"`
+	Name      string          `json:"name"`
+	Arguments string          `json:"arguments"`
+	Output    string          `json:"output"`
+	ItemID    string          `json:"item_id"`
+	Type2     string          `json:"type_2,omitempty"` // 占位避免误用
 }
 
 type responsesDownRequest struct {
-	Model          string                 `json:"model"`
-	Instructions   string                 `json:"instructions"`
-	Input          json.RawMessage        `json:"input"`
-	Stream         bool                   `json:"stream"`
-	MaxOutputTokens int                   `json:"max_output_tokens"`
-	Temperature    *float64               `json:"temperature"`
-	TopP           *float64               `json:"top_p"`
-	Stop           []string               `json:"stop"`
-	Tools          []responsesDownTool    `json:"tools"`
-	ToolChoice     string                 `json:"tool_choice"`
-	Reasoning      map[string]interface{} `json:"reasoning"`
+	Model              string                 `json:"model"`
+	PreviousResponseID string                 `json:"previous_response_id"`
+	Instructions       string                 `json:"instructions"`
+	Input              json.RawMessage        `json:"input"`
+	Stream             bool                   `json:"stream"`
+	MaxOutputTokens    int                    `json:"max_output_tokens"`
+	Temperature        *float64               `json:"temperature"`
+	TopP               *float64               `json:"top_p"`
+	Stop               []string               `json:"stop"`
+	Tools              []responsesDownTool    `json:"tools"`
+	ToolChoice         string                 `json:"tool_choice"`
+	Reasoning          map[string]interface{} `json:"reasoning"`
 }
 
 type responsesDownTool struct {
@@ -60,10 +61,11 @@ func (a *ResponsesDownstreamAdapter) RequestToCanonical(body []byte) ([]byte, er
 	}
 
 	canonical := openAICanonicalRequest{
-		Model:       req.Model,
-		Stream:      req.Stream,
-		Temperature: req.Temperature,
-		TopP:        req.TopP,
+		Model:              req.Model,
+		PreviousResponseID: req.PreviousResponseID,
+		Stream:             req.Stream,
+		Temperature:        req.Temperature,
+		TopP:               req.TopP,
 	}
 
 	// max_output_tokens → max_tokens
@@ -215,9 +217,11 @@ func convertResponsesInputItem(item map[string]interface{}) (*openAICanonicalMes
 	case "function_call_output":
 		callID, _ := item["call_id"].(string)
 		output, _ := item["output"].(string)
-		if oc, ok := item["output"].(map[string]interface{}); ok {
-			// output 可能是对象，JSON 序列化
-			if b, err := json.Marshal(oc); err == nil {
+		if outputValue, ok := item["output"]; ok {
+			if outputString, ok := outputValue.(string); ok {
+				output = outputString
+			} else if b, err := json.Marshal(outputValue); err == nil {
+				// Responses 允许 output 为字符串或内容块数组/对象。
 				output = string(b)
 			}
 		}
@@ -310,6 +314,8 @@ type responsesDownStreamConverter struct {
 	textItemSent bool
 	toolItems    map[int]bool
 	toolSeq      int
+	inputTokens  int
+	outputTokens int
 }
 
 func (a *ResponsesDownstreamAdapter) NewStreamConverter() StreamConverter {
@@ -332,6 +338,10 @@ func (c *responsesDownStreamConverter) Convert(line []byte) []byte {
 	if err := json.Unmarshal(payload, &chunk); err != nil {
 		return nil
 	}
+	if chunk.Usage != nil {
+		c.inputTokens = chunk.Usage.PromptTokens
+		c.outputTokens = chunk.Usage.CompletionTokens
+	}
 
 	var out bytes.Buffer
 
@@ -344,14 +354,14 @@ func (c *responsesDownStreamConverter) Convert(line []byte) []byte {
 		}
 		c.model = chunk.Model
 		writeResponsesEvent(&out, "response.created", map[string]interface{}{
-			"type":     "response.created",
+			"type": "response.created",
 			"response": map[string]interface{}{
-				"id":      c.responseID,
-				"object":  "response",
-				"status":  "in_progress",
-				"model":   c.model,
-				"output":  []interface{}{},
-				"usage":   nil,
+				"id":     c.responseID,
+				"object": "response",
+				"status": "in_progress",
+				"model":  c.model,
+				"output": []interface{}{},
+				"usage":  nil,
 			},
 		})
 		c.started = true
@@ -374,7 +384,7 @@ func (c *responsesDownStreamConverter) Convert(line []byte) []byte {
 			c.itemSeq++
 			itemID := fmt.Sprintf("msg_%s_%d", c.responseID, c.itemSeq)
 			writeResponsesEvent(&out, "response.output_item.added", map[string]interface{}{
-				"type":      "response.output_item.added",
+				"type":         "response.output_item.added",
 				"output_index": c.itemSeq - 1,
 				"item": map[string]interface{}{
 					"id":      itemID,
@@ -431,10 +441,10 @@ func (c *responsesDownStreamConverter) Convert(line []byte) []byte {
 		}
 		if tc.Function.Arguments != "" {
 			writeResponsesEvent(&out, "response.function_call_arguments.delta", map[string]interface{}{
-				"type":      "response.function_call_arguments.delta",
-				"item_id":   fmt.Sprintf("fc_%s_%d", c.responseID, c.toolSeq),
+				"type":         "response.function_call_arguments.delta",
+				"item_id":      fmt.Sprintf("fc_%s_%d", c.responseID, c.toolSeq),
 				"output_index": c.itemSeq - 1,
-				"delta":     tc.Function.Arguments,
+				"delta":        tc.Function.Arguments,
 			})
 		}
 	}
@@ -454,7 +464,7 @@ func (c *responsesDownStreamConverter) Finish() []byte {
 	if !c.started {
 		c.responseID = "resp_stream"
 		writeResponsesEvent(&out, "response.created", map[string]interface{}{
-			"type":     "response.created",
+			"type": "response.created",
 			"response": map[string]interface{}{
 				"id":     c.responseID,
 				"object": "response",
@@ -488,7 +498,7 @@ func (c *responsesDownStreamConverter) Finish() []byte {
 			},
 		})
 		writeResponsesEvent(&out, "response.output_item.done", map[string]interface{}{
-			"type":  "response.output_item.done",
+			"type":         "response.output_item.done",
 			"output_index": c.itemSeq - 1,
 			"item": map[string]interface{}{
 				"id":      itemID,
@@ -503,15 +513,15 @@ func (c *responsesDownStreamConverter) Finish() []byte {
 	writeResponsesEvent(&out, "response.completed", map[string]interface{}{
 		"type": "response.completed",
 		"response": map[string]interface{}{
-			"id":      c.responseID,
-			"object":  "response",
-			"status":  "completed",
-			"model":   c.model,
-			"output":  []interface{}{},
+			"id":     c.responseID,
+			"object": "response",
+			"status": "completed",
+			"model":  c.model,
+			"output": []interface{}{},
 			"usage": map[string]interface{}{
-				"input_tokens":  0,
-				"output_tokens": 0,
-				"total_tokens":  0,
+				"input_tokens":  c.inputTokens,
+				"output_tokens": c.outputTokens,
+				"total_tokens":  c.inputTokens + c.outputTokens,
 			},
 		},
 	})

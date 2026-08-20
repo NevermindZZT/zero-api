@@ -37,12 +37,13 @@ func (a *ResponsesAdapter) GetChatURL(baseURL string) string {
 // ConvertRequest 将 OpenAI 规范格式（Chat Completions）请求转换为 Responses API 格式
 func (a *ResponsesAdapter) ConvertRequest(modelID string, body []byte) ([]byte, error) {
 	var req struct {
-		Model    string    `json:"model"`
-		Messages []struct {
-			Role         string          `json:"role"`
-			Content      string          `json:"content"`
-			ToolCalls    []openAIToolCall `json:"tool_calls"`
-			ToolCallID   string          `json:"tool_call_id"`
+		Model              string `json:"model"`
+		PreviousResponseID string `json:"previous_response_id"`
+		Messages           []struct {
+			Role       string           `json:"role"`
+			Content    string           `json:"content"`
+			ToolCalls  []openAIToolCall `json:"tool_calls"`
+			ToolCallID string           `json:"tool_call_id"`
 		} `json:"messages"`
 		MaxTokens   int             `json:"max_tokens"`
 		Temperature *float64        `json:"temperature"`
@@ -59,6 +60,9 @@ func (a *ResponsesAdapter) ConvertRequest(modelID string, body []byte) ([]byte, 
 	respReq := map[string]interface{}{
 		"model":  modelID,
 		"stream": req.Stream,
+	}
+	if req.PreviousResponseID != "" {
+		respReq["previous_response_id"] = req.PreviousResponseID
 	}
 	if req.MaxTokens > 0 {
 		respReq["max_output_tokens"] = req.MaxTokens
@@ -127,9 +131,9 @@ func (a *ResponsesAdapter) ConvertRequest(modelID string, body []byte) ([]byte, 
 			}
 		case "tool":
 			input = append(input, map[string]interface{}{
-				"type":      "function_call_output",
-				"call_id":   m.ToolCallID,
-				"output":    m.Content,
+				"type":    "function_call_output",
+				"call_id": m.ToolCallID,
+				"output":  m.Content,
 			})
 		default: // user
 			input = append(input, map[string]interface{}{
@@ -150,9 +154,9 @@ func (a *ResponsesAdapter) ConvertRequest(modelID string, body []byte) ([]byte, 
 
 // responsesOutput Responses 响应中的 output 条目
 type responsesOutput struct {
-	Type      string `json:"type"`
-	Role      string `json:"role"`
-	Content   []struct {
+	Type    string `json:"type"`
+	Role    string `json:"role"`
+	Content []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
@@ -164,14 +168,14 @@ type responsesOutput struct {
 // ConvertResponse 将 Responses API 响应转换为 OpenAI 规范格式（Chat Completions）
 func (a *ResponsesAdapter) ConvertResponse(body []byte) ([]byte, error) {
 	var resp struct {
-		ID      string            `json:"id"`
-		Model   string            `json:"model"`
-		Status  string            `json:"status"`
-		Output  []responsesOutput `json:"output"`
-		Usage   struct {
-			InputTokens      int `json:"input_tokens"`
-			OutputTokens     int `json:"output_tokens"`
-			TotalTokens      int `json:"total_tokens"`
+		ID     string            `json:"id"`
+		Model  string            `json:"model"`
+		Status string            `json:"status"`
+		Output []responsesOutput `json:"output"`
+		Usage  struct {
+			InputTokens        int `json:"input_tokens"`
+			OutputTokens       int `json:"output_tokens"`
+			TotalTokens        int `json:"total_tokens"`
 			InputTokensDetails struct {
 				CachedTokens int `json:"cached_tokens"`
 			} `json:"input_tokens_details"`
@@ -215,9 +219,9 @@ func (a *ResponsesAdapter) ConvertResponse(body []byte) ([]byte, error) {
 	}
 
 	openAIResp := OpenAIResponse{
-		ID:      "chatcmpl-" + resp.ID,
-		Object:  "chat.completion",
-		Model:   resp.Model,
+		ID:     "chatcmpl-" + resp.ID,
+		Object: "chat.completion",
+		Model:  resp.Model,
 		Choices: []OpenAIChoice{
 			{Index: 0, Message: msg, FinishReason: finishReason},
 		},
@@ -242,21 +246,79 @@ func (a *ResponsesAdapter) ExtractUsage(body []byte) (*Usage, error) {
 	// 尝试从 Responses 原始格式提取
 	var raw struct {
 		Usage struct {
-			InputTokens      int `json:"input_tokens"`
-			OutputTokens     int `json:"output_tokens"`
-			TotalTokens      int `json:"total_tokens"`
+			InputTokens        int `json:"input_tokens"`
+			OutputTokens       int `json:"output_tokens"`
+			TotalTokens        int `json:"total_tokens"`
 			InputTokensDetails struct {
 				CachedTokens int `json:"cached_tokens"`
 			} `json:"input_tokens_details"`
 		} `json:"usage"`
 	}
-	if err := json.Unmarshal(body, &raw); err == nil && raw.Usage.TotalTokens > 0 {
+	if err := json.Unmarshal(body, &raw); err == nil && (raw.Usage.TotalTokens > 0 || raw.Usage.InputTokens > 0 || raw.Usage.OutputTokens > 0) {
+		total := raw.Usage.TotalTokens
+		if total == 0 {
+			total = raw.Usage.InputTokens + raw.Usage.OutputTokens
+		}
 		return &Usage{
 			PromptTokens:     raw.Usage.InputTokens,
 			CompletionTokens: raw.Usage.OutputTokens,
-			TotalTokens:      raw.Usage.TotalTokens,
+			TotalTokens:      total,
 			CacheHitTokens:   raw.Usage.InputTokensDetails.CachedTokens,
 		}, nil
+	}
+
+	// Responses SSE：usage 通常位于 response.completed 的 response.usage 中。
+	var last Usage
+	found := false
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		var event struct {
+			Usage *struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+				TotalTokens  int `json:"total_tokens"`
+			} `json:"usage"`
+			Response *struct {
+				Usage *struct {
+					InputTokens        int `json:"input_tokens"`
+					OutputTokens       int `json:"output_tokens"`
+					TotalTokens        int `json:"total_tokens"`
+					InputTokensDetails struct {
+						CachedTokens int `json:"cached_tokens"`
+					} `json:"input_tokens_details"`
+				} `json:"usage"`
+			} `json:"response"`
+		}
+		if json.Unmarshal([]byte(payload), &event) != nil {
+			continue
+		}
+		if event.Response != nil && event.Response.Usage != nil {
+			u := event.Response.Usage
+			total := u.TotalTokens
+			if total == 0 {
+				total = u.InputTokens + u.OutputTokens
+			}
+			last = Usage{PromptTokens: u.InputTokens, CompletionTokens: u.OutputTokens, TotalTokens: total, CacheHitTokens: u.InputTokensDetails.CachedTokens}
+			found = total > 0
+		} else if event.Usage != nil {
+			u := event.Usage
+			total := u.TotalTokens
+			if total == 0 {
+				total = u.InputTokens + u.OutputTokens
+			}
+			last = Usage{PromptTokens: u.InputTokens, CompletionTokens: u.OutputTokens, TotalTokens: total}
+			found = total > 0
+		}
+	}
+	if found {
+		return &last, nil
 	}
 
 	return nil, errNoUsage
@@ -269,10 +331,11 @@ func (a *ResponsesAdapter) NewStreamConverter() StreamConverter {
 
 // responsesUpstreamStreamConverter Responses SSE → OpenAI 规范 SSE
 // Responses 事件流：
-//   event: response.created / response.output_item.added / response.content_part.added /
-//          response.output_text.delta / response.output_text.done /
-//          response.function_call_arguments.delta / response.completed ...
-//   data: {"type":"response.output_text.delta","delta":"text", ...}
+//
+//	event: response.created / response.output_item.added / response.content_part.added /
+//	       response.output_text.delta / response.output_text.done /
+//	       response.function_call_arguments.delta / response.completed ...
+//	data: {"type":"response.output_text.delta","delta":"text", ...}
 type responsesUpstreamStreamConverter struct {
 	started      bool
 	finished     bool
@@ -394,9 +457,9 @@ func (c *responsesUpstreamStreamConverter) Finish() []byte {
 		reason = "stop"
 	}
 	finish := map[string]interface{}{
-		"id":      "chatcmpl-" + c.responseID,
-		"object":  "chat.completion.chunk",
-		"model":   c.model,
+		"id":     "chatcmpl-" + c.responseID,
+		"object": "chat.completion.chunk",
+		"model":  c.model,
 		"choices": []interface{}{map[string]interface{}{
 			"index":         0,
 			"delta":         map[string]interface{}{},
@@ -417,12 +480,12 @@ func (c *responsesUpstreamStreamConverter) Finish() []byte {
 func (c *responsesUpstreamStreamConverter) emitRoleChunk(out *bytes.Buffer) {
 	c.started = true
 	chunk := map[string]interface{}{
-		"id":      "chatcmpl-" + c.responseID,
-		"object":  "chat.completion.chunk",
-		"model":   c.model,
+		"id":     "chatcmpl-" + c.responseID,
+		"object": "chat.completion.chunk",
+		"model":  c.model,
 		"choices": []interface{}{map[string]interface{}{
-			"index": 0,
-			"delta": map[string]interface{}{"role": "assistant"},
+			"index":         0,
+			"delta":         map[string]interface{}{"role": "assistant"},
 			"finish_reason": nil,
 		}},
 	}
@@ -432,12 +495,12 @@ func (c *responsesUpstreamStreamConverter) emitRoleChunk(out *bytes.Buffer) {
 
 func (c *responsesUpstreamStreamConverter) emitContentChunk(out *bytes.Buffer, text string) {
 	chunk := map[string]interface{}{
-		"id":      "chatcmpl-" + c.responseID,
-		"object":  "chat.completion.chunk",
-		"model":   c.model,
+		"id":     "chatcmpl-" + c.responseID,
+		"object": "chat.completion.chunk",
+		"model":  c.model,
 		"choices": []interface{}{map[string]interface{}{
-			"index": 0,
-			"delta": map[string]interface{}{"content": text},
+			"index":         0,
+			"delta":         map[string]interface{}{"content": text},
 			"finish_reason": nil,
 		}},
 	}
@@ -447,15 +510,15 @@ func (c *responsesUpstreamStreamConverter) emitContentChunk(out *bytes.Buffer, t
 
 func (c *responsesUpstreamStreamConverter) emitToolCallStartChunk(out *bytes.Buffer, index int, id, name string) {
 	chunk := map[string]interface{}{
-		"id":      "chatcmpl-" + c.responseID,
-		"object":  "chat.completion.chunk",
-		"model":   c.model,
+		"id":     "chatcmpl-" + c.responseID,
+		"object": "chat.completion.chunk",
+		"model":  c.model,
 		"choices": []interface{}{map[string]interface{}{
 			"index": 0,
 			"delta": map[string]interface{}{"tool_calls": []interface{}{map[string]interface{}{
-				"index": index,
-				"id":    id,
-				"type":  "function",
+				"index":    index,
+				"id":       id,
+				"type":     "function",
 				"function": map[string]interface{}{"name": name, "arguments": ""},
 			}}},
 			"finish_reason": nil,
@@ -467,9 +530,9 @@ func (c *responsesUpstreamStreamConverter) emitToolCallStartChunk(out *bytes.Buf
 
 func (c *responsesUpstreamStreamConverter) emitToolCallArgsChunk(out *bytes.Buffer, index int, args string) {
 	chunk := map[string]interface{}{
-		"id":      "chatcmpl-" + c.responseID,
-		"object":  "chat.completion.chunk",
-		"model":   c.model,
+		"id":     "chatcmpl-" + c.responseID,
+		"object": "chat.completion.chunk",
+		"model":  c.model,
 		"choices": []interface{}{map[string]interface{}{
 			"index": 0,
 			"delta": map[string]interface{}{"tool_calls": []interface{}{map[string]interface{}{
