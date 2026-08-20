@@ -106,6 +106,92 @@ model_defaults:
         pricing_output: 18.00
         pricing_cache_read: 0.20
         pricing_cache_write: 2.50
+  gpt-5.4-nano:
+    pricing_input: 0.20
+    pricing_output: 1.25
+    pricing_cache_read: 0.02
+    context_window: 400000
+    max_output_tokens: 128000
+    supports_thinking: true
+    supports_vision: true
+    supports_tools: true
+  gpt-5.4-pro:
+    pricing_input: 30.00
+    pricing_output: 180.00
+    pricing_cache_read: 0
+    context_window: 1048576
+    max_output_tokens: 128000
+    supports_thinking: true
+    supports_vision: true
+    supports_tools: true
+    pricing_rules:
+      - id: long-context-272k
+        type: token_tier
+        enabled: true
+        name: 长上下文
+        context_min_tokens: 272000
+        pricing_input: 60.00
+        pricing_output: 270.00
+  gpt-5.5:
+    pricing_input: 5.00
+    pricing_output: 30.00
+    pricing_cache_read: 0.50
+    context_window: 1048576
+    max_output_tokens: 128000
+    supports_thinking: true
+    supports_vision: true
+    supports_tools: true
+    pricing_rules:
+      - id: long-context-272k
+        type: token_tier
+        enabled: true
+        name: 长上下文
+        context_min_tokens: 272000
+        pricing_input: 10.00
+        pricing_output: 45.00
+        pricing_cache_read: 1.00
+  gpt-5.5-pro:
+    pricing_input: 30.00
+    pricing_output: 180.00
+    context_window: 1048576
+    max_output_tokens: 128000
+    supports_thinking: true
+    supports_vision: true
+    supports_tools: true
+    pricing_rules:
+      - id: long-context-272k
+        type: token_tier
+        enabled: true
+        name: 长上下文
+        context_min_tokens: 272000
+        pricing_input: 60.00
+        pricing_output: 270.00
+  gpt-5.3-codex-spark:
+    pricing_input: 1.75
+    pricing_output: 14.00
+    pricing_cache_read: 0.175
+    context_window: 128000
+    max_output_tokens: 128000
+    supports_thinking: true
+    supports_vision: true
+    supports_tools: true
+  gpt-5.3-codex:
+    pricing_input: 1.75
+    pricing_output: 14.00
+    pricing_cache_read: 0.175
+    context_window: 400000
+    max_output_tokens: 128000
+    supports_thinking: true
+    supports_vision: true
+    supports_tools: true
+  gpt-image-2:
+    pricing_input: 5.00
+    pricing_output: 30.00
+    pricing_cache_read: 1.25
+  gpt-image-1.5:
+    pricing_input: 5.00
+    pricing_output: 32.00
+    pricing_cache_read: 2.00
   # GLM / 智谱
   glm-5.2:
     pricing_input: 1.40
@@ -119,6 +205,11 @@ model_defaults:
     pricing_input: 1.40
     pricing_output: 4.40
     pricing_cache_read: 0.26
+  glm-5.3:
+    context_window: 1048576
+    max_output_tokens: 128000
+    supports_thinking: true
+    supports_tools: true
   # Kimi / Moonshot
   kimi-k2.7-code:
     pricing_input: 0.95
@@ -178,6 +269,11 @@ model_defaults:
     pricing_output: 3.00
     pricing_cache_read: 0.05
     pricing_cache_write: 0.625
+  qwen3.7-flash:
+    context_window: 1048576
+    supports_thinking: true
+    supports_vision: true
+    supports_tools: true
   # DeepSeek
   deepseek-v4-pro:
     pricing_input: 1.74
