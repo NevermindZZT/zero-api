@@ -44,12 +44,12 @@ func (a *OpenAIAdapter) ParseModelsResponse(body []byte) ([]ModelInfo, error) {
 	// 尝试解析扩展格式（OpenRouter 等提供更多字段）
 	var extResp struct {
 		Data []struct {
-			ID            string  `json:"id"`
-			Name          string  `json:"name"`
-			ContextLength int     `json:"context_length"`
-			MaxOutput     int     `json:"max_output"`
+			ID            string             `json:"id"`
+			Name          string             `json:"name"`
+			ContextLength int                `json:"context_length"`
+			MaxOutput     int                `json:"max_output"`
 			Pricing       map[string]float64 `json:"pricing"`
-			Protocols     []string `json:"protocols"` // 模型支持的协议列表（可选）
+			Protocols     []string           `json:"protocols"` // 模型支持的协议列表（可选）
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &extResp); err == nil && len(extResp.Data) > 0 {
@@ -73,73 +73,93 @@ func (a *OpenAIAdapter) ParseModelsResponse(body []byte) ([]ModelInfo, error) {
 // modelDB 内置模型数据库（当 API 不返回元信息时使用）
 var modelDB = map[string]*ModelInfo{
 	// DeepSeek
-	"deepseek-chat":           {ID: "deepseek-chat", Name: "DeepSeek Chat", ContextWindow: 65536, MaxOutputTokens: 8192, SupportsTools: true},
-	"deepseek-v4-flash":       {ID: "deepseek-v4-flash", Name: "DeepSeek V4 Flash", ContextWindow: 1048576, MaxOutputTokens: 64000, SupportsThinking: true, SupportsTools: true},
-	"deepseek-v4-pro":         {ID: "deepseek-v4-pro", Name: "DeepSeek V4 Pro", ContextWindow: 1048576, MaxOutputTokens: 64000, SupportsThinking: true, SupportsTools: true},
-	"deepseek-reasoner":       {ID: "deepseek-reasoner", Name: "DeepSeek Reasoner", ContextWindow: 65536, MaxOutputTokens: 8192, SupportsThinking: true},
+	"deepseek-chat":     {ID: "deepseek-chat", Name: "DeepSeek Chat", ContextWindow: 65536, MaxOutputTokens: 8192, SupportsTools: true},
+	"deepseek-v4-flash": {ID: "deepseek-v4-flash", Name: "DeepSeek V4 Flash", ContextWindow: 1048576, MaxOutputTokens: 64000, SupportsThinking: true, SupportsTools: true},
+	"deepseek-v4-pro":   {ID: "deepseek-v4-pro", Name: "DeepSeek V4 Pro", ContextWindow: 1048576, MaxOutputTokens: 64000, SupportsThinking: true, SupportsTools: true},
+	"deepseek-reasoner": {ID: "deepseek-reasoner", Name: "DeepSeek Reasoner", ContextWindow: 65536, MaxOutputTokens: 8192, SupportsThinking: true},
 	// OpenAI
-	"gpt-4o":                  {ID: "gpt-4o", Name: "GPT-4o", ContextWindow: 128000, MaxOutputTokens: 16384, SupportsVision: true, SupportsTools: true},
-	"gpt-4o-mini":             {ID: "gpt-4o-mini", Name: "GPT-4o Mini", ContextWindow: 128000, MaxOutputTokens: 16384, SupportsVision: true, SupportsTools: true},
-	"gpt-4-turbo":             {ID: "gpt-4-turbo", Name: "GPT-4 Turbo", ContextWindow: 128000, MaxOutputTokens: 4096, SupportsTools: true},
-	"gpt-4":                   {ID: "gpt-4", Name: "GPT-4", ContextWindow: 8192, MaxOutputTokens: 4096, SupportsTools: true},
-	"gpt-3.5-turbo":           {ID: "gpt-3.5-turbo", Name: "GPT-3.5 Turbo", ContextWindow: 16385, MaxOutputTokens: 4096, SupportsTools: true},
-	"o1":                      {ID: "o1", Name: "o1", ContextWindow: 200000, MaxOutputTokens: 100000, SupportsThinking: true, SupportsTools: true},
-	"o1-mini":                 {ID: "o1-mini", Name: "o1 Mini", ContextWindow: 128000, MaxOutputTokens: 65536, SupportsThinking: true},
-	"o3-mini":                 {ID: "o3-mini", Name: "o3 Mini", ContextWindow: 200000, MaxOutputTokens: 100000, SupportsThinking: true, SupportsTools: true},
+	"gpt-4o":        {ID: "gpt-4o", Name: "GPT-4o", ContextWindow: 128000, MaxOutputTokens: 16384, SupportsVision: true, SupportsTools: true},
+	"gpt-4o-mini":   {ID: "gpt-4o-mini", Name: "GPT-4o Mini", ContextWindow: 128000, MaxOutputTokens: 16384, SupportsVision: true, SupportsTools: true},
+	"gpt-4-turbo":   {ID: "gpt-4-turbo", Name: "GPT-4 Turbo", ContextWindow: 128000, MaxOutputTokens: 4096, SupportsTools: true},
+	"gpt-4":         {ID: "gpt-4", Name: "GPT-4", ContextWindow: 8192, MaxOutputTokens: 4096, SupportsTools: true},
+	"gpt-3.5-turbo": {ID: "gpt-3.5-turbo", Name: "GPT-3.5 Turbo", ContextWindow: 16385, MaxOutputTokens: 4096, SupportsTools: true},
+	"gpt-5.4":       {ID: "gpt-5.4", Name: "GPT-5.4", ContextWindow: 1048576, MaxOutputTokens: 128000, SupportsVision: true, SupportsThinking: true, SupportsTools: true},
+	"gpt-5.6-luna":  {ID: "gpt-5.6-luna", Name: "GPT-5.6 Luna", ContextWindow: 1048576, MaxOutputTokens: 128000, SupportsVision: true, SupportsThinking: true, SupportsTools: true},
+	"gpt-5.6-sol":   {ID: "gpt-5.6-sol", Name: "GPT-5.6 Sol", ContextWindow: 1048576, MaxOutputTokens: 128000, SupportsVision: true, SupportsThinking: true, SupportsTools: true},
+	"gpt-5.6-terra": {ID: "gpt-5.6-terra", Name: "GPT-5.6 Terra", ContextWindow: 1048576, MaxOutputTokens: 128000, SupportsVision: true, SupportsThinking: true, SupportsTools: true},
+	"gpt-5.4-mini":  {ID: "gpt-5.4-mini", Name: "GPT-5.4 Mini", ContextWindow: 400000, MaxOutputTokens: 128000, SupportsVision: true, SupportsThinking: true, SupportsTools: true},
+	"o1":            {ID: "o1", Name: "o1", ContextWindow: 200000, MaxOutputTokens: 100000, SupportsThinking: true, SupportsTools: true},
+	"o1-mini":       {ID: "o1-mini", Name: "o1 Mini", ContextWindow: 128000, MaxOutputTokens: 65536, SupportsThinking: true},
+	"o3-mini":       {ID: "o3-mini", Name: "o3 Mini", ContextWindow: 200000, MaxOutputTokens: 100000, SupportsThinking: true, SupportsTools: true},
 	// Claude
-	"claude-sonnet-4-20250514": {ID: "claude-sonnet-4-20250514", Name: "Claude Sonnet 4 (20250514)", ContextWindow: 200000, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
-	"claude-opus-4-20250514":   {ID: "claude-opus-4-20250514", Name: "Claude Opus 4 (20250514)", ContextWindow: 200000, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"claude-sonnet-4-20250514":  {ID: "claude-sonnet-4-20250514", Name: "Claude Sonnet 4 (20250514)", ContextWindow: 200000, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"claude-opus-4-20250514":    {ID: "claude-opus-4-20250514", Name: "Claude Opus 4 (20250514)", ContextWindow: 200000, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
 	"claude-haiku-3-5-20250101": {ID: "claude-haiku-3-5-20250101", Name: "Claude Haiku 3.5 (20250101)", ContextWindow: 200000, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
-	"claude-sonnet-4":          {ID: "claude-sonnet-4", Name: "Claude Sonnet 4", ContextWindow: 200000, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
-	"claude-opus-4":            {ID: "claude-opus-4", Name: "Claude Opus 4", ContextWindow: 200000, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"claude-sonnet-4":           {ID: "claude-sonnet-4", Name: "Claude Sonnet 4", ContextWindow: 200000, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"claude-opus-4":             {ID: "claude-opus-4", Name: "Claude Opus 4", ContextWindow: 200000, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"claude-opus-4-6":           {ID: "claude-opus-4-6", Name: "Claude Opus 4.6", ContextWindow: 200000, MaxOutputTokens: 128000, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"claude-sonnet-4-6":         {ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6", ContextWindow: 200000, MaxOutputTokens: 128000, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"claude-haiku-4-5":          {ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5", ContextWindow: 200000, MaxOutputTokens: 64000, SupportsTools: true, SupportsVision: true},
 	// Gemini
-	"gemini-2.0-flash":         {ID: "gemini-2.0-flash", Name: "Gemini 2.0 Flash", ContextWindow: 1048576, MaxOutputTokens: 8192, SupportsTools: true, SupportsVision: true},
-	"gemini-2.0-flash-lite":    {ID: "gemini-2.0-flash-lite", Name: "Gemini 2.0 Flash Lite", ContextWindow: 1048576, MaxOutputTokens: 8192, SupportsTools: true, SupportsVision: true},
-	"gemini-1.5-pro":           {ID: "gemini-1.5-pro", Name: "Gemini 1.5 Pro", ContextWindow: 2097152, MaxOutputTokens: 8192, SupportsTools: true, SupportsVision: true},
-	"gemini-1.5-flash":         {ID: "gemini-1.5-flash", Name: "Gemini 1.5 Flash", ContextWindow: 1048576, MaxOutputTokens: 8192, SupportsTools: true, SupportsVision: true},
+	"gemini-2.0-flash":      {ID: "gemini-2.0-flash", Name: "Gemini 2.0 Flash", ContextWindow: 1048576, MaxOutputTokens: 8192, SupportsTools: true, SupportsVision: true},
+	"gemini-2.0-flash-lite": {ID: "gemini-2.0-flash-lite", Name: "Gemini 2.0 Flash Lite", ContextWindow: 1048576, MaxOutputTokens: 8192, SupportsTools: true, SupportsVision: true},
+	"gemini-1.5-pro":        {ID: "gemini-1.5-pro", Name: "Gemini 1.5 Pro", ContextWindow: 2097152, MaxOutputTokens: 8192, SupportsTools: true, SupportsVision: true},
+	"gemini-1.5-flash":      {ID: "gemini-1.5-flash", Name: "Gemini 1.5 Flash", ContextWindow: 1048576, MaxOutputTokens: 8192, SupportsTools: true, SupportsVision: true},
+	"gemini-3.1-pro":        {ID: "gemini-3.1-pro", Name: "Gemini 3.1 Pro", ContextWindow: 1048576, MaxOutputTokens: 65536, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"gemini-3.1-flash":      {ID: "gemini-3.1-flash", Name: "Gemini 3.1 Flash", ContextWindow: 1048576, MaxOutputTokens: 65536, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"gemini-3-flash":        {ID: "gemini-3-flash", Name: "Gemini 3 Flash", ContextWindow: 1048576, MaxOutputTokens: 65536, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
 	// MiniMax
-	"minimax-m3":               {ID: "minimax-m3", Name: "MiniMax M3", ContextWindow: 1048576, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
-	"minimax-m2.7":             {ID: "minimax-m2.7", Name: "MiniMax M2.7", ContextWindow: 1048576, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
-	"minimax-m2.5":             {ID: "minimax-m2.5", Name: "MiniMax M2.5", ContextWindow: 1048576, MaxOutputTokens: 8192, SupportsTools: true},
+	"minimax-m3":   {ID: "minimax-m3", Name: "MiniMax M3", ContextWindow: 1048576, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"minimax-m2.7": {ID: "minimax-m2.7", Name: "MiniMax M2.7", ContextWindow: 1048576, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"minimax-m2.5": {ID: "minimax-m2.5", Name: "MiniMax M2.5", ContextWindow: 1048576, MaxOutputTokens: 8192, SupportsTools: true},
 	// Kimi / Moonshot
-	"kimi-k2.7-code":           {ID: "kimi-k2.7-code", Name: "Kimi K2.7 Code", ContextWindow: 262144, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
-	"kimi-k2.6":                {ID: "kimi-k2.6", Name: "Kimi K2.6", ContextWindow: 262144, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
-	"kimi-k2.5":                {ID: "kimi-k2.5", Name: "Kimi K2.5", ContextWindow: 262144, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"kimi-k2.7-code": {ID: "kimi-k2.7-code", Name: "Kimi K2.7 Code", ContextWindow: 262144, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"kimi-k2.6":      {ID: "kimi-k2.6", Name: "Kimi K2.6", ContextWindow: 262144, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"kimi-k2.5":      {ID: "kimi-k2.5", Name: "Kimi K2.5", ContextWindow: 262144, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"kimi-k3":        {ID: "kimi-k3", Name: "Kimi K3", ContextWindow: 1048576, MaxOutputTokens: 131072, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"kimi-k2.7-code-highspeed": {ID: "kimi-k2.7-code-highspeed", Name: "Kimi K2.7 Code Highspeed", ContextWindow: 262144, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
 	// GLM / 智谱
-	"glm-5.2":                  {ID: "glm-5.2", Name: "GLM 5.2", ContextWindow: 131072, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
-	"glm-5.1":                  {ID: "glm-5.1", Name: "GLM 5.1", ContextWindow: 131072, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
-	"glm-5":                    {ID: "glm-5", Name: "GLM 5", ContextWindow: 131072, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
-	"glm-4-plus":               {ID: "glm-4-plus", Name: "GLM 4 Plus", ContextWindow: 128000, MaxOutputTokens: 4096, SupportsTools: true, SupportsVision: true},
-	"glm-4":                    {ID: "glm-4", Name: "GLM 4", ContextWindow: 128000, MaxOutputTokens: 4096, SupportsTools: true},
+	"glm-5.2":    {ID: "glm-5.2", Name: "GLM 5.2", ContextWindow: 131072, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"glm-5.3":    {ID: "glm-5.3", Name: "GLM 5.3", ContextWindow: 1048576, MaxOutputTokens: 128000, SupportsThinking: true, SupportsTools: true},
+	"glm-5.1":    {ID: "glm-5.1", Name: "GLM 5.1", ContextWindow: 131072, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"glm-5":      {ID: "glm-5", Name: "GLM 5", ContextWindow: 131072, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"glm-4-plus": {ID: "glm-4-plus", Name: "GLM 4 Plus", ContextWindow: 128000, MaxOutputTokens: 4096, SupportsTools: true, SupportsVision: true},
+	"glm-4":      {ID: "glm-4", Name: "GLM 4", ContextWindow: 128000, MaxOutputTokens: 4096, SupportsTools: true},
 	// Qwen / 通义千问
-	"qwen3.7-max":              {ID: "qwen3.7-max", Name: "Qwen 3.7 Max", ContextWindow: 131072, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true},
-	"qwen3.7-plus":             {ID: "qwen3.7-plus", Name: "Qwen 3.7 Plus", ContextWindow: 131072, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true},
-	"qwen3.6-plus":             {ID: "qwen3.6-plus", Name: "Qwen 3.6 Plus", ContextWindow: 131072, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true},
-	"qwen3.5-plus":             {ID: "qwen3.5-plus", Name: "Qwen 3.5 Plus", ContextWindow: 131072, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true},
-	"qwen-max":                 {ID: "qwen-max", Name: "Qwen Max", ContextWindow: 32768, MaxOutputTokens: 8192, SupportsTools: true},
-	"qwen-plus":                {ID: "qwen-plus", Name: "Qwen Plus", ContextWindow: 131072, MaxOutputTokens: 8192, SupportsTools: true},
-	"qwen-turbo":               {ID: "qwen-turbo", Name: "Qwen Turbo", ContextWindow: 131072, MaxOutputTokens: 8192, SupportsTools: true},
-	"qwen2.5-72b-instruct":     {ID: "qwen2.5-72b-instruct", Name: "Qwen 2.5 72B Instruct", ContextWindow: 131072, MaxOutputTokens: 8192, SupportsTools: true},
-	"qwen2.5-32b-instruct":     {ID: "qwen2.5-32b-instruct", Name: "Qwen 2.5 32B Instruct", ContextWindow: 32768, MaxOutputTokens: 8192, SupportsTools: true},
-	"qwen2.5-14b-instruct":     {ID: "qwen2.5-14b-instruct", Name: "Qwen 2.5 14B Instruct", ContextWindow: 32768, MaxOutputTokens: 8192, SupportsTools: true},
+	"qwen3.7-max":          {ID: "qwen3.7-max", Name: "Qwen 3.7 Max", ContextWindow: 131072, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true},
+	"qwen3.8-max":          {ID: "qwen3.8-max", Name: "Qwen 3.8 Max", ContextWindow: 1048576, MaxOutputTokens: 128000, SupportsVision: true, SupportsThinking: true, SupportsTools: true},
+	"qwen3.7-plus":         {ID: "qwen3.7-plus", Name: "Qwen 3.7 Plus", ContextWindow: 1048576, MaxOutputTokens: 0, SupportsVision: true, SupportsThinking: true, SupportsTools: true},
+	"qwen3.7-flash":        {ID: "qwen3.7-flash", Name: "Qwen 3.7 Flash", ContextWindow: 1048576, MaxOutputTokens: 0, SupportsVision: true, SupportsThinking: true, SupportsTools: true},
+	"qwen3.6-plus":         {ID: "qwen3.6-plus", Name: "Qwen 3.6 Plus", ContextWindow: 131072, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true},
+	"qwen3.5-plus":         {ID: "qwen3.5-plus", Name: "Qwen 3.5 Plus", ContextWindow: 131072, MaxOutputTokens: 16384, SupportsThinking: true, SupportsTools: true},
+	"qwen-max":             {ID: "qwen-max", Name: "Qwen Max", ContextWindow: 32768, MaxOutputTokens: 8192, SupportsTools: true},
+	"qwen-plus":            {ID: "qwen-plus", Name: "Qwen Plus", ContextWindow: 131072, MaxOutputTokens: 8192, SupportsTools: true},
+	"qwen-turbo":           {ID: "qwen-turbo", Name: "Qwen Turbo", ContextWindow: 131072, MaxOutputTokens: 8192, SupportsTools: true},
+	"qwen2.5-72b-instruct": {ID: "qwen2.5-72b-instruct", Name: "Qwen 2.5 72B Instruct", ContextWindow: 131072, MaxOutputTokens: 8192, SupportsTools: true},
+	"qwen2.5-32b-instruct": {ID: "qwen2.5-32b-instruct", Name: "Qwen 2.5 32B Instruct", ContextWindow: 32768, MaxOutputTokens: 8192, SupportsTools: true},
+	"qwen2.5-14b-instruct": {ID: "qwen2.5-14b-instruct", Name: "Qwen 2.5 14B Instruct", ContextWindow: 32768, MaxOutputTokens: 8192, SupportsTools: true},
 	// MiMo / 小米
-	"mimo-v2-pro":              {ID: "mimo-v2-pro", Name: "MiMo V2 Pro", ContextWindow: 1048576, MaxOutputTokens: 128000, SupportsThinking: true, SupportsTools: true},
-	"mimo-v2-omni":             {ID: "mimo-v2-omni", Name: "MiMo V2 Omni", ContextWindow: 262144, MaxOutputTokens: 128000, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
-	"mimo-v2.5-pro":            {ID: "mimo-v2.5-pro", Name: "MiMo V2.5 Pro", ContextWindow: 1048576, MaxOutputTokens: 128000, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
-	"mimo-v2.5":                {ID: "mimo-v2.5", Name: "MiMo V2.5", ContextWindow: 1048576, MaxOutputTokens: 128000, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
-	"mimo-v2-flash":            {ID: "mimo-v2-flash", Name: "MiMo V2 Flash", ContextWindow: 262144, MaxOutputTokens: 65536, SupportsThinking: true, SupportsTools: true},
+	"mimo-v2-pro":   {ID: "mimo-v2-pro", Name: "MiMo V2 Pro", ContextWindow: 1048576, MaxOutputTokens: 128000, SupportsThinking: true, SupportsTools: true},
+	"mimo-v2-omni":  {ID: "mimo-v2-omni", Name: "MiMo V2 Omni", ContextWindow: 262144, MaxOutputTokens: 128000, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"mimo-v2.5-pro": {ID: "mimo-v2.5-pro", Name: "MiMo V2.5 Pro", ContextWindow: 1048576, MaxOutputTokens: 128000, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"mimo-v2.5":     {ID: "mimo-v2.5", Name: "MiMo V2.5", ContextWindow: 1048576, MaxOutputTokens: 128000, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"mimo-v2-flash": {ID: "mimo-v2-flash", Name: "MiMo V2 Flash", ContextWindow: 262144, MaxOutputTokens: 65536, SupportsThinking: true, SupportsTools: true},
 	// HY3 / 鸿源
-	"hy3-preview":              {ID: "hy3-preview", Name: "HY3 Preview", ContextWindow: 131072, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true},
+	"hy3-preview": {ID: "hy3-preview", Name: "HY3 Preview", ContextWindow: 131072, MaxOutputTokens: 8192, SupportsThinking: true, SupportsTools: true},
+	"hy3":         {ID: "hy3", Name: "HY3", ContextWindow: 262144, MaxOutputTokens: 128000, SupportsThinking: true, SupportsTools: true},
+	"grok-4.5":    {ID: "grok-4.5", Name: "Grok 4.5", ContextWindow: 500000, SupportsVision: true, SupportsThinking: true, SupportsTools: true},
+	"grok-4-1-fast-reasoning": {ID: "grok-4-1-fast-reasoning", Name: "Grok 4.1 Fast Reasoning", ContextWindow: 2000000, SupportsThinking: true, SupportsTools: true, SupportsVision: true},
+	"grok-4-1-fast-non-reasoning": {ID: "grok-4-1-fast-non-reasoning", Name: "Grok 4.1 Fast", ContextWindow: 2000000, SupportsTools: true, SupportsVision: true},
 	// Doubao / 豆包
-	"doubao-pro-32k":           {ID: "doubao-pro-32k", Name: "Doubao Pro 32K", ContextWindow: 32000, MaxOutputTokens: 4096, SupportsTools: true},
-	"doubao-pro-128k":          {ID: "doubao-pro-128k", Name: "Doubao Pro 128K", ContextWindow: 128000, MaxOutputTokens: 4096, SupportsTools: true},
+	"doubao-pro-32k":  {ID: "doubao-pro-32k", Name: "Doubao Pro 32K", ContextWindow: 32000, MaxOutputTokens: 4096, SupportsTools: true},
+	"doubao-pro-128k": {ID: "doubao-pro-128k", Name: "Doubao Pro 128K", ContextWindow: 128000, MaxOutputTokens: 4096, SupportsTools: true},
 	// Yi
-	"yi-lightning":             {ID: "yi-lightning", Name: "Yi Lightning", ContextWindow: 16000, MaxOutputTokens: 4096, SupportsTools: true},
+	"yi-lightning": {ID: "yi-lightning", Name: "Yi Lightning", ContextWindow: 16000, MaxOutputTokens: 4096, SupportsTools: true},
 	// Open source
-	"llama-3.3-70b-instruct":   {ID: "llama-3.3-70b-instruct", Name: "Llama 3.3 70B Instruct", ContextWindow: 131072, MaxOutputTokens: 8192, SupportsTools: true},
-	"llama-3.1-70b-instruct":   {ID: "llama-3.1-70b-instruct", Name: "Llama 3.1 70B Instruct", ContextWindow: 131072, MaxOutputTokens: 8192, SupportsTools: true},
-	"llama-3.1-8b-instruct":    {ID: "llama-3.1-8b-instruct", Name: "Llama 3.1 8B Instruct", ContextWindow: 131072, MaxOutputTokens: 8192, SupportsTools: true},
-	"mistral-large":             {ID: "mistral-large", Name: "Mistral Large", ContextWindow: 131072, MaxOutputTokens: 8192, SupportsTools: true},
+	"llama-3.3-70b-instruct": {ID: "llama-3.3-70b-instruct", Name: "Llama 3.3 70B Instruct", ContextWindow: 131072, MaxOutputTokens: 8192, SupportsTools: true},
+	"llama-3.1-70b-instruct": {ID: "llama-3.1-70b-instruct", Name: "Llama 3.1 70B Instruct", ContextWindow: 131072, MaxOutputTokens: 8192, SupportsTools: true},
+	"llama-3.1-8b-instruct":  {ID: "llama-3.1-8b-instruct", Name: "Llama 3.1 8B Instruct", ContextWindow: 131072, MaxOutputTokens: 8192, SupportsTools: true},
+	"mistral-large":          {ID: "mistral-large", Name: "Mistral Large", ContextWindow: 131072, MaxOutputTokens: 8192, SupportsTools: true},
 }
 
 func (a *OpenAIAdapter) GetChatURL(baseURL string) string {
@@ -165,9 +185,9 @@ func (a *OpenAIAdapter) NewStreamConverter() StreamConverter {
 func extractUsageFromJSON(data []byte) (*Usage, error) {
 	var resp struct {
 		Usage *struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
+			PromptTokens        int `json:"prompt_tokens"`
+			CompletionTokens    int `json:"completion_tokens"`
+			TotalTokens         int `json:"total_tokens"`
 			PromptTokensDetails *struct {
 				CachedTokens int `json:"cached_tokens"`
 			} `json:"prompt_tokens_details"`

@@ -13,47 +13,49 @@ import (
 
 // PricingRule 配置层定价规则定义（与 pricing.PricingRule 一致，避免循环依赖）
 type PricingRule struct {
-	ID      string `yaml:"id"`
-	Type    string `yaml:"type"`
-	Enabled bool   `yaml:"enabled"`
-	Name    string `yaml:"name"`
+	ID      string `yaml:"id" json:"id"`
+	Type    string `yaml:"type" json:"type"`
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	Name    string `yaml:"name" json:"name"`
 
-	Days      []string `yaml:"days,omitempty"`
-	StartTime string   `yaml:"start_time,omitempty"`
-	EndTime   string   `yaml:"end_time,omitempty"`
+	Days      []string `yaml:"days,omitempty" json:"days,omitempty"`
+	StartTime string   `yaml:"start_time,omitempty" json:"start_time,omitempty"`
+	EndTime   string   `yaml:"end_time,omitempty" json:"end_time,omitempty"`
 
-	PromptMaxTokens  int `yaml:"prompt_max_tokens,omitempty"`
-	ContextMaxTokens int `yaml:"context_max_tokens,omitempty"`
+	ContextMinTokens int `yaml:"context_min_tokens,omitempty" json:"context_min_tokens,omitempty"`
+	PromptMinTokens  int `yaml:"prompt_min_tokens,omitempty" json:"prompt_min_tokens,omitempty"`
+	PromptMaxTokens  int `yaml:"prompt_max_tokens,omitempty" json:"prompt_max_tokens,omitempty"`
+	ContextMaxTokens int `yaml:"context_max_tokens,omitempty" json:"context_max_tokens,omitempty"`
 
-	PricingInput      float64 `yaml:"pricing_input"`
-	PricingOutput     float64 `yaml:"pricing_output"`
-	PricingCacheRead  float64 `yaml:"pricing_cache_read"`
-	PricingCacheWrite float64 `yaml:"pricing_cache_write"`
+	PricingInput      float64 `yaml:"pricing_input" json:"pricing_input"`
+	PricingOutput     float64 `yaml:"pricing_output" json:"pricing_output"`
+	PricingCacheRead  float64 `yaml:"pricing_cache_read" json:"pricing_cache_read"`
+	PricingCacheWrite float64 `yaml:"pricing_cache_write" json:"pricing_cache_write"`
 }
 
 // ModelDefault 预填的模型默认数据
 // 优先级：内置 modelDB < 配置默认值 < 上游 API < 用户手动编辑
 type ModelDefault struct {
-	ContextWindow   int     `yaml:"context_window" json:"context_window"`
-	MaxOutputTokens int     `yaml:"max_output_tokens" json:"max_output_tokens"`
-	SupportsVision  bool    `yaml:"supports_vision" json:"supports_vision"`
-	SupportsThinking bool   `yaml:"supports_thinking" json:"supports_thinking"`
-	SupportsTools   bool    `yaml:"supports_tools" json:"supports_tools"`
-	Protocols       []string `yaml:"protocols,omitempty" json:"protocols,omitempty"` // 支持的协议列表
-	PricingInput      float64 `yaml:"pricing_input" json:"pricing_input"`
-	PricingOutput     float64 `yaml:"pricing_output" json:"pricing_output"`
-	PricingCacheRead  float64 `yaml:"pricing_cache_read" json:"pricing_cache_read"`
-	PricingCacheWrite float64 `yaml:"pricing_cache_write" json:"pricing_cache_write"`
+	ContextWindow     int           `yaml:"context_window" json:"context_window"`
+	MaxOutputTokens   int           `yaml:"max_output_tokens" json:"max_output_tokens"`
+	SupportsVision    bool          `yaml:"supports_vision" json:"supports_vision"`
+	SupportsThinking  bool          `yaml:"supports_thinking" json:"supports_thinking"`
+	SupportsTools     bool          `yaml:"supports_tools" json:"supports_tools"`
+	Protocols         []string      `yaml:"protocols,omitempty" json:"protocols,omitempty"` // 支持的协议列表
+	PricingInput      float64       `yaml:"pricing_input" json:"pricing_input"`
+	PricingOutput     float64       `yaml:"pricing_output" json:"pricing_output"`
+	PricingCacheRead  float64       `yaml:"pricing_cache_read" json:"pricing_cache_read"`
+	PricingCacheWrite float64       `yaml:"pricing_cache_write" json:"pricing_cache_write"`
 	PricingRules      []PricingRule `yaml:"pricing_rules,omitempty" json:"pricing_rules,omitempty"`
 }
 
 type Config struct {
-	Server        ServerConfig           `yaml:"server"`
-	Proxy         ProxyConfig            `yaml:"proxy"`
-	Upstream      UpstreamConfig         `yaml:"upstream"`
+	Server        ServerConfig            `yaml:"server"`
+	Proxy         ProxyConfig             `yaml:"proxy"`
+	Upstream      UpstreamConfig          `yaml:"upstream"`
 	Database      DatabaseConfig          `yaml:"database"`
 	Auth          AuthConfig              `yaml:"auth"`
-	MCP           MCPConfig              `yaml:"mcp"`
+	MCP           MCPConfig               `yaml:"mcp"`
 	ModelDefaults map[string]ModelDefault `yaml:"model_defaults"`
 	LogLevel      string                  `yaml:"log_level"`
 }

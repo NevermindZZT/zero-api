@@ -37,6 +37,75 @@ auth:
 # 模型默认数据（优先级高于内置数据库，低于上游 API 和用户手动编辑）
 # 在此处预填模型的定价、上下文窗口、支持特性等
 model_defaults:
+  # OpenAI GPT（长上下文价格按输入上下文达到 272K 后切换）
+  gpt-5.4:
+    pricing_input: 2.50
+    pricing_output: 15.00
+    pricing_cache_read: 0.25
+    context_window: 1048576
+    max_output_tokens: 128000
+    supports_thinking: true
+    supports_vision: true
+    supports_tools: true
+    pricing_rules:
+      - id: long-context-272k
+        type: token_tier
+        enabled: true
+        name: 长上下文
+        context_min_tokens: 272000
+        pricing_input: 5.00
+        pricing_output: 22.50
+        pricing_cache_read: 0.25
+  gpt-5.6-luna:
+    pricing_input: 0.20
+    pricing_output: 1.20
+    pricing_cache_read: 0.02
+    pricing_cache_write: 0.25
+    context_window: 1048576
+    max_output_tokens: 128000
+    supports_thinking: true
+    supports_vision: true
+    supports_tools: true
+    pricing_rules:
+      - id: long-context-272k
+        type: token_tier
+        enabled: true
+        name: 长上下文
+        context_min_tokens: 272000
+        pricing_input: 0.40
+        pricing_output: 1.80
+        pricing_cache_read: 0.02
+        pricing_cache_write: 0.25
+  gpt-5.6-sol:
+    pricing_input: 5.00
+    pricing_output: 30.00
+    pricing_cache_read: 0.50
+    pricing_cache_write: 6.25
+    context_window: 1048576
+    max_output_tokens: 128000
+    supports_thinking: true
+    supports_vision: true
+    supports_tools: true
+  gpt-5.6-terra:
+    pricing_input: 2.00
+    pricing_output: 12.00
+    pricing_cache_read: 0.20
+    pricing_cache_write: 2.50
+    context_window: 1048576
+    max_output_tokens: 128000
+    supports_thinking: true
+    supports_vision: true
+    supports_tools: true
+    pricing_rules:
+      - id: long-context-272k
+        type: token_tier
+        enabled: true
+        name: 长上下文
+        context_min_tokens: 272000
+        pricing_input: 4.00
+        pricing_output: 18.00
+        pricing_cache_read: 0.20
+        pricing_cache_write: 2.50
   # GLM / 智谱
   glm-5.2:
     pricing_input: 1.40
