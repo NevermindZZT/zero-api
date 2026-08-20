@@ -22,12 +22,12 @@ func fixedTimeWithWeekday(weekday time.Weekday, hour, min int) time.Time {
 func TestValidateRules_OK(t *testing.T) {
 	rules := PricingRules{
 		{ID: "off-peak", Type: RuleTypeTimeRange, Enabled: true, Name: "低谷",
-			Days: []string{"mon", "tue", "wed", "thu", "fri"},
+			Days:      []string{"mon", "tue", "wed", "thu", "fri"},
 			StartTime: "00:00", EndTime: "08:00",
 			PricingInput: 0.35, PricingOutput: 0.70},
 		{ID: "large-context", Type: RuleTypeTokenTier, Enabled: true, Name: "超大上下文",
 			ContextMaxTokens: 1000000,
-			PricingInput: 3.48, PricingOutput: 6.96},
+			PricingInput:     3.48, PricingOutput: 6.96},
 	}
 	if err := rules.Validate(); err != nil {
 		t.Fatalf("期望无错误，得到: %v", err)
@@ -180,7 +180,7 @@ func TestResolvePricing_EmptyRules(t *testing.T) {
 func TestResolvePricing_TimeRange_Match(t *testing.T) {
 	rules := PricingRules{
 		{ID: "off-peak", Type: RuleTypeTimeRange, Enabled: true,
-			Days: []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"},
+			Days:      []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"},
 			StartTime: "00:00", EndTime: "08:00",
 			PricingInput: 0.35, PricingOutput: 0.70},
 	}
@@ -200,7 +200,7 @@ func TestResolvePricing_TimeRange_Match(t *testing.T) {
 func TestResolvePricing_TimeRange_NoMatch_OutsideWindow(t *testing.T) {
 	rules := PricingRules{
 		{ID: "off-peak", Type: RuleTypeTimeRange, Enabled: true,
-			Days: []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"},
+			Days:      []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"},
 			StartTime: "00:00", EndTime: "08:00",
 			PricingInput: 0.35, PricingOutput: 0.70},
 	}
@@ -219,7 +219,7 @@ func TestResolvePricing_TimeRange_NoMatch_OutsideWindow(t *testing.T) {
 func TestResolvePricing_TimeRange_CrossMidnight(t *testing.T) {
 	rules := PricingRules{
 		{ID: "night", Type: RuleTypeTimeRange, Enabled: true,
-			Days: []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"},
+			Days:      []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"},
 			StartTime: "22:00", EndTime: "06:00",
 			PricingInput: 0.20, PricingOutput: 0.40},
 	}
@@ -253,7 +253,7 @@ func TestResolvePricing_TimeRange_CrossMidnight(t *testing.T) {
 func TestResolvePricing_TimeRange_WeekdayFilter(t *testing.T) {
 	rules := PricingRules{
 		{ID: "weekend", Type: RuleTypeTimeRange, Enabled: true,
-			Days: []string{"sat", "sun"},
+			Days:      []string{"sat", "sun"},
 			StartTime: "00:00", EndTime: "23:59",
 			PricingInput: 0.5, PricingOutput: 1.0},
 	}
@@ -278,7 +278,7 @@ func TestResolvePricing_TokenTier_Prompt(t *testing.T) {
 	rules := PricingRules{
 		{ID: "small-prompt", Type: RuleTypeTokenTier, Enabled: true,
 			PromptMaxTokens: 4096,
-			PricingInput: 0.5, PricingOutput: 1.0},
+			PricingInput:    0.5, PricingOutput: 1.0},
 	}
 	flat := PricingSet{Input: 2.0, Output: 4.0, CacheRead: 0.2, CacheWrite: 0.8}
 
@@ -305,7 +305,7 @@ func TestResolvePricing_TokenTier_Context(t *testing.T) {
 	rules := PricingRules{
 		{ID: "small-context", Type: RuleTypeTokenTier, Enabled: true,
 			ContextMaxTokens: 8000,
-			PricingInput: 0.3, PricingOutput: 0.6},
+			PricingInput:     0.3, PricingOutput: 0.6},
 	}
 	flat := PricingSet{Input: 1.0, Output: 2.0}
 
@@ -321,6 +321,41 @@ func TestResolvePricing_TokenTier_Context(t *testing.T) {
 	matched, resolved = ResolvePricing(rules, flat, time.Now(), 3000, 9000)
 	if matched != "" {
 		t.Fatalf("期望无匹配，得到 %s", matched)
+	}
+}
+
+func TestResolvePricing_TokenTier_ContextMinUsesFlatBelowThreshold(t *testing.T) {
+	rules := PricingRules{{
+		ID: "large-context", Type: RuleTypeTokenTier, Enabled: true,
+		ContextMinTokens: 128000, PricingInput: 3.48, PricingOutput: 6.96,
+	}}
+	flat := PricingSet{Input: 1.25, Output: 5.0}
+
+	matched, resolved := ResolvePricing(rules, flat, time.Now(), 127999, 500000)
+	if matched != "" || resolved != flat {
+		t.Fatalf("阈值以下应使用基础价，matched=%q resolved=%+v", matched, resolved)
+	}
+
+	matched, resolved = ResolvePricing(rules, flat, time.Now(), 128000, 500000)
+	if matched != "large-context" || resolved.Input != 3.48 || resolved.Output != 6.96 {
+		t.Fatalf("达到阈值应使用分段价，matched=%q resolved=%+v", matched, resolved)
+	}
+}
+
+func TestResolvePricing_TokenTier_ContextMinChoosesHighestSatisfiedTier(t *testing.T) {
+	rules := PricingRules{
+		{ID: "context-128k", Type: RuleTypeTokenTier, Enabled: true, ContextMinTokens: 128000, PricingInput: 2.0},
+		{ID: "context-200k", Type: RuleTypeTokenTier, Enabled: true, ContextMinTokens: 200000, PricingInput: 3.0},
+	}
+	flat := PricingSet{Input: 1.0}
+
+	matched, resolved := ResolvePricing(rules, flat, time.Now(), 150000, 500000)
+	if matched != "context-128k" || resolved.Input != 2.0 {
+		t.Fatalf("应匹配 128K 阶梯，matched=%q resolved=%+v", matched, resolved)
+	}
+	matched, resolved = ResolvePricing(rules, flat, time.Now(), 250000, 500000)
+	if matched != "context-200k" || resolved.Input != 3.0 {
+		t.Fatalf("应匹配 200K 阶梯，matched=%q resolved=%+v", matched, resolved)
 	}
 }
 
@@ -354,7 +389,7 @@ func TestResolvePricing_TokenTier_AND(t *testing.T) {
 func TestResolvePricing_DisabledRuleSkipped(t *testing.T) {
 	rules := PricingRules{
 		{ID: "disabled-rule", Type: RuleTypeTimeRange, Enabled: false,
-			Days: []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"},
+			Days:      []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"},
 			StartTime: "00:00", EndTime: "23:59",
 			PricingInput: 0.01, PricingOutput: 0.01},
 	}
@@ -373,11 +408,11 @@ func TestResolvePricing_PriorityOrder(t *testing.T) {
 	// 第一条规则应优先匹配
 	rules := PricingRules{
 		{ID: "high-priority", Type: RuleTypeTimeRange, Enabled: true,
-			Days: []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"},
+			Days:      []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"},
 			StartTime: "00:00", EndTime: "23:59",
 			PricingInput: 0.1, PricingOutput: 0.2},
 		{ID: "low-priority", Type: RuleTypeTimeRange, Enabled: true,
-			Days: []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"},
+			Days:      []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"},
 			StartTime: "00:00", EndTime: "23:59",
 			PricingInput: 0.5, PricingOutput: 1.0},
 	}

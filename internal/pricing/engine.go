@@ -73,9 +73,18 @@ func ResolvePricing(rules PricingRules, flat PricingSet, now time.Time, promptTo
 		return "", flat
 	}
 
-	// 按规则列表顺序遍历，首条匹配即返回（first-match-wins）
+	// 新式 Token 阶梯按最高起始阈值匹配；时间段规则仍按列表顺序优先。
+	var tierRule *PricingRule
 	for _, rule := range rules {
 		if !rule.Enabled {
+			continue
+		}
+
+		if rule.Type == RuleTypeTokenTier && hasMinThreshold(rule) {
+			if matchTokenTierMin(rule, promptTokens, totalTokens) && (tierRule == nil || tierThreshold(rule) > tierThreshold(*tierRule)) {
+				candidate := rule
+				tierRule = &candidate
+			}
 			continue
 		}
 
@@ -92,6 +101,12 @@ func ResolvePricing(rules PricingRules, flat PricingSet, now time.Time, promptTo
 			CacheWrite: rule.PricingCacheWrite,
 		}
 		return matchedRuleID, resolved
+	}
+	if tierRule != nil {
+		return tierRule.ID, PricingSet{
+			Input: tierRule.PricingInput, Output: tierRule.PricingOutput,
+			CacheRead: tierRule.PricingCacheRead, CacheWrite: tierRule.PricingCacheWrite,
+		}
 	}
 
 	// 无规则匹配，返回 flat
@@ -141,6 +156,28 @@ func matchTokenTier(rule PricingRule, promptTokens, totalTokens int) bool {
 	// 仅 context 条件
 	if rule.ContextMaxTokens > 0 {
 		return totalTokens <= rule.ContextMaxTokens
+	}
+	return true
+}
+
+func hasMinThreshold(rule PricingRule) bool {
+	return rule.PromptMinTokens > 0 || rule.ContextMinTokens > 0
+}
+
+func tierThreshold(rule PricingRule) int {
+	if rule.ContextMinTokens > rule.PromptMinTokens {
+		return rule.ContextMinTokens
+	}
+	return rule.PromptMinTokens
+}
+
+func matchTokenTierMin(rule PricingRule, promptTokens, totalTokens int) bool {
+	if rule.PromptMinTokens > 0 && promptTokens < rule.PromptMinTokens {
+		return false
+	}
+	// 新式 Context 阈值表示输入上下文长度，不把输出 token 计入判断。
+	if rule.ContextMinTokens > 0 && promptTokens < rule.ContextMinTokens {
+		return false
 	}
 	return true
 }

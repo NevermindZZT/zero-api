@@ -88,6 +88,7 @@ function addRule() {
     pricing_output: 0,
     pricing_cache_read: 0,
     pricing_cache_write: 0,
+    context_min_tokens: 0,
   })
   setParsedRules(rules)
 }
@@ -520,7 +521,14 @@ async function batchAction(action: string) {
         />
       </NCard>
 
-      <NModal v-model:show="showModal" title="编辑模型" preset="card" style="width:560px">
+      <NModal
+        v-model:show="showModal"
+        class="model-edit-modal"
+        title="编辑模型"
+        preset="card"
+        style="width:min(720px, calc(100vw - 32px));max-height:calc(100vh - 48px)"
+      >
+        <div class="model-edit-scroll">
         <NForm :model="form" label-placement="left" label-width="120">
           <NFormItem label="显示名称">
             <NInput v-model:value="form.display_name" placeholder="模型显示名称" />
@@ -593,6 +601,9 @@ async function batchAction(action: string) {
               <NAlert v-if="getParsedRules().some((r: any) => r.type === 'time_range')" type="info" size="small" style="margin-bottom:8px">
                 时间段条件基于 <b>UTC 时间</b>，请按 UTC 时区填写时间。例如北京时区 16:00 对应 UTC 08:00。
               </NAlert>
+              <NAlert v-if="getParsedRules().some((r: any) => r.type === 'token_tier')" type="info" size="small" style="margin-bottom:8px">
+                Token 分段定价以基础价格为默认价格。输入上下文达到阈值后，启用该规则价格。GPT 系列长上下文定价只需填写一个输入上下文阈值。
+              </NAlert>
               <div v-for="(rule, idx) in getParsedRules()" :key="rule.id" style="background:rgba(30,41,59,0.5);border:1px solid rgba(102,126,234,0.2);border-radius:8px;padding:12px;margin-bottom:8px">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
                   <div style="display:flex;align-items:center;gap:8px">
@@ -623,41 +634,27 @@ async function batchAction(action: string) {
                 </div>
 
                 <!-- Token 阶梯条件 -->
-                <div v-if="rule.type === 'token_tier'" style="display:flex;gap:12px;margin-bottom:8px">
-                  <div style="display:flex;align-items:center;gap:4px">
-                    <span style="color:#94a3b8;font-size:12px">Prompt ≤</span>
-                    <NInputNumber size="small" style="width:120px" :min="0" :step="1024" placeholder="0=不限" :value="rule.prompt_max_tokens || 0" @update:value="v => { rule.prompt_max_tokens = v; updateRule(idx, {...rule}) }" />
-                  </div>
-                  <div style="display:flex;align-items:center;gap:4px">
-                    <span style="color:#94a3b8;font-size:12px">Context ≤</span>
-                    <NInputNumber size="small" style="width:120px" :min="0" :step="1024" placeholder="0=不限" :value="rule.context_max_tokens || 0" @update:value="v => { rule.context_max_tokens = v; updateRule(idx, {...rule}) }" />
+                <div v-if="rule.type === 'token_tier'" class="tier-thresholds">
+                  <div class="tier-field">
+                    <span>输入上下文达到</span>
+                    <NInputNumber size="small" :min="1" :step="1024" placeholder="例如 128000" :value="rule.context_min_tokens || null" @update:value="v => { rule.context_min_tokens = v || 0; updateRule(idx, {...rule}) }" />
+                    <small>prompt / input tokens</small>
                   </div>
                 </div>
 
                 <!-- 规则定价 -->
-                <div style="display:flex;gap:8px;flex-wrap:wrap">
-                  <div style="display:flex;align-items:center;gap:4px">
-                    <span style="color:#94a3b8;font-size:12px">输入</span>
-                    <NInputNumber size="small" style="width:90px" :precision="6" :step="0.000001" :value="rule.pricing_input" @update:value="v => { rule.pricing_input = v; updateRule(idx, {...rule}) }" />
-                  </div>
-                  <div style="display:flex;align-items:center;gap:4px">
-                    <span style="color:#94a3b8;font-size:12px">输出</span>
-                    <NInputNumber size="small" style="width:90px" :precision="6" :step="0.000001" :value="rule.pricing_output" @update:value="v => { rule.pricing_output = v; updateRule(idx, {...rule}) }" />
-                  </div>
-                  <div style="display:flex;align-items:center;gap:4px">
-                    <span style="color:#94a3b8;font-size:12px">缓存读</span>
-                    <NInputNumber size="small" style="width:90px" :precision="6" :step="0.000001" :value="rule.pricing_cache_read" @update:value="v => { rule.pricing_cache_read = v; updateRule(idx, {...rule}) }" />
-                  </div>
-                  <div style="display:flex;align-items:center;gap:4px">
-                    <span style="color:#94a3b8;font-size:12px">缓存写</span>
-                    <NInputNumber size="small" style="width:90px" :precision="6" :step="0.000001" :value="rule.pricing_cache_write" @update:value="v => { rule.pricing_cache_write = v; updateRule(idx, {...rule}) }" />
-                  </div>
+                <div class="tier-prices">
+                  <div class="tier-price-field"><span>输入价格 ($/1M)</span><NInputNumber size="small" :precision="6" :step="0.000001" :value="rule.pricing_input" @update:value="v => { rule.pricing_input = v; updateRule(idx, {...rule}) }" /></div>
+                  <div class="tier-price-field"><span>输出价格 ($/1M)</span><NInputNumber size="small" :precision="6" :step="0.000001" :value="rule.pricing_output" @update:value="v => { rule.pricing_output = v; updateRule(idx, {...rule}) }" /></div>
+                  <div class="tier-price-field"><span>缓存读取 ($/1M)</span><NInputNumber size="small" :precision="6" :step="0.000001" :value="rule.pricing_cache_read" @update:value="v => { rule.pricing_cache_read = v; updateRule(idx, {...rule}) }" /></div>
+                  <div class="tier-price-field"><span>缓存写入 ($/1M)</span><NInputNumber size="small" :precision="6" :step="0.000001" :value="rule.pricing_cache_write" @update:value="v => { rule.pricing_cache_write = v; updateRule(idx, {...rule}) }" /></div>
                 </div>
               </div>
               <NButton size="small" @click="addRule" style="margin-top:4px">+ 添加定价规则</NButton>
             </div>
           </NFormItem>
         </NForm>
+        </div>
         <template #footer>
           <NSpace justify="end">
             <NButton @click="showModal = false">取消</NButton>
@@ -718,5 +715,25 @@ async function batchAction(action: string) {
   background: rgba(102, 126, 234, 0.1);
   border: 1px solid rgba(102, 126, 234, 0.3);
   border-radius: 12px;
+}
+.tier-thresholds, .tier-prices { display: grid; gap: 8px; margin-bottom: 10px; }
+.tier-field, .tier-price-field { display: grid; grid-template-columns: 125px minmax(0, 1fr) 110px; align-items: center; gap: 8px; }
+.tier-price-field { grid-template-columns: 125px minmax(0, 1fr); }
+.tier-field span, .tier-price-field span { color: #cbd5e1; font-size: 12px; }
+.tier-field small { color: #64748b; font-size: 11px; }
+.model-edit-scroll {
+  max-height: calc(100vh - 190px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.45) #172235;
+}
+.model-edit-scroll::-webkit-scrollbar { width: 8px; }
+.model-edit-scroll::-webkit-scrollbar-track { background: #172235 !important; border-radius: 4px; }
+.model-edit-scroll::-webkit-scrollbar-thumb { background: #64748b !important; border: 2px solid #172235; border-radius: 4px; }
+.model-edit-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8 !important; }
+@media (max-width: 600px) {
+  .tier-field, .tier-price-field { grid-template-columns: 1fr; gap: 4px; }
 }
 </style>

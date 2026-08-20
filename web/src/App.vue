@@ -153,6 +153,14 @@ body {
 .main-content,
 .n-drawer-body-content-wrapper,
 .n-modal-body-content-wrapper,
+.n-modal .n-card__content,
+.n-modal .n-card__content-wrapper,
+.n-modal.n-card .n-card__content,
+.n-modal.n-card .n-card__content-wrapper,
+.n-card[role="dialog"] .n-card__content,
+.n-card[role="dialog"] .n-card__content-wrapper,
+.model-edit-modal .n-card__content,
+.model-edit-modal .n-card__content-wrapper,
 .n-base-select-menu,
 .n-data-table-base-table-body {
   scrollbar-width: thin;
@@ -163,6 +171,14 @@ body {
    避免出现浏览器默认白色滚动条与暗色主题不一致 */
 .n-drawer-body-content-wrapper::-webkit-scrollbar,
 .n-modal-body-content-wrapper::-webkit-scrollbar,
+.n-modal .n-card__content::-webkit-scrollbar,
+.n-modal .n-card__content-wrapper::-webkit-scrollbar,
+.n-modal.n-card .n-card__content::-webkit-scrollbar,
+.n-modal.n-card .n-card__content-wrapper::-webkit-scrollbar,
+.n-card[role="dialog"] .n-card__content::-webkit-scrollbar,
+.n-card[role="dialog"] .n-card__content-wrapper::-webkit-scrollbar,
+.model-edit-modal .n-card__content::-webkit-scrollbar,
+.model-edit-modal .n-card__content-wrapper::-webkit-scrollbar,
 .n-base-select-menu::-webkit-scrollbar,
 .n-data-table-base-table-body::-webkit-scrollbar {
   width: 6px;
@@ -170,12 +186,28 @@ body {
 }
 .n-drawer-body-content-wrapper::-webkit-scrollbar-track,
 .n-modal-body-content-wrapper::-webkit-scrollbar-track,
+.n-modal .n-card__content::-webkit-scrollbar-track,
+.n-modal .n-card__content-wrapper::-webkit-scrollbar-track,
+.n-modal.n-card .n-card__content::-webkit-scrollbar-track,
+.n-modal.n-card .n-card__content-wrapper::-webkit-scrollbar-track,
+.n-card[role="dialog"] .n-card__content::-webkit-scrollbar-track,
+.n-card[role="dialog"] .n-card__content-wrapper::-webkit-scrollbar-track,
+.model-edit-modal .n-card__content::-webkit-scrollbar-track,
+.model-edit-modal .n-card__content-wrapper::-webkit-scrollbar-track,
 .n-base-select-menu::-webkit-scrollbar-track,
 .n-data-table-base-table-body::-webkit-scrollbar-track {
   background: transparent;
 }
 .n-drawer-body-content-wrapper::-webkit-scrollbar-thumb,
 .n-modal-body-content-wrapper::-webkit-scrollbar-thumb,
+.n-modal .n-card__content::-webkit-scrollbar-thumb,
+.n-modal .n-card__content-wrapper::-webkit-scrollbar-thumb,
+.n-modal.n-card .n-card__content::-webkit-scrollbar-thumb,
+.n-modal.n-card .n-card__content-wrapper::-webkit-scrollbar-thumb,
+.n-card[role="dialog"] .n-card__content::-webkit-scrollbar-thumb,
+.n-card[role="dialog"] .n-card__content-wrapper::-webkit-scrollbar-thumb,
+.model-edit-modal .n-card__content::-webkit-scrollbar-thumb,
+.model-edit-modal .n-card__content-wrapper::-webkit-scrollbar-thumb,
 .n-base-select-menu::-webkit-scrollbar-thumb,
 .n-data-table-base-table-body::-webkit-scrollbar-thumb {
   background: rgba(148, 163, 184, 0.2);
@@ -183,6 +215,14 @@ body {
 }
 .n-drawer-body-content-wrapper::-webkit-scrollbar-thumb:hover,
 .n-modal-body-content-wrapper::-webkit-scrollbar-thumb:hover,
+.n-modal .n-card__content::-webkit-scrollbar-thumb:hover,
+.n-modal .n-card__content-wrapper::-webkit-scrollbar-thumb:hover,
+.n-modal.n-card .n-card__content::-webkit-scrollbar-thumb:hover,
+.n-modal.n-card .n-card__content-wrapper::-webkit-scrollbar-thumb:hover,
+.n-card[role="dialog"] .n-card__content::-webkit-scrollbar-thumb:hover,
+.n-card[role="dialog"] .n-card__content-wrapper::-webkit-scrollbar-thumb:hover,
+.model-edit-modal .n-card__content::-webkit-scrollbar-thumb:hover,
+.model-edit-modal .n-card__content-wrapper::-webkit-scrollbar-thumb:hover,
 .n-base-select-menu::-webkit-scrollbar-thumb:hover,
 .n-data-table-base-table-body::-webkit-scrollbar-thumb:hover {
   background: rgba(148, 163, 184, 0.4);

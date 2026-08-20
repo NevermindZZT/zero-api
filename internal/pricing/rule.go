@@ -32,11 +32,16 @@ type PricingRule struct {
 	Name    string   `json:"name"`
 
 	// 时间段条件（type=time_range）
-	Days      []string `json:"days,omitempty"`      // ["mon","tue",...,"sun"]，空=每天
+	Days      []string `json:"days,omitempty"`       // ["mon","tue",...,"sun"]，空=每天
 	StartTime string   `json:"start_time,omitempty"` // "00:00"
 	EndTime   string   `json:"end_time,omitempty"`   // "08:00"，支持跨天(22:00-06:00)
 
 	// Token 阶梯条件（type=token_tier）
+	// ContextMinTokens 是标准的长上下文阈值，按 prompt/input tokens 判断。
+	ContextMinTokens int `json:"context_min_tokens,omitempty"`
+	// PromptMinTokens 仅兼容早期配置；新规则请使用 ContextMinTokens。
+	PromptMinTokens int `json:"prompt_min_tokens,omitempty"`
+	// 兼容旧配置：旧字段表示最大值，仍按旧语义匹配
 	PromptMaxTokens  int `json:"prompt_max_tokens,omitempty"`  // prompt_tokens <= 此值
 	ContextMaxTokens int `json:"context_max_tokens,omitempty"` // total_tokens <= 此值
 
@@ -108,8 +113,11 @@ func (r PricingRules) Validate() error {
 				}
 			}
 		case RuleTypeTokenTier:
-			if rule.PromptMaxTokens <= 0 && rule.ContextMaxTokens <= 0 {
-				return fmt.Errorf("规则 %q: Token 阶梯规则需要至少设置 prompt_max_tokens 或 context_max_tokens", rule.ID)
+			if rule.PromptMinTokens < 0 || rule.ContextMinTokens < 0 || rule.PromptMaxTokens < 0 || rule.ContextMaxTokens < 0 {
+				return fmt.Errorf("规则 %q: Token 阈值不能为负数", rule.ID)
+			}
+			if rule.PromptMinTokens == 0 && rule.ContextMinTokens == 0 && rule.PromptMaxTokens <= 0 && rule.ContextMaxTokens <= 0 {
+				return fmt.Errorf("规则 %q: Token 阶梯规则需要至少设置一个阈值", rule.ID)
 			}
 		default:
 			return fmt.Errorf("规则 %q: 未知规则类型 %q", rule.ID, rule.Type)
