@@ -28,17 +28,7 @@ type Config struct {
 	// Debug 调试模式
 	Debug bool `json:"debug"`
 
-	// Codex 订阅模型（OAuth 登录后可用）
-	// EnableCodex Codex 订阅接入开关
-	EnableCodex bool `json:"enable_codex"`
-	// CodexPrefix Codex 模型前缀（可选，如 "codex/"）
-	CodexPrefix string `json:"codex_prefix,omitempty"`
-
-	// 其他订阅接入（可选）
-	EnableClaude   bool `json:"enable_claude"`
-	EnableGemini   bool `json:"enable_gemini"`
-	EnableGrok     bool `json:"enable_grok"`
-	EnableAntigrav bool `json:"enable_antigravity"`
+	// 订阅渠道可用性由 auths 目录中的认证文件决定，无需开关配置。
 }
 
 // DefaultConfig 返回默认配置
@@ -50,7 +40,6 @@ func DefaultConfig() *Config {
 		Port:         8317,
 		APIKeys:      []string{},
 		RequestRetry: 3,
-		EnableCodex:  true,
 	}
 }
 
@@ -63,8 +52,8 @@ func (c *Config) Render() ([]byte, error) {
 		APIKeys []string `yaml:"api-keys"`
 		Debug   bool     `yaml:"debug"`
 
-		ProxyURL    string `yaml:"proxy-url,omitempty"`
-		RequestRetry int   `yaml:"request-retry"`
+		ProxyURL     string `yaml:"proxy-url,omitempty"`
+		RequestRetry int    `yaml:"request-retry"`
 
 		Codex struct {
 			DisableCodexCloaking bool `yaml:"disable-codex-cloaking"`
@@ -86,13 +75,6 @@ func (c *Config) Render() ([]byte, error) {
 	}
 	if c.RequestRetry > 0 {
 		y.RequestRetry = c.RequestRetry
-	}
-
-	// Codex 前缀映射：client "codex/gpt-5" → 上游 "gpt-5"
-	if c.EnableCodex && c.CodexPrefix != "" {
-		prefix := strings.TrimSuffix(c.CodexPrefix, "/")
-		// 简化：不用模型前缀，改用 payload override 统一注入
-		_ = prefix
 	}
 
 	out, err := yaml.Marshal(&y)

@@ -10,5 +10,7 @@ services:
       - ./data:/app/data
       - ./certs:/app/certs
       - ./configs:/app/configs:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - TZ=Asia/Shanghai

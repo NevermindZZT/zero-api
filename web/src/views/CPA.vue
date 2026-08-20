@@ -12,7 +12,6 @@ const busy = ref(false)
 const config = ref<any>({
   enabled: true, auto_start: true, host: '127.0.0.1', port: 8317,
   api_keys: [], proxy_url: '', request_retry: 3, debug: false,
-  enable_codex: true, codex_prefix: '',
 })
 const status = ref<any>({})
 const update = ref<any>({})
@@ -126,10 +125,10 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
               </NFormItem>
             </NGi>
             <NGi span="2 m:1">
-              <NFormItem label="出站代理"><NInput v-model:value="config.proxy_url" placeholder="可选，例如 http://127.0.0.1:7890" /></NFormItem>
+              <NFormItem label="出站代理" label-description="支持 http/https/socks5，可带账号密码">
+                <NInput v-model:value="config.proxy_url" placeholder="例如 socks5://user:pass@127.0.0.1:1080" />
+              </NFormItem>
               <NFormItem label="请求重试"><NInputNumber v-model:value="config.request_retry" :min="0" :max="10" style="width: 100%" /></NFormItem>
-              <NFormItem label="启用 Codex"><NSwitch v-model:value="config.enable_codex" /></NFormItem>
-              <NFormItem label="模型前缀"><NInput v-model:value="config.codex_prefix" placeholder="可选，例如 codex/" /></NFormItem>
               <NFormItem label="调试日志"><NSwitch v-model:value="config.debug" /></NFormItem>
             </NGi>
           </NGrid>

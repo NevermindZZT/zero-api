@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -35,8 +36,9 @@ type ReleaseAsset struct {
 const latestReleaseURL = "https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest"
 
 // FetchLatestRelease 获取最新 release 信息
-func FetchLatestRelease() (*GitHubRelease, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
+// proxyURL 可选出站代理（http/https/socks5，支持 user:pass@ 认证），空=直连
+func FetchLatestRelease(proxyURL string) (*GitHubRelease, error) {
+	client := &http.Client{Timeout: 15 * time.Second, Transport: buildTransport(proxyURL)}
 	req, err := http.NewRequest(http.MethodGet, latestReleaseURL, nil)
 	if err != nil {
 		return nil, err
@@ -96,7 +98,7 @@ func normalizeAssetName(name string) string {
 // InstallBinary 下载并安装 CLIProxyAPI 二进制
 // 返回安装的版本号
 func (m *Manager) InstallBinary(force bool) (string, error) {
-	rel, err := FetchLatestRelease()
+	rel, err := FetchLatestRelease(m.proxyURL)
 	if err != nil {
 		return "", err
 	}
@@ -119,7 +121,7 @@ func (m *Manager) InstallBinary(force bool) (string, error) {
 
 	// 下载到临时文件
 	tmpPath := m.binPath + ".tmp"
-	if err := downloadFile(asset.BrowserDownloadURL, tmpPath, asset.Size); err != nil {
+	if err := downloadFile(asset.BrowserDownloadURL, tmpPath, asset.Size, m.proxyURL); err != nil {
 		return "", fmt.Errorf("下载失败: %w", err)
 	}
 
@@ -143,8 +145,27 @@ func (m *Manager) InstallBinary(force bool) (string, error) {
 }
 
 // downloadFile 下载文件到指定路径（带进度日志）
-func downloadFile(url, dst string, expectedSize int64) error {
-	client := &http.Client{Timeout: 10 * time.Minute}
+// proxyURL 可选出站代理（http/https/socks5，支持 user:pass@ 认证），空=直连
+// 失败自动重试 3 次（网络错误/5xx/超时）
+func downloadFile(url, dst string, expectedSize int64, proxyURL string) error {
+	const maxRetries = 3
+	var lastErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if attempt > 1 {
+			log.Printf("[CPA] 下载重试 %d/%d...", attempt, maxRetries)
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+		lastErr = downloadOnce(url, dst, expectedSize, proxyURL)
+		if lastErr == nil {
+			return nil
+		}
+		log.Printf("[CPA] 下载失败(第 %d 次): %v", attempt, lastErr)
+	}
+	return lastErr
+}
+
+func downloadOnce(url, dst string, expectedSize int64, proxyURL string) error {
+	client := &http.Client{Timeout: 10 * time.Minute, Transport: buildTransport(proxyURL)}
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("User-Agent", "zero-api-cpa-manager")
 
@@ -172,6 +193,26 @@ func downloadFile(url, dst string, expectedSize int64) error {
 		return fmt.Errorf("下载大小不匹配: got %d want %d", written, expectedSize)
 	}
 	return nil
+}
+
+// buildTransport 构建 HTTP Transport，支持 http/https/socks5 代理（含账号密码认证）
+func buildTransport(proxyURL string) *http.Transport {
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		// 与默认 Transport 一致的连接池参数
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	if proxyURL != "" {
+		if proxyURL == "direct" || proxyURL == "none" {
+			transport.Proxy = nil
+		} else if proxy, err := url.Parse(proxyURL); err == nil {
+			transport.Proxy = http.ProxyURL(proxy)
+		}
+	}
+	return transport
 }
 
 // extractBinary 从下载的归档中提取 CLIProxyAPI 二进制
@@ -264,7 +305,7 @@ func writeFileFromReader(dst string, r io.Reader, size int64) error {
 
 // CheckUpdate 检查是否有新版本（对比本地二进制版本）
 func (m *Manager) CheckUpdate() (latest string, hasUpdate bool, err error) {
-	rel, err := FetchLatestRelease()
+	rel, err := FetchLatestRelease(m.proxyURL)
 	if err != nil {
 		return "", false, err
 	}

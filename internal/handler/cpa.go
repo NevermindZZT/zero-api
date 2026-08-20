@@ -114,6 +114,10 @@ func (h *CPAHandler) Restart(c *gin.Context) {
 
 // InstallBinary 安装/升级二进制
 func (h *CPAHandler) InstallBinary(c *gin.Context) {
+	// 从配置中读取出站代理，传给下载器
+	if cfg, err := h.cfgRepo.Get(); err == nil {
+		h.manager.SetProxyURL(cfg.ProxyURL)
+	}
 	version, err := h.manager.InstallBinary(c.Query("force") == "true")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -167,19 +171,13 @@ func (h *CPAHandler) StopAuth(c *gin.Context) {
 // cfgToCPAConfig 转换 store.CPAConfig → cpa.Config
 func cfgToCPAConfig(cfg *store.CPAConfig) *cpa.Config {
 	return &cpa.Config{
-		Enabled:        cfg.Enabled,
-		AutoStart:      cfg.AutoStart,
-		Host:           cfg.Host,
-		Port:           cfg.Port,
-		APIKeys:        cfg.APIKeys,
-		ProxyURL:       cfg.ProxyURL,
-		RequestRetry:   cfg.RequestRetry,
-		Debug:          cfg.Debug,
-		EnableCodex:    cfg.EnableCodex,
-		CodexPrefix:    cfg.CodexPrefix,
-		EnableClaude:   cfg.EnableClaude,
-		EnableGemini:   cfg.EnableGemini,
-		EnableGrok:     cfg.EnableGrok,
-		EnableAntigrav: cfg.EnableAntigravity,
+		Enabled:      cfg.Enabled,
+		AutoStart:    cfg.AutoStart,
+		Host:         cfg.Host,
+		Port:         cfg.Port,
+		APIKeys:      cfg.APIKeys,
+		ProxyURL:     cfg.ProxyURL,
+		RequestRetry: cfg.RequestRetry,
+		Debug:        cfg.Debug,
 	}
 }

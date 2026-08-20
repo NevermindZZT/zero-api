@@ -21,10 +21,11 @@ import (
 
 // Manager CLIProxyAPI 进程管理器
 type Manager struct {
-	dataDir string // sidecar 数据目录（二进制/config/auths）
-	binPath string // CLIProxyAPI 二进制路径
-	port    int    // sidecar 监听端口
-	host    string // sidecar 绑定地址
+	dataDir  string // sidecar 数据目录（二进制/config/auths）
+	binPath  string // CLIProxyAPI 二进制路径
+	port     int    // sidecar 监听端口
+	host     string // sidecar 绑定地址
+	proxyURL string // 出站代理（下载/更新二进制时使用）
 
 	mu           sync.Mutex
 	cmd          *exec.Cmd
@@ -63,6 +64,13 @@ func (m *Manager) UpdateEndpoint(host string, port int) {
 	if port > 0 {
 		m.port = port
 	}
+}
+
+// SetProxyURL 设置出站代理（下载/更新二进制时使用）。
+func (m *Manager) SetProxyURL(proxyURL string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.proxyURL = proxyURL
 }
 
 // ConfigPath 返回配置路径
