@@ -28,26 +28,26 @@ func (r *ModelRepo) InvalidateModelCache() {
 
 // Model 模型
 type Model struct {
-	ID              int64     `json:"id"`
-	ChannelID       int64     `json:"channel_id"`
-	ModelID         string    `json:"model_id"`
-	DisplayName     string    `json:"display_name"`
-	ContextWindow   int       `json:"context_window"`
-	MaxOutputTokens int       `json:"max_output_tokens"`
-	SupportsVision  bool      `json:"supports_vision"`
-	SupportsThinking bool     `json:"supports_thinking"`
-	SupportsTools   bool      `json:"supports_tools"`
-	PricingInput      float64   `json:"pricing_input"`        // $/1M tokens（输入）
-	PricingOutput     float64   `json:"pricing_output"`       // $/1M tokens（输出）
-	PricingCacheRead  float64   `json:"pricing_cache_read"`   // $/1M tokens（缓存读取）
-	PricingCacheWrite float64   `json:"pricing_cache_write"`  // $/1M tokens（缓存写入）
-	PricingRules      string    `json:"pricing_rules"`        // 定价规则 JSON
-	Protocols         []string  `json:"protocols"`            // 支持的协议列表，空 = 继承渠道 type
-	ProtocolURLs      map[string]string `json:"protocol_urls"` // 各协议独立的上游 URL（如 {"anthropic":"https://.../v1/messages"}）
-	Status            string    `json:"status"` // active, inactive
-	UserModified      bool      `json:"user_modified"`        // 用户是否手动编辑过
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID                int64             `json:"id"`
+	ChannelID         int64             `json:"channel_id"`
+	ModelID           string            `json:"model_id"`
+	DisplayName       string            `json:"display_name"`
+	ContextWindow     int               `json:"context_window"`
+	MaxOutputTokens   int               `json:"max_output_tokens"`
+	SupportsVision    bool              `json:"supports_vision"`
+	SupportsThinking  bool              `json:"supports_thinking"`
+	SupportsTools     bool              `json:"supports_tools"`
+	PricingInput      float64           `json:"pricing_input"`       // $/1M tokens（输入）
+	PricingOutput     float64           `json:"pricing_output"`      // $/1M tokens（输出）
+	PricingCacheRead  float64           `json:"pricing_cache_read"`  // $/1M tokens（缓存读取）
+	PricingCacheWrite float64           `json:"pricing_cache_write"` // $/1M tokens（缓存写入）
+	PricingRules      string            `json:"pricing_rules"`       // 定价规则 JSON
+	Protocols         []string          `json:"protocols"`           // 支持的协议列表，空 = 继承渠道 type
+	ProtocolURLs      map[string]string `json:"protocol_urls"`       // 各协议独立的上游 URL（如 {"anthropic":"https://.../v1/messages"}）
+	Status            string            `json:"status"`              // active, inactive
+	UserModified      bool              `json:"user_modified"`       // 用户是否手动编辑过
+	CreatedAt         time.Time         `json:"created_at"`
+	UpdatedAt         time.Time         `json:"updated_at"`
 
 	// 关联字段（查询时填充）
 	ChannelName     string `json:"channel_name,omitempty"`
@@ -113,7 +113,12 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 		modelCacheMu.RUnlock()
 	}
 
-	var rows interface{ Scan(...interface{}) error; Close() error; Next() bool; Err() error }
+	var rows interface {
+		Scan(...interface{}) error
+		Close() error
+		Next() bool
+		Err() error
+	}
 	var err error
 
 	userModifiedField := "m.user_modified"
@@ -139,9 +144,9 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 		        m.context_window, m.max_output_tokens,
 		        m.supports_vision, m.supports_thinking, m.supports_tools,
 		        m.pricing_input, m.pricing_output, m.pricing_cache_read, m.pricing_cache_write,
-		        m.pricing_rules, `+protocolsField+`, `+protocolURLsField+`,
-		        m.status,`+userModifiedField+`, m.created_at, m.updated_at,
-		        `+channelNameType+`, `+channelPriority+`, `+channelStatus+`
+		        m.pricing_rules, ` + protocolsField + `, ` + protocolURLsField + `,
+		        m.status,` + userModifiedField + `, m.created_at, m.updated_at,
+		        ` + channelNameType + `, ` + channelPriority + `, ` + channelStatus + `
 			 FROM models m LEFT JOIN channels c ON m.channel_id = c.id
 			 ORDER BY c.priority, m.id`)
 	}
@@ -205,6 +210,24 @@ func (r *ModelRepo) GetByID(id int64) (*Model, error) {
 	m.Protocols = parseProtocols(protocolsStr)
 	m.ProtocolURLs = parseProtocolURLs(protocolURLsStr)
 	return m, nil
+}
+
+// SupportsVisionByModelID 判断指定模型是否存在启用的视觉能力实例。
+// 直接查询数据库，供请求路由使用，避免受模型列表缓存影响。
+func (r *ModelRepo) SupportsVisionByModelID(modelID string) (bool, error) {
+	var exists int
+	err := r.db.QueryRow(
+		`SELECT EXISTS(
+			SELECT 1 FROM models m
+			JOIN channels c ON c.id = m.channel_id
+			WHERE m.model_id = ? AND m.status = 'active' AND c.status = 'active' AND m.supports_vision = 1
+		)`,
+		modelID,
+	).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists == 1, nil
 }
 
 // parseProtocols 解析 protocols JSON 字符串到 []string

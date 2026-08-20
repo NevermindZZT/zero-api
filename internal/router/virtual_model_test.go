@@ -2,8 +2,11 @@ package router
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/never/zero-api/internal/store"
 )
 
 // ===== OpenAI 协议图片处理 =====
@@ -47,8 +50,8 @@ func TestReplaceImagesOpenAI(t *testing.T) {
 	content := msgs[1].(map[string]interface{})["content"]
 	raw, _ := json.Marshal(content)
 	var parts []struct {
-		Type     string `json:"type"`
-		Text     string `json:"text"`
+		Type     string          `json:"type"`
+		Text     string          `json:"text"`
 		ImageURL json.RawMessage `json:"image_url"`
 	}
 	if err := json.Unmarshal(raw, &parts); err != nil {
@@ -538,5 +541,68 @@ func TestExtractImagesStringImageURL(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "描述") {
 		t.Error("替换后应含描述")
+	}
+}
+
+func TestVirtualModelUsesVisionCapableMainModelWithoutExtension(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "virtual-model.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO channels (name, type, base_url, status) VALUES ('test', 'openai', 'http://example.test', 'active')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO models (channel_id, model_id, supports_vision, status) VALUES (1, 'vision-main', 1, 'active')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO virtual_models (name, main_model, vision_model, status) VALUES ('vision-alias', 'vision-main', '', 'active')`); err != nil {
+		t.Fatal(err)
+	}
+
+	modelRepo := store.NewModelRepo(db)
+	modelRepo.InvalidateModelCache()
+	router := NewVirtualModelRouter(store.NewVirtualModelRepo(db), modelRepo, store.NewChannelRepo(db), nil)
+	result := router.Transform(&Context{Model: "vision-alias", Protocol: ProtocolOpenAI, RawBody: []byte(openAIReq)})
+	if result == nil || result.Handled {
+		t.Fatalf("视觉主模型应直通图片请求，result=%+v", result)
+	}
+	if len(ExtractImages(ProtocolOpenAI, result.NewBody)) != 2 {
+		t.Fatalf("直通主模型不应替换图片: %s", result.NewBody)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(result.NewBody, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["model"] != "vision-main" {
+		t.Fatalf("主模型未替换: %v", body["model"])
+	}
+}
+
+func TestVirtualModelRejectsImageWhenNoVisionRouteExists(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "virtual-model.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO channels (name, type, base_url, status) VALUES ('test', 'openai', 'http://example.test', 'active')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO models (channel_id, model_id, supports_vision, status) VALUES (1, 'text-main', 0, 'active')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO virtual_models (name, main_model, vision_model, status) VALUES ('text-alias', 'text-main', '', 'active')`); err != nil {
+		t.Fatal(err)
+	}
+
+	modelRepo := store.NewModelRepo(db)
+	modelRepo.InvalidateModelCache()
+	router := NewVirtualModelRouter(store.NewVirtualModelRepo(db), modelRepo, store.NewChannelRepo(db), nil)
+	result := router.Transform(&Context{Model: "text-alias", Protocol: ProtocolOpenAI, RawBody: []byte(openAIReq)})
+	if result == nil || !result.Handled || result.StatusCode != 400 {
+		t.Fatalf("纯文本主模型应拒绝图片请求，result=%+v", result)
+	}
+	if !strings.Contains(string(result.RespBody), "不支持视觉") {
+		t.Fatalf("错误应提示配置视觉能力，got=%q", result.RespBody)
 	}
 }

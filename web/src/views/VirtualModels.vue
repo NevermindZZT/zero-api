@@ -11,15 +11,34 @@ import { formatDateTime } from '@/utils/format'
 const message = useMessage()
 const loading = ref(true)
 const list = ref<any[]>([])
-const allModels = ref<string[]>([])
+const allModels = ref<any[]>([])
 const showModal = ref(false)
 const editing = ref<any>(null)
 const form = ref({ name: '', display_name: '', main_model: '', vision_model: '', description: '', status: 'active' })
 
-// 模型选项（含 supports_vision 标记）
-const modelOptions = computed(() =>
-  allModels.value.map((m: any) => ({ label: `${m.model_id}${m.supports_vision ? ' 📷' : ''}`, value: m.model_id }))
-)
+// 虚拟模型按 model_id 路由，不需要选择具体渠道；合并同名模型避免重复显示。
+const modelOptions = computed(() => {
+  const grouped = new Map<string, { supportsVision: boolean; channels: number }>()
+  for (const model of allModels.value) {
+    if (!model.model_id) continue
+    const existing = grouped.get(model.model_id)
+    if (existing) {
+      existing.supportsVision ||= Boolean(model.supports_vision)
+      existing.channels += 1
+      continue
+    }
+    grouped.set(model.model_id, {
+      supportsVision: Boolean(model.supports_vision),
+      channels: 1,
+    })
+  }
+  return [...grouped.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([modelID, info]) => ({
+      label: `${modelID}${info.supportsVision ? ' 📷' : ''}${info.channels > 1 ? ` (${info.channels} 个渠道)` : ''}`,
+      value: modelID,
+    }))
+})
 
 onMounted(async () => {
   await loadList()
@@ -139,13 +158,14 @@ async function del(id: number) {
           <NIcon size="20" color="#667eea" style="vertical-align:-2px;margin-right:6px"><GitNetworkSharp /></NIcon>
           虚拟模型
         </h2>
-        <p class="page-subtitle">模型路由：下游请求虚拟模型名，按规则路由到实际模型。配置识图模型后，纯文本主模型自动获得识图能力</p>
+        <p class="page-subtitle">稳定模型入口：下游固定使用虚拟模型名，可随时切换主模型；识图扩展为可选能力</p>
       </div>
 
       <NCard size="small" title="使用说明">
         <div style="font-size:13px;color:#94a3b8;line-height:1.8">
-          <p style="margin:0">📌 <b>无图请求</b>：直接路由到 <b>主模型</b>（零额外成本）</p>
-          <p style="margin:0">📷 <b>有图请求</b>：先调用 <b>识图模型</b> 识别图片 → 图片替换为文字描述 → 交给主模型继续回答</p>
+          <p style="margin:0">📌 <b>模型路由</b>：所有请求默认路由到 <b>主模型</b>。更新主模型后，Agent 无需切换模型名。</p>
+          <p style="margin:0">📷 <b>主模型原生识图</b>：主模型支持视觉时，识图模型可留空，图片会原样转发给主模型。</p>
+          <p style="margin:0">🧩 <b>识图扩展</b>：主模型不支持视觉时，可配置识图模型，系统会先生成图片描述再交给主模型。</p>
         </div>
       </NCard>
 
@@ -167,11 +187,11 @@ async function del(id: number) {
           <NFormItem label="展示名">
             <NInput v-model:value="form.display_name" placeholder="如: DeepSeek 文本+识图" />
           </NFormItem>
-          <NFormItem label="主模型" label-description="无图请求路由的目标（纯文本模型）">
+          <NFormItem label="主模型" label-description="所有请求默认路由的目标；可随时切换">
             <NSelect v-model:value="form.main_model" :options="modelOptions" filterable placeholder="选择主模型" />
           </NFormItem>
-          <NFormItem label="识图模型" label-description="有图请求先调用此模型识图（需支持多模态）">
-            <NSelect v-model:value="form.vision_model" :options="modelOptions" filterable clearable placeholder="选择识图模型（可留空=不启用识图扩展）" />
+          <NFormItem label="识图模型" label-description="可选：仅主模型不支持视觉时配置，用于图片转文字描述">
+            <NSelect v-model:value="form.vision_model" :options="modelOptions" filterable clearable placeholder="主模型支持视觉时可留空" />
           </NFormItem>
           <NFormItem label="描述">
             <NInput v-model:value="form.description" type="textarea" placeholder="用途说明" />

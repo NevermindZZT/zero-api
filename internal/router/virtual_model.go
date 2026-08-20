@@ -113,7 +113,17 @@ func (r *VirtualModelRouter) Transform(ctx *Context) *Result {
 
 	// 有图请求：检查识图模型
 	if vm.VisionModel == "" {
-		return ErrorResult(http.StatusBadRequest, "虚拟模型 %s 未配置识图模型，无法处理图片请求", vm.Name)
+		// 未配置识图扩展时，虚拟模型就是主模型的可切换别名。
+		// 主模型本身支持视觉则保留原始图片，直接替换模型名透传。
+		if r.mainModelSupportsVision(vm.MainModel) {
+			newBody := ReplaceModel(ctx.RawBody, vm.MainModel)
+			if newBody == nil {
+				return nil
+			}
+			log.Printf("[路由:虚拟模型] %s 使用主模型 %s 原生识图", vm.Name, vm.MainModel)
+			return &Result{NewBody: newBody}
+		}
+		return ErrorResult(http.StatusBadRequest, "虚拟模型 %s 的主模型 %s 不支持视觉，请配置识图模型", vm.Name, vm.MainModel)
 	}
 	if len(usable) == 0 {
 		// 有图片但无可识别引用（如 responses file_id），交给主模型处理：
@@ -158,6 +168,14 @@ func (r *VirtualModelRouter) Transform(ctx *Context) *Result {
 	return &Result{NewBody: newBody}
 }
 
+func (r *VirtualModelRouter) mainModelSupportsVision(modelID string) bool {
+	if r.modelRepo == nil {
+		return false
+	}
+	supported, err := r.modelRepo.SupportsVisionByModelID(modelID)
+	return err == nil && supported
+}
+
 // logImageReplaceSummary 打印识图替换摘要（供确认流程正确性）
 func logImageReplaceSummary(ctx *Context, vm *store.VirtualModel, imageCount int, descriptions []string, newBody []byte) {
 	// 检查替换后请求是否还残留图片
@@ -199,7 +217,7 @@ func (r *VirtualModelRouter) describeImages(visionModel string, imageURLs []stri
 	}
 	for _, u := range prepared {
 		contentParts = append(contentParts, map[string]interface{}{
-			"type":     "image_url",
+			"type":      "image_url",
 			"image_url": map[string]interface{}{"url": u},
 		})
 	}
