@@ -107,6 +107,18 @@ func TestResponsesAdapter_ConvertResponse(t *testing.T) {
 	}
 }
 
+func TestResponsesAdapterExtractUsagePrefersInputOutputOverTotalOnly(t *testing.T) {
+	a := &ResponsesAdapter{}
+	body := []byte(`{"id":"resp_1","object":"response","usage":{"input_tokens":607790,"output_tokens":412,"total_tokens":608202}}`)
+	usage, err := a.ExtractUsage(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.PromptTokens != 607790 || usage.CompletionTokens != 412 || usage.TotalTokens != 608202 {
+		t.Fatalf("usage parsed incorrectly: %+v", usage)
+	}
+}
+
 // ===== Responses 上游流转换器 =====
 
 func TestResponsesUpstreamStreamConverter(t *testing.T) {

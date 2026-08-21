@@ -237,9 +237,12 @@ func (a *ResponsesAdapter) ConvertResponse(body []byte) ([]byte, error) {
 
 // ExtractUsage 从 Responses API 响应中提取用量
 func (a *ResponsesAdapter) ExtractUsage(body []byte) (*Usage, error) {
-	// 尝试从 OpenAI 格式提取（已 ConvertResponse 转换）
+	// 尝试从 OpenAI 格式提取（已 ConvertResponse 转换）。
+	// 必须要求 prompt/completion 至少有一个非零，避免把原始 Responses 的
+	// total_tokens 误当成 OpenAI 格式，导致输入/输出被记录为 0。
 	var resp OpenAIResponse
-	if err := json.Unmarshal(body, &resp); err == nil && resp.Usage.TotalTokens > 0 {
+	if err := json.Unmarshal(body, &resp); err == nil && resp.Usage.TotalTokens > 0 &&
+		(resp.Usage.PromptTokens > 0 || resp.Usage.CompletionTokens > 0) {
 		return &resp.Usage, nil
 	}
 

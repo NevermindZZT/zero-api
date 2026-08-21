@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -849,6 +850,10 @@ func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *
 		return fmt.Errorf("构造上游请求失败: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if downstream.IsPassthrough() && downstreamProtocol == "responses" {
+		adapter.CopyResponsesSessionHeaders(c.Request.Header, req.Header.Add)
+		logResponsesRequestShape("[中转:Responses]", bodyBytes)
+	}
 
 	if ch.Type == "anthropic" {
 		if ch.APIKey != "" {
@@ -1121,6 +1126,31 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 		go h.recordUsage(matchedModel.ModelID, fullRespBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs, totalDurationMs)
 	}
 	return nil
+}
+
+// logResponsesRequestShape 在调试模式下记录 Responses input 结构，不记录用户内容或工具参数。
+func logResponsesRequestShape(prefix string, body []byte) {
+	if os.Getenv("ZERO_API_DEBUG_RESPONSES") != "1" {
+		return
+	}
+	var payload struct {
+		PreviousResponseID string `json:"previous_response_id"`
+		Input              []struct {
+			Type             string          `json:"type"`
+			ID               string          `json:"id"`
+			CallID           string          `json:"call_id"`
+			Summary          json.RawMessage `json:"summary"`
+			EncryptedContent json.RawMessage `json:"encrypted_content"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		log.Printf("%s 请求体无法解析: %v", prefix, err)
+		return
+	}
+	log.Printf("%s previous_response_id=%t input_items=%d", prefix, payload.PreviousResponseID != "", len(payload.Input))
+	for i, item := range payload.Input {
+		log.Printf("%s input[%d]: type=%s id=%t call_id=%t summary=%t encrypted_content=%t", prefix, i, item.Type, item.ID != "", item.CallID != "", len(item.Summary) > 0 && string(item.Summary) != "null", len(item.EncryptedContent) > 0 && string(item.EncryptedContent) != "null")
+	}
 }
 
 // splitAuth 解析 Authorization 头

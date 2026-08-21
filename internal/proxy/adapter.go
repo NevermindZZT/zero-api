@@ -550,6 +550,13 @@ func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, 
 		return 0, nil, nil, fmt.Errorf("构造上游请求失败: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if passthrough && downstreamProtocol == "responses" {
+		for name, value := range headers {
+			if adapter.IsResponsesSessionHeader(name) {
+				req.Header.Set(name, value)
+			}
+		}
+	}
 
 	// 设置认证头
 	switch ch.Type {
@@ -742,6 +749,11 @@ func (pa *ProxyAdapter) recordUsage(requestModel string, rawResp, convertedResp 
 	usage, err := adapt.ExtractUsage(convertedResp)
 	if err != nil {
 		usage, err = adapt.ExtractUsage(rawResp)
+	}
+	if err != nil {
+		if u, uerr := (&adapter.OpenAIAdapter{}).ExtractUsage(rawResp); uerr == nil {
+			usage, err = u, nil
+		}
 	}
 	if err != nil {
 		log.Printf("[代理][Usage] ExtractUsage 失败 (model=%s): %v — 仍记录请求", requestModel, err)
@@ -960,6 +972,13 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 		return false, fmt.Errorf("构造上游请求失败: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if passthrough && downstreamProtocol == "responses" {
+		for name, value := range headers {
+			if adapter.IsResponsesSessionHeader(name) {
+				req.Header.Set(name, value)
+			}
+		}
+	}
 
 	// 设置认证头
 	switch ch.Type {

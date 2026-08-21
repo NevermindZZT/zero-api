@@ -83,8 +83,20 @@ func (r *VirtualModelRouter) Transform(ctx *Context) *Result {
 		return ErrorResult(http.StatusNotFound, "虚拟模型 %s 已禁用", vm.Name)
 	}
 
-	// 协议感知的图片提取：只检测最后一条 user 消息的图片（多轮会话的历史图片不触发识图）
-	// 历史消息中的图片已有上一轮 assistant 回复覆盖，重复识图浪费且延迟
+	// 主模型本身支持视觉且未配置识图扩展时，虚拟模型只是模型别名/路由入口。
+	// 直接只替换顶层 model，完全不解析或重建 input，避免破坏 Responses 原生字段
+	//（reasoning.summary、previous_response_id、function_call_output 等）。
+	if vm.VisionModel == "" && r.mainModelSupportsVision(vm.MainModel) {
+		newBody := ReplaceModel(ctx.RawBody, vm.MainModel)
+		if newBody == nil {
+			return nil
+		}
+		log.Printf("[路由:虚拟模型] %s 原生视觉直通主模型 %s", vm.Name, vm.MainModel)
+		return &Result{NewBody: newBody}
+	}
+
+	// 只有配置了识图扩展，或主模型不支持视觉时，才需要解析图片。
+	// 协议感知的图片提取：只检测最后一条 user 消息的图片。
 	images := ExtractLatestUserImages(ctx.Protocol, ctx.RawBody)
 	usable := extractImageRefsToUsable(images)
 	log.Printf("[路由:虚拟模型] %s 请求: 最新图片数=%d stream=%v 协议=%s", vm.Name, len(images), ctx.Stream, ctx.Protocol)
@@ -97,16 +109,15 @@ func (r *VirtualModelRouter) Transform(ctx *Context) *Result {
 		logMessageImageProfile(ctx.Protocol, ctx.RawBody)
 	}
 
-	// 无图请求：替换模型名；历史消息中可能残留上一轮的图片，需替换为占位文本
-	// （避免纯文本主模型收到原始图片），用空描述列表 → 历史图片→占位、无最新图片不处理
+	// 无图请求：仅替换模型名，必须保留 Responses 原生 input（reasoning.summary、
+	// previous_response_id、function_call_output 等）不被重新序列化或裁剪。
 	if len(images) == 0 {
-		newBody := ReplaceImages(ctx.Protocol, ctx.RawBody, vm.MainModel, nil)
+		newBody := ReplaceModel(ctx.RawBody, vm.MainModel)
 		if newBody == nil {
 			return nil // 无法解析，交给普通链路报错
 		}
-		logImageReplaceSummary(ctx, vm, 0, nil, newBody)
 		if os.Getenv("ZERO_API_DEBUG_ROUTER") == "1" {
-			log.Printf("[路由:虚拟模型] %s 无图请求替换后请求体:\n%s", vm.Name, string(newBody))
+			log.Printf("[路由:虚拟模型] %s 无图请求仅替换模型名:\n%s", vm.Name, string(newBody))
 		}
 		return &Result{NewBody: newBody}
 	}
