@@ -801,6 +801,9 @@ func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *
 	var bodyBytes []byte
 	if downstream.IsPassthrough() {
 		bodyBytes = rawBody
+		if downstreamProtocol == "responses" {
+			bodyBytes = adapter.NormalizeResponsesRequest(bodyBytes)
+		}
 	} else {
 		canonicalBody, err := downstream.RequestToCanonical(rawBody)
 		if err != nil {
@@ -953,6 +956,9 @@ func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *
 	}
 
 	// 记录使用信息
+	if downstream.IsPassthrough() && downstreamProtocol == "responses" {
+		adapter.CaptureResponsesReplay(respBytes)
+	}
 	go h.recordUsage(matchedModel.ModelID, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs, totalDurationMs)
 
 	// 返回响应（过滤逐跳头）
@@ -1122,6 +1128,9 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 	totalDurationMs := int(time.Since(startTime).Milliseconds())
 	fullRespBytes := rawBuf.Bytes()
 	if len(fullRespBytes) > 0 {
+		if downstream.IsPassthrough() && downstream.Protocol() == "responses" {
+			adapter.CaptureResponsesReplay(fullRespBytes)
+		}
 		convertedResp, _ := adapt.ConvertResponse(fullRespBytes)
 		go h.recordUsage(matchedModel.ModelID, fullRespBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs, totalDurationMs)
 	}

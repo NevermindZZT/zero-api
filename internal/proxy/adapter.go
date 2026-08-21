@@ -519,6 +519,9 @@ func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, 
 	var bodyBytes []byte
 	if passthrough {
 		bodyBytes = body
+		if downstreamProtocol == "responses" {
+			bodyBytes = adapter.NormalizeResponsesRequest(bodyBytes)
+		}
 	} else {
 		convertedBody, err := adapt.ConvertRequest(matchedModel.ModelID, body)
 		if err != nil {
@@ -613,6 +616,9 @@ func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, 
 	}
 
 	// 异步记录用量
+	if passthrough && downstreamProtocol == "responses" {
+		adapter.CaptureResponsesReplay(respBytes)
+	}
 	go pa.recordUsage(originalModel, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs, totalDurationMs)
 
 	// 构建响应头
@@ -941,6 +947,9 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 	var err error
 	if passthrough {
 		convertedBody = body
+		if downstreamProtocol == "responses" {
+			convertedBody = adapter.NormalizeResponsesRequest(convertedBody)
+		}
 	} else {
 		convertedBody, err = adapt.ConvertRequest(matchedModel.ModelID, body)
 		if err != nil {
@@ -1108,6 +1117,9 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 	fullResp := buf.Bytes()
 	if len(fullResp) > 0 {
 		convertedResp := fullResp
+		if passthrough && downstreamProtocol == "responses" {
+			adapter.CaptureResponsesReplay(fullResp)
+		}
 		if !passthrough {
 			convertedResp, _ = adapt.ConvertResponse(fullResp)
 		}
