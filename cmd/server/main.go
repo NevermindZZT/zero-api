@@ -83,15 +83,22 @@ func main() {
 			}
 		}
 	}
-	// 启动 usage 批量写入协程
-	store.InitUsageBuffer(db)
-	// 启动后异步回填 usage_daily（修正时区后首次运行需要重算历史数据）
-	go svc.Usage.BackfillDailyAgg()
 	requestTimeout := time.Duration(cfg.Upstream.RequestTimeoutSeconds) * time.Second
 
 	// 初始化上游同步器（使用模型预设文件替代 config.yaml model_defaults）
 	presetsPath := filepath.Join(filepath.Dir(cfg.Database.Path), "model-presets.json")
 	modelPresets := config.NewModelPresets(presetsPath, cfg.ModelDefaults)
+	if updated, err := svc.Model.ApplyPresets(modelPresets.GetAll()); err != nil {
+		log.Printf("[预设] 应用已有模型默认信息失败: %v", err)
+	} else if updated > 0 {
+		log.Printf("[预设] 已为 %d 个未手动修改的模型补齐默认信息", updated)
+	}
+
+	// 启动 usage 批量写入协程
+	store.InitUsageBuffer(db)
+	// 默认模型信息回填完成后再启动 usage_daily 回填，避免 SQLite 写锁竞争。
+	go svc.Usage.BackfillDailyAgg()
+
 	syncer := upstream.NewSyncer(svc.Channel, svc.Model, modelPresets)
 
 	// 初始化处理器
