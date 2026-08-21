@@ -26,13 +26,20 @@ const manualBalanceVisible = ref(false)
 const manualBalanceVal = ref(0)
 const manualCurrency = ref('USD')
 const savingManualBalance = ref(false)
-const form = ref({ name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99, use_proxy: false, failover_enabled: true, test_model: '', balance_api: 'auto' })
+const form = ref({ name: '', type: 'openai', protocols: ['openai'], base_url: '', api_key: '', status: 'active', priority: 99, use_proxy: false, failover_enabled: true, test_model: '', balance_api: 'auto' })
 
 const channelTypes = [
   { label: 'OpenAI 兼容 (chat/completions)', value: 'openai' },
   { label: 'Anthropic (messages)', value: 'anthropic' },
   { label: 'Google Gemini (generateContent)', value: 'gemini' },
   { label: 'OpenAI Responses (responses)', value: 'responses' },
+]
+
+const protocolOptions = [
+  { label: 'OpenAI Chat', value: 'openai' },
+  { label: 'OpenAI Responses', value: 'responses' },
+  { label: 'Anthropic Messages', value: 'anthropic' },
+  { label: 'Google Gemini', value: 'gemini' },
 ]
 
 // 余额查询方式选项（auto=按域名推断，其余为具体适配器）
@@ -55,6 +62,10 @@ function normalizeBaseURL(url: string) {
   if (u.endsWith('/v1beta')) u = u.slice(0, -7)
   else if (u.endsWith('/v1')) u = u.slice(0, -3)
   return u
+}
+
+function defaultProtocols(type: string): string[] {
+  return type ? [type] : ['openai']
 }
 
 // 根据接口类型 + Base URL 计算完整的上游请求 URL
@@ -294,13 +305,13 @@ function renderBalance(r: any) {
 
 function openCreate() {
   editing.value = null
-  form.value = { name: '', type: 'openai', base_url: '', api_key: '', status: 'active', priority: 99, use_proxy: false, failover_enabled: true, test_model: '', balance_api: 'auto' }
+  form.value = { name: '', type: 'openai', protocols: ['openai'], base_url: '', api_key: '', status: 'active', priority: 99, use_proxy: false, failover_enabled: true, test_model: '', balance_api: 'auto' }
   showModal.value = true
 }
 
 function editChannel(ch: any) {
   editing.value = ch
-  form.value = { ...ch }
+  form.value = { ...ch, protocols: ch.protocols?.length ? ch.protocols : defaultProtocols(ch.type) }
   showModal.value = true
 }
 
@@ -381,8 +392,11 @@ async function toggleChannel(ch: any) {
           <NFormItem label="名称">
             <NInput v-model:value="form.name" placeholder="例如: DeepSeek" />
           </NFormItem>
-          <NFormItem label="类型">
+          <NFormItem label="类型" label-description="作为默认接口；模型支持的接口优先">
             <NSelect v-model:value="form.type" :options="channelTypes" />
+          </NFormItem>
+          <NFormItem label="支持接口" label-description="模型和请求协议都匹配时原样透传">
+            <NSelect v-model:value="form.protocols" multiple :options="protocolOptions" placeholder="留空则使用默认接口" />
           </NFormItem>
           <NFormItem label="Base URL">
             <NInput v-model:value="form.base_url" placeholder="https://api.deepseek.com" />

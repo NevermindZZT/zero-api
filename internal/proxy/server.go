@@ -271,7 +271,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 		if isStream {
 			log.Printf("🎯 [MITM] 拦截流式 LLM 请求 (模型: %s)", extractModel(bodyBytes))
-			if err := s.adapter.HandleLLMStreamRequest(headers, bodyBytes, tlsConn); err != nil {
+			if err := s.adapter.HandleLLMStreamRequest(headers, bodyBytes, tlsConn, req.URL.Path); err != nil {
 				log.Printf("[MITM] ✗ 流式 LLM 转发失败: %v", err)
 			}
 			break // 流式响应结束后关闭连接

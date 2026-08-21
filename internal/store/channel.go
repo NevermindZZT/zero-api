@@ -7,8 +7,8 @@ import (
 
 // 渠道缓存：GetByID 缓存，5 分钟 TTL
 var (
-	channelCacheMu     sync.RWMutex
-	channelCache       = make(map[int64]*cachedChannel)
+	channelCacheMu sync.RWMutex
+	channelCache   = make(map[int64]*cachedChannel)
 )
 
 type cachedChannel struct {
@@ -27,12 +27,13 @@ func (r *ChannelRepo) InvalidateChannelCache() {
 type Channel struct {
 	ID              int64     `json:"id"`
 	Name            string    `json:"name"`
-	Type            string    `json:"type"`       // openai, anthropic, gemini, openrouter
+	Type            string    `json:"type"`      // 默认接口类型，兼容旧配置
+	Protocols       []string  `json:"protocols"` // 支持的接口类型；空时继承 Type
 	BaseURL         string    `json:"base_url"`
 	APIKey          string    `json:"api_key,omitempty"`
-	Status          string    `json:"status"` // active, inactive
-	Priority        int       `json:"priority"`   // 0=最高优先级，越大优先级越低
-	UseProxy        bool      `json:"use_proxy"`  // 是否通过全局出站代理转发请求
+	Status          string    `json:"status"`           // active, inactive
+	Priority        int       `json:"priority"`         // 0=最高优先级，越大优先级越低
+	UseProxy        bool      `json:"use_proxy"`        // 是否通过全局出站代理转发请求
 	FailoverEnabled bool      `json:"failover_enabled"` // 是否启用熔断回落
 	TestModel       string    `json:"test_model"`       // 熔断探测用模型 ID
 	BalanceAPI      string    `json:"balance_api"`      // 余额查询方式：auto / 适配器名 / none
@@ -49,7 +50,7 @@ func NewChannelRepo(db *DB) *ChannelRepo {
 }
 
 func (r *ChannelRepo) List() ([]Channel, error) {
-	rows, err := r.db.Query(`SELECT id, name, type, base_url, api_key, status, priority, use_proxy, failover_enabled, test_model, balance_api, created_at, updated_at FROM channels ORDER BY priority, id`)
+	rows, err := r.db.Query(`SELECT id, name, type, protocols, base_url, api_key, status, priority, use_proxy, failover_enabled, test_model, balance_api, created_at, updated_at FROM channels ORDER BY priority, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -58,9 +59,11 @@ func (r *ChannelRepo) List() ([]Channel, error) {
 	var channels []Channel
 	for rows.Next() {
 		var c Channel
-		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.BaseURL, &c.APIKey, &c.Status, &c.Priority, &c.UseProxy, &c.FailoverEnabled, &c.TestModel, &c.BalanceAPI, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		var protocolsJSON string
+		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &protocolsJSON, &c.BaseURL, &c.APIKey, &c.Status, &c.Priority, &c.UseProxy, &c.FailoverEnabled, &c.TestModel, &c.BalanceAPI, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
+		c.Protocols = normalizeProtocols(protocolsJSON, c.Type)
 		channels = append(channels, c)
 	}
 	return channels, nil
@@ -77,12 +80,14 @@ func (r *ChannelRepo) GetByID(id int64) (*Channel, error) {
 	channelCacheMu.RUnlock()
 
 	c := &Channel{}
+	var protocolsJSON string
 	err := r.db.QueryRow(
-		`SELECT id, name, type, base_url, api_key, status, priority, use_proxy, failover_enabled, test_model, balance_api, created_at, updated_at FROM channels WHERE id = ?`, id,
-	).Scan(&c.ID, &c.Name, &c.Type, &c.BaseURL, &c.APIKey, &c.Status, &c.Priority, &c.UseProxy, &c.FailoverEnabled, &c.TestModel, &c.BalanceAPI, &c.CreatedAt, &c.UpdatedAt)
+		`SELECT id, name, type, protocols, base_url, api_key, status, priority, use_proxy, failover_enabled, test_model, balance_api, created_at, updated_at FROM channels WHERE id = ?`, id,
+	).Scan(&c.ID, &c.Name, &c.Type, &protocolsJSON, &c.BaseURL, &c.APIKey, &c.Status, &c.Priority, &c.UseProxy, &c.FailoverEnabled, &c.TestModel, &c.BalanceAPI, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
+	c.Protocols = normalizeProtocols(protocolsJSON, c.Type)
 	// 写入缓存（5 分钟 TTL）
 	channelCacheMu.Lock()
 	channelCache[id] = &cachedChannel{ch: c, expiry: time.Now().Add(5 * time.Minute)}
@@ -91,9 +96,10 @@ func (r *ChannelRepo) GetByID(id int64) (*Channel, error) {
 }
 
 func (r *ChannelRepo) Create(c *Channel) (int64, error) {
+	protocolsJSON := marshalProtocols(c.Protocols, c.Type)
 	result, err := r.db.Exec(
-		`INSERT INTO channels (name, type, base_url, api_key, status, priority, use_proxy, failover_enabled, test_model, balance_api) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.Name, c.Type, c.BaseURL, c.APIKey, c.Status, c.Priority, c.UseProxy, c.FailoverEnabled, c.TestModel, c.BalanceAPI,
+		`INSERT INTO channels (name, type, protocols, base_url, api_key, status, priority, use_proxy, failover_enabled, test_model, balance_api) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.Name, c.Type, protocolsJSON, c.BaseURL, c.APIKey, c.Status, c.Priority, c.UseProxy, c.FailoverEnabled, c.TestModel, c.BalanceAPI,
 	)
 	if err != nil {
 		return 0, err
@@ -102,9 +108,10 @@ func (r *ChannelRepo) Create(c *Channel) (int64, error) {
 }
 
 func (r *ChannelRepo) Update(c *Channel) error {
+	protocolsJSON := marshalProtocols(c.Protocols, c.Type)
 	_, err := r.db.Exec(
-		`UPDATE channels SET name=?, type=?, base_url=?, api_key=?, status=?, priority=?, use_proxy=?, failover_enabled=?, test_model=?, balance_api=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
-		c.Name, c.Type, c.BaseURL, c.APIKey, c.Status, c.Priority, c.UseProxy, c.FailoverEnabled, c.TestModel, c.BalanceAPI, c.ID,
+		`UPDATE channels SET name=?, type=?, protocols=?, base_url=?, api_key=?, status=?, priority=?, use_proxy=?, failover_enabled=?, test_model=?, balance_api=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+		c.Name, c.Type, protocolsJSON, c.BaseURL, c.APIKey, c.Status, c.Priority, c.UseProxy, c.FailoverEnabled, c.TestModel, c.BalanceAPI, c.ID,
 	)
 	return err
 }

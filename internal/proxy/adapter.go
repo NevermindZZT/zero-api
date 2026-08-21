@@ -513,9 +513,7 @@ func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, 
 	// 下游协议推导
 	downstreamProtocol := downstreamProtocolFromPath(path)
 
-	// 下游协议与渠道协议相同必须透传，避免丢失 Responses 原生工具调用/会话字段。
-	// 其他协议仅在模型声明支持时透传；Gemini 渠道仍使用专用转换。
-	passthrough := ch.Type != "gemini" && (ch.Type == downstreamProtocol || matchedModel.SupportsProtocol(downstreamProtocol, ch.Type))
+	passthrough := adapter.CanPassthrough(ch.Type, downstreamProtocol, ch.SupportsProtocol(downstreamProtocol), matchedModel.SupportsProtocol(downstreamProtocol, ch.Type))
 
 	// 请求体：透传模式不做协议转换（仅模型映射/参数注入），否则走规范格式转换
 	var bodyBytes []byte
@@ -800,7 +798,7 @@ func (pa *ProxyAdapter) recordUsage(requestModel string, rawResp, convertedResp 
 }
 
 // HandleLLMStreamRequest 处理流式 LLM 请求，SSE 数据直接写入 conn
-func (pa *ProxyAdapter) HandleLLMStreamRequest(headers map[string]string, body []byte, conn net.Conn) error {
+func (pa *ProxyAdapter) HandleLLMStreamRequest(headers map[string]string, body []byte, conn net.Conn, path string) error {
 	// 解析请求体获取模型名
 	var reqModel string
 	var parsed map[string]interface{}
@@ -892,7 +890,7 @@ func (pa *ProxyAdapter) HandleLLMStreamRequest(headers map[string]string, body [
 			break
 		}
 
-		wroteData, err := pa.tryForwardModelStream(conn, headers, body, originalModel, matchedModel, ch, apiKeyID)
+		wroteData, err := pa.tryForwardModelStream(conn, headers, body, originalModel, matchedModel, ch, apiKeyID, path)
 		if err == nil {
 			return nil
 		}
@@ -913,7 +911,7 @@ func (pa *ProxyAdapter) HandleLLMStreamRequest(headers map[string]string, body [
 // 返回 (wroteData, error)
 //
 //	wroteData=true 表示已向连接写入数据（此时调用方禁止 failover）
-func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]string, body []byte, originalModel string, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64) (bool, error) {
+func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]string, body []byte, originalModel string, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, path string) (bool, error) {
 	// 检查模型映射
 	mapping, hasMapping := pa.modelMappings[originalModel]
 	targetModel := originalModel
@@ -921,13 +919,21 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 		targetModel = mapping.TargetModel
 	}
 
-	// 选择适配器
+	// 选择适配器和透传模式
 	adapt := adapter.NewAdapter(ch.Type)
+	downstreamProtocol := downstreamProtocolFromPath(path)
+	passthrough := adapter.CanPassthrough(ch.Type, downstreamProtocol, ch.SupportsProtocol(downstreamProtocol), matchedModel.SupportsProtocol(downstreamProtocol, ch.Type))
 
-	// 转换请求体
-	convertedBody, err := adapt.ConvertRequest(matchedModel.ModelID, body)
-	if err != nil {
-		return false, fmt.Errorf("请求格式转换失败: %w", err)
+	// 请求体：同协议透传，跨协议才转换
+	var convertedBody []byte
+	var err error
+	if passthrough {
+		convertedBody = body
+	} else {
+		convertedBody, err = adapt.ConvertRequest(matchedModel.ModelID, body)
+		if err != nil {
+			return false, fmt.Errorf("请求格式转换失败: %w", err)
+		}
 	}
 
 	// 参数注入
@@ -938,6 +944,9 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 
 	// 构造上游请求
 	upstreamURL := adapt.GetChatURL(ch.BaseURL)
+	if passthrough {
+		upstreamURL = matchedModel.ProtocolURL(downstreamProtocol, ch.BaseURL)
+	}
 	if ch.Type == "gemini" {
 		// 流式请求使用 :streamGenerateContent 端点
 		upstreamURL = fmt.Sprintf("%s/%s:streamGenerateContent", upstreamURL, matchedModel.ModelID)
@@ -1079,7 +1088,10 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 	totalDurationMs := int(time.Since(startTime).Milliseconds())
 	fullResp := buf.Bytes()
 	if len(fullResp) > 0 {
-		convertedResp, _ := adapt.ConvertResponse(fullResp)
+		convertedResp := fullResp
+		if !passthrough {
+			convertedResp, _ = adapt.ConvertResponse(fullResp)
+		}
 		go pa.recordUsage(originalModel, fullResp, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs, totalDurationMs)
 	}
 

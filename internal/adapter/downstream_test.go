@@ -63,25 +63,27 @@ func TestPassthroughAdapter_NoConversion(t *testing.T) {
 func TestPassthroughAdapter_ProtocolMatch(t *testing.T) {
 	// 模拟 tryForward 中的协议一致性判断
 	cases := []struct {
-		downstream string
-		upstream   string
+		downstream  string
+		upstream    string
 		passthrough bool
 	}{
 		{"openai", "openai", true},
 		{"anthropic", "anthropic", true},
+		{"responses", "responses", true},
+		{"responses", "openai", true}, // 模型声明支持 responses，协议优先
+		{"openai", "responses", true}, // 模型声明支持 openai，协议优先
 		{"anthropic", "openai", false},
 		{"openai", "anthropic", false},
 		{"anthropic", "gemini", false},
 		{"openai", "gemini", false},
 	}
 	for _, c := range cases {
-		d := NewDownstreamAdapter(c.downstream)
-		if d.Protocol() == c.upstream {
-			d = NewPassthroughDownstreamAdapter(c.upstream)
-		}
-		if d.IsPassthrough() != c.passthrough {
+		// 对跨协议 true 的案例，模拟渠道和模型都明确声明支持下游协议。
+		channelSupports := c.passthrough && c.downstream != c.upstream
+		modelSupports := c.passthrough && c.downstream != c.upstream
+		if got := CanPassthrough(c.upstream, c.downstream, channelSupports, modelSupports); got != c.passthrough {
 			t.Errorf("downstream=%s upstream=%s: 期望 passthrough=%v，got %v",
-				c.downstream, c.upstream, c.passthrough, d.IsPassthrough())
+				c.downstream, c.upstream, c.passthrough, got)
 		}
 	}
 }

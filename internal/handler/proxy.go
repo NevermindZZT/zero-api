@@ -789,9 +789,9 @@ func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *
 	// 保存真实下游协议（透传替换后 Protocol() 会变，必须在替换前保存）
 	downstreamProtocol := downstream.Protocol()
 
-	// 透传判断：同协议渠道强制原样透传；其他情况再依据模型声明的协议列表判断。
-	// 同为 Responses 时必须保留 previous_response_id、function_call_output 等原生字段。
-	if ch.Type == downstreamProtocol || matchedModel.SupportsProtocol(downstreamProtocol, ch.Type) {
+	// 透传判断：同协议渠道强制原样透传；跨协议仅允许 OpenAI 兼容渠道按模型协议声明透传。
+	// 例如 responses 渠道收到 Chat Completions 请求时，必须走 Chat → Responses 转换。
+	if adapter.CanPassthrough(ch.Type, downstreamProtocol, ch.SupportsProtocol(downstreamProtocol), matchedModel.SupportsProtocol(downstreamProtocol, ch.Type)) {
 		downstream = adapter.NewPassthroughDownstreamAdapter(downstreamProtocol)
 	}
 

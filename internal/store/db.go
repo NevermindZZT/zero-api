@@ -54,6 +54,7 @@ func (d *DB) migrate() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
 			type TEXT NOT NULL DEFAULT 'openai',
+			protocols TEXT DEFAULT '[]',
 			base_url TEXT NOT NULL,
 			api_key TEXT DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'active',
@@ -267,7 +268,10 @@ func (d *DB) migrate() error {
 	d.Exec(`ALTER TABLE models ADD COLUMN protocol_urls TEXT DEFAULT '{}'`)
 	// 迁移：添加 priority 字段到 channels 表（0=最高优先级，越大优先级越低）
 	d.Exec(`ALTER TABLE channels ADD COLUMN priority INTEGER DEFAULT 99`)
-	// 迁移：添加出站代理字段到 channels 表（每个渠道独立的代理开关）
+	// 迁移：添加渠道支持的协议列表（空值自动继承 type）
+	d.Exec(`ALTER TABLE channels ADD COLUMN protocols TEXT DEFAULT '[]'`)
+	// 将历史渠道的默认 type 转为协议列表
+	d.Exec(`UPDATE channels SET protocols = json_array(type) WHERE protocols IS NULL OR protocols = '' OR protocols = '[]'`)
 	d.Exec(`ALTER TABLE channels ADD COLUMN use_proxy INTEGER DEFAULT 0`)
 	// 迁移：添加全局出站代理配置到 proxy_config 表
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN forward_proxy_url TEXT DEFAULT ''`)
