@@ -619,7 +619,8 @@ func (pa *ProxyAdapter) tryForwardModel(headers map[string]string, body []byte, 
 	if passthrough && downstreamProtocol == "responses" {
 		adapter.CaptureResponsesReplay(respBytes)
 	}
-	go pa.recordUsage(originalModel, respBytes, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs, totalDurationMs)
+	usageAdapt := adapter.SelectUsageAdapter(adapt, passthrough, downstreamProtocol)
+	go pa.recordUsage(originalModel, respBytes, convertedResp, adapt, usageAdapt, matchedModel, ch.ID, apiKeyID, latencyMs, totalDurationMs)
 
 	// 构建响应头
 	respHeaders := make(map[string]string)
@@ -740,7 +741,7 @@ func (pa *ProxyAdapter) rewriteSSEResponse(bodyStr, fromModel, toModel string) [
 	return nil
 }
 
-func (pa *ProxyAdapter) recordUsage(requestModel string, rawResp, convertedResp []byte, adapt adapter.Adapter, model *store.Model, channelID int64, apiKeyID *int64, latencyMs int, totalDurationMs int) {
+func (pa *ProxyAdapter) recordUsage(requestModel string, rawResp, convertedResp []byte, adapt, usageAdapt adapter.Adapter, model *store.Model, channelID int64, apiKeyID *int64, latencyMs int, totalDurationMs int) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[代理][Usage] 记录用量 panic 恢复: %v", r)
@@ -751,13 +752,26 @@ func (pa *ProxyAdapter) recordUsage(requestModel string, rawResp, convertedResp 
 	var promptTokens, completionTokens, cacheHitTokens, totalTokens int
 	var cost float64
 
-	// 从响应中提取用量（优先从转换后的响应提取）
-	usage, err := adapt.ExtractUsage(convertedResp)
+	// 从响应中提取用量：透传时使用真实下游协议适配器，转换时使用渠道适配器
+	if usageAdapt == nil {
+		usageAdapt = adapt
+	}
+	usage, err := usageAdapt.ExtractUsage(convertedResp)
+	if err != nil && usageAdapt != adapt {
+		usage, err = adapt.ExtractUsage(convertedResp)
+	}
 	if err != nil {
+		usage, err = usageAdapt.ExtractUsage(rawResp)
+	}
+	if err != nil && usageAdapt != adapt {
 		usage, err = adapt.ExtractUsage(rawResp)
 	}
 	if err != nil {
-		if u, uerr := (&adapter.OpenAIAdapter{}).ExtractUsage(rawResp); uerr == nil {
+		if u, uerr := (&adapter.ResponsesAdapter{}).ExtractUsage(rawResp); uerr == nil {
+			usage, err = u, nil
+		} else if u, uerr := (&adapter.AnthropicAdapter{}).ExtractUsage(rawResp); uerr == nil {
+			usage, err = u, nil
+		} else if u, uerr := (&adapter.OpenAIAdapter{}).ExtractUsage(rawResp); uerr == nil {
 			usage, err = u, nil
 		}
 	}
@@ -1123,7 +1137,8 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 		if !passthrough {
 			convertedResp, _ = adapt.ConvertResponse(fullResp)
 		}
-		go pa.recordUsage(originalModel, fullResp, convertedResp, adapt, matchedModel, ch.ID, apiKeyID, latencyMs, totalDurationMs)
+		usageAdapt := adapter.SelectUsageAdapter(adapt, passthrough, downstreamProtocol)
+		go pa.recordUsage(originalModel, fullResp, convertedResp, adapt, usageAdapt, matchedModel, ch.ID, apiKeyID, latencyMs, totalDurationMs)
 	}
 
 	return false, nil
