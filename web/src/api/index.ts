@@ -240,6 +240,7 @@ export const cpaApi = {
   getConfig: () => api.get('/cpa'),
   saveConfig: (data: any) => api.put('/cpa', data),
   status: () => api.get('/cpa/status'),
+  quota: (refresh = false) => api.get('/cpa/quota', { params: refresh ? { refresh: true } : undefined, timeout: 120000 }),
   start: () => api.post('/cpa/start'),
   stop: () => api.post('/cpa/stop'),
   restart: () => api.post('/cpa/restart'),

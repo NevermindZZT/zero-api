@@ -73,6 +73,12 @@ func main() {
 	}
 	cpaManager := cpa.NewManager(cpaDataDir, cpaHost, cpaPort)
 	cpaH := handler.NewCPAHandler(svc.CPAConfig, cpaManager)
+	// Quota service uses the separate Management Key and never reads Codex access tokens.
+	if managementKey, keyErr := svc.CPAConfig.EnsureManagementKey(); keyErr != nil {
+		log.Printf("[CPA] 初始化 Management Key 失败: %v", keyErr)
+	} else {
+		cpaH.SetQuotaService(cpa.NewQuotaService(cpa.NewManagementClient(cpaHost, cpaPort, managementKey)))
+	}
 	if cpaCfg != nil {
 		if err := cpaH.PrepareConfig(); err != nil {
 			log.Printf("[CPA] 生成配置失败: %v", err)
@@ -202,6 +208,7 @@ func main() {
 		api.GET("/cpa", cpaH.GetConfig)
 		api.PUT("/cpa", cpaH.SaveConfig)
 		api.GET("/cpa/status", cpaH.Status)
+		api.GET("/cpa/quota", cpaH.Quota)
 		api.POST("/cpa/start", cpaH.Start)
 		api.POST("/cpa/stop", cpaH.Stop)
 		api.POST("/cpa/restart", cpaH.Restart)

@@ -15,7 +15,10 @@ const config = ref<any>({
 })
 const status = ref<any>({})
 const update = ref<any>({})
+const quota = ref<any>(null)
+const quotaBusy = ref(false)
 let timer: ReturnType<typeof setInterval> | undefined
+let quotaTimer: ReturnType<typeof setInterval> | undefined
 
 async function load() {
   try {
@@ -31,6 +34,41 @@ async function load() {
 
 async function refreshStatus() {
   try { status.value = (await cpaApi.status()).data } catch { /* 页面保留上次状态 */ }
+}
+
+async function refreshQuota(force = false) {
+  quotaBusy.value = true
+  try {
+    quota.value = (await cpaApi.quota(force)).data
+  } catch (error: any) {
+    quota.value = { provider: 'codex', accounts: [], error: error.response?.data?.error || error.message || '额度查询失败' }
+  } finally { quotaBusy.value = false }
+}
+
+function quotaPercent(value: number | undefined | null): number {
+  if (value == null || Number.isNaN(value)) return 0
+  return Math.max(0, Math.min(100, value))
+}
+
+function quotaColor(value: number | undefined | null): string {
+  const remaining = quotaPercent(value)
+  if (remaining <= 20) return '#ef4444'
+  if (remaining <= 60) return '#f59e0b'
+  return '#22c55e'
+}
+
+function resetLabel(window: any): string {
+  if (!window) return '未知'
+  if (window.reset_at) return new Date(window.reset_at).toLocaleString()
+  if (window.reset_after_seconds != null) {
+    const seconds = Math.max(0, Number(window.reset_after_seconds))
+    return `约 ${Math.ceil(seconds / 3600)} 小时后`
+  }
+  return '未知'
+}
+
+function quotaWindows(account: any): any[] {
+  return [account.five_hour, account.weekly].filter(Boolean)
 }
 
 async function save() {
@@ -76,8 +114,16 @@ async function install(force = false) {
   } finally { busy.value = false }
 }
 
-onMounted(() => { load(); timer = setInterval(refreshStatus, 10000) })
-onUnmounted(() => { if (timer) clearInterval(timer) })
+onMounted(() => {
+  load()
+  refreshQuota()
+  timer = setInterval(refreshStatus, 10000)
+  quotaTimer = setInterval(() => refreshQuota(), 5 * 60 * 1000)
+})
+onUnmounted(() => {
+  if (timer) clearInterval(timer)
+  if (quotaTimer) clearInterval(quotaTimer)
+})
 </script>
 
 <template>
@@ -105,6 +151,43 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           <NButton :loading="busy" :disabled="!status.running" @click="action('restart')">重启</NButton>
           <NButton type="warning" :loading="busy" :disabled="!status.running" @click="action('stop')">停止</NButton>
           <NButton :loading="busy" @click="refreshStatus">刷新状态</NButton>
+        </NSpace>
+      </NCard>
+
+      <NCard title="Codex 订阅额度" :segmented="{ content: true }">
+        <template #header-extra>
+          <NButton size="small" :loading="quotaBusy" @click="refreshQuota(true)">刷新额度</NButton>
+        </template>
+        <NAlert v-if="quota?.error" type="error" style="margin-bottom: 16px">{{ quota.error }}</NAlert>
+        <NAlert v-else-if="!quota?.accounts?.length" type="info">
+          尚未发现 Codex 订阅登录账号，完成 Codex OAuth 登录后将在这里显示 5 小时和 7 天额度。
+        </NAlert>
+        <NSpace v-else vertical size="large">
+          <div v-for="account in quota.accounts" :key="account.auth_index" class="quota-account">
+            <div class="quota-account-header">
+              <div>
+                <strong>{{ account.email || account.account_id || account.auth_index }}</strong>
+                <NTag v-if="account.plan_type" size="small" type="info" style="margin-left: 8px">{{ account.plan_type }}</NTag>
+              </div>
+              <NTag :type="account.status === 'available' ? 'success' : 'error'" size="small">
+                {{ account.status === 'available' ? '可用' : '查询失败' }}
+              </NTag>
+            </div>
+            <NAlert v-if="account.error" type="error" style="margin: 12px 0">{{ account.error }}</NAlert>
+            <NGrid v-else :cols="2" :x-gap="24" responsive="screen" item-responsive>
+              <NGi v-for="window in quotaWindows(account)" :key="window.id" span="2 m:1">
+                <div class="quota-window">
+                  <div class="quota-window-title"><span>{{ window.label === '5h' ? '5 小时额度' : window.label === '7d' ? '7 天额度' : window.label }}</span><b>{{ window.remaining_percent?.toFixed(1) ?? '-' }}% 剩余</b></div>
+                  <div class="quota-bar"><div class="quota-bar-fill" :style="{ width: `${quotaPercent(window.remaining_percent)}%`, background: quotaColor(window.remaining_percent) }" /></div>
+                  <div class="quota-window-meta">已用 {{ window.used_percent?.toFixed(1) ?? '-' }}% · 刷新：{{ resetLabel(window) }}</div>
+                </div>
+              </NGi>
+            </NGrid>
+            <div class="quota-account-footer">
+              <span>主动重置次数：{{ account.reset_credits ?? 0 }}</span>
+              <span>查询时间：{{ account.queried_at ? new Date(account.queried_at).toLocaleString() : '-' }}</span>
+            </div>
+          </div>
         </NSpace>
       </NCard>
 
@@ -162,5 +245,14 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 .paths > div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 12px; align-items: baseline; }
 .paths span { color: var(--text-secondary); }
 .paths code { overflow-wrap: anywhere; color: #a5b4fc; }
+.quota-account { padding: 16px; border: 1px solid rgba(148,163,184,.18); border-radius: 8px; background: rgba(15,23,42,.28); }
+.quota-account-header, .quota-window-title, .quota-account-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.quota-account-footer { margin-top:14px; color:var(--text-secondary); font-size:12px; flex-wrap:wrap; }
+.quota-window-title { margin-bottom:8px; color:#cbd5e1; }
+.quota-window-title b { font-size:13px; }
+.quota-bar { height:10px; overflow:hidden; border-radius:999px; background:rgba(100,116,139,.25); }
+.quota-bar-fill { height:100%; border-radius:inherit; transition:width .3s ease; }
+.quota-window-meta { margin-top:7px; color:var(--text-secondary); font-size:12px; }
+@media (max-width: 767px) { .quota-account { padding:12px; } }
 @media (max-width: 767px) { .paths > div { grid-template-columns: 1fr; gap: 3px; } }
 </style>

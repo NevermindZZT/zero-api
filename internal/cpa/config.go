@@ -21,6 +21,8 @@ type Config struct {
 	Port int `json:"port"`
 	// APIKeys 访问 CLIProxyAPI 的 API Key 列表（zero-api 渠道用它做认证）
 	APIKeys []string `json:"api_keys"`
+	// ManagementKey CLIProxyAPI Management API 密钥，不返回前端。
+	ManagementKey string `json:"-"`
 	// ProxyURL 出站代理（可选，用于访问 ChatGPT 后端）
 	ProxyURL string `json:"proxy_url,omitempty"`
 	// RequestRetry 请求重试次数
@@ -52,6 +54,11 @@ func (c *Config) Render() ([]byte, error) {
 		APIKeys []string `yaml:"api-keys"`
 		Debug   bool     `yaml:"debug"`
 
+		RemoteManagement struct {
+			AllowRemote bool   `yaml:"allow-remote"`
+			SecretKey   string `yaml:"secret-key"`
+		} `yaml:"remote-management"`
+
 		ProxyURL     string `yaml:"proxy-url,omitempty"`
 		RequestRetry int    `yaml:"request-retry"`
 
@@ -70,6 +77,8 @@ func (c *Config) Render() ([]byte, error) {
 	y.AuthDir = "auths" // 相对 config 文件所在目录（CLIProxyAPI 相对 auth-dir 解释）
 	y.APIKeys = c.APIKeys
 	y.Debug = c.Debug
+	y.RemoteManagement.AllowRemote = false
+	y.RemoteManagement.SecretKey = c.ManagementKey
 	if c.ProxyURL != "" {
 		y.ProxyURL = c.ProxyURL
 	}

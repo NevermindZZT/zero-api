@@ -227,6 +227,7 @@ func (d *DB) migrate() error {
 			proxy_url TEXT DEFAULT '',
 			request_retry INTEGER DEFAULT 3,
 			debug INTEGER DEFAULT 0,
+			management_key TEXT DEFAULT '',
 			enable_codex INTEGER DEFAULT 1,
 			codex_prefix TEXT DEFAULT '',
 			enable_claude INTEGER DEFAULT 0,
@@ -300,6 +301,8 @@ func (d *DB) migrate() error {
 	d.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_api_key ON usage_records(api_key_id)`)
 	// 迁移：添加 github_token 字段到 proxy_config（用于 MCP GitHub 导入认证）
 	d.Exec(`ALTER TABLE proxy_config ADD COLUMN github_token TEXT DEFAULT ''`)
+	// 迁移：添加 CLIProxyAPI Management Key
+	d.Exec(`ALTER TABLE cpa_config ADD COLUMN management_key TEXT DEFAULT ''`)
 	// 迁移：添加 commit_sha 字段到 skills 表（用于 GitHub 更新追踪）
 	d.Exec(`ALTER TABLE skills ADD COLUMN commit_sha TEXT DEFAULT ''`)
 	// 迁移：渠道类型规范化 — openrouter 与 openai 同为 OpenAI 兼容协议，统一并入 openai

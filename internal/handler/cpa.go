@@ -13,6 +13,7 @@ import (
 type CPAHandler struct {
 	cfgRepo *store.CPAConfigRepo
 	manager *cpa.Manager
+	quota   *cpa.QuotaService
 }
 
 type loginRequest struct {
@@ -23,6 +24,11 @@ type loginRequest struct {
 
 func NewCPAHandler(cfgRepo *store.CPAConfigRepo, manager *cpa.Manager) *CPAHandler {
 	return &CPAHandler{cfgRepo: cfgRepo, manager: manager}
+}
+
+// SetQuotaService 注入 Codex/其他 provider 额度服务。
+func (h *CPAHandler) SetQuotaService(service *cpa.QuotaService) {
+	h.quota = service
 }
 
 // clearLongRunningResponseDeadline 取消 API Server 的写超时。
@@ -36,6 +42,12 @@ func (h *CPAHandler) PrepareConfig() error {
 	cfg, err := h.cfgRepo.Get()
 	if err != nil {
 		return err
+	}
+	if cfg.ManagementKey == "" {
+		cfg.ManagementKey, err = h.cfgRepo.EnsureManagementKey()
+		if err != nil {
+			return err
+		}
 	}
 	return cfgToCPAConfig(cfg).WriteConfig(cfg.DataDir)
 }
@@ -74,6 +86,9 @@ func (h *CPAHandler) SaveConfig(c *gin.Context) {
 		return
 	}
 	h.manager.UpdateEndpoint(cfg.Host, cfg.Port)
+	if h.quota != nil {
+		h.quota.UpdateEndpoint(cfg.Host, cfg.Port)
+	}
 	// 写入 CLIProxyAPI config.yaml
 	if err := h.PrepareConfig(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "写入 sidecar 配置失败: " + err.Error()})
@@ -85,6 +100,20 @@ func (h *CPAHandler) SaveConfig(c *gin.Context) {
 // Status 获取 sidecar 状态
 func (h *CPAHandler) Status(c *gin.Context) {
 	c.JSON(http.StatusOK, h.manager.Status())
+}
+
+// Quota 获取已登录订阅账号的额度信息。
+func (h *CPAHandler) Quota(c *gin.Context) {
+	if h.quota == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "额度服务未初始化"})
+		return
+	}
+	result, err := h.quota.Query(c.Request.Context(), c.Query("refresh") == "true")
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 // Start 启动 sidecar
@@ -183,13 +212,14 @@ func (h *CPAHandler) StopAuth(c *gin.Context) {
 // cfgToCPAConfig 转换 store.CPAConfig → cpa.Config
 func cfgToCPAConfig(cfg *store.CPAConfig) *cpa.Config {
 	return &cpa.Config{
-		Enabled:      cfg.Enabled,
-		AutoStart:    cfg.AutoStart,
-		Host:         cfg.Host,
-		Port:         cfg.Port,
-		APIKeys:      cfg.APIKeys,
-		ProxyURL:     cfg.ProxyURL,
-		RequestRetry: cfg.RequestRetry,
-		Debug:        cfg.Debug,
+		Enabled:       cfg.Enabled,
+		AutoStart:     cfg.AutoStart,
+		Host:          cfg.Host,
+		Port:          cfg.Port,
+		APIKeys:       cfg.APIKeys,
+		ManagementKey: cfg.ManagementKey,
+		ProxyURL:      cfg.ProxyURL,
+		RequestRetry:  cfg.RequestRetry,
+		Debug:         cfg.Debug,
 	}
 }
