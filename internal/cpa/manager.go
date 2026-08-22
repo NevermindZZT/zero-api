@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -43,12 +44,20 @@ type Manager struct {
 func NewManager(dataDir string, host string, port int) *Manager {
 	return &Manager{
 		dataDir: dataDir,
-		binPath: filepath.Join(dataDir, "CLIProxyAPI"),
+		binPath: filepath.Join(dataDir, binaryFileName()),
 		host:    host,
 		port:    port,
 		stopCh:  make(chan struct{}),
 		doneCh:  make(chan struct{}),
 	}
+}
+
+// binaryFileName 返回当前平台的 sidecar 可执行文件名。
+func binaryFileName() string {
+	if runtime.GOOS == "windows" {
+		return "CLIProxyAPI.exe"
+	}
+	return "CLIProxyAPI"
 }
 
 // BinPath 返回二进制路径

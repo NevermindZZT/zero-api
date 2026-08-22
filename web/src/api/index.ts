@@ -243,7 +243,11 @@ export const cpaApi = {
   start: () => api.post('/cpa/start'),
   stop: () => api.post('/cpa/stop'),
   restart: () => api.post('/cpa/restart'),
-  installBinary: (force = false) => api.post('/cpa/binary/install', null, { params: { force } }),
+  installBinary: (force = false) => api.post('/cpa/binary/install', null, {
+    params: { force },
+    // GitHub release 下载可能较慢，不能使用全局 30 秒 API 超时。
+    timeout: 15 * 60 * 1000,
+  }),
   checkUpdate: () => api.get('/cpa/binary/update'),
   authStatus: () => api.get('/cpa/auth/status'),
   startAuth: (provider: string, device = false, noBrowser = false) =>

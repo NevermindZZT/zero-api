@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/never/zero-api/internal/cpa"
@@ -22,6 +23,12 @@ type loginRequest struct {
 
 func NewCPAHandler(cfgRepo *store.CPAConfigRepo, manager *cpa.Manager) *CPAHandler {
 	return &CPAHandler{cfgRepo: cfgRepo, manager: manager}
+}
+
+// clearLongRunningResponseDeadline 取消 API Server 的写超时。
+// CLIProxyAPI 下载/解压可能超过主服务默认 WriteTimeout，必须在开始同步操作前清除。
+func clearLongRunningResponseDeadline(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 }
 
 // PrepareConfig 将数据库配置写入 CLIProxyAPI 配置文件。
@@ -114,6 +121,10 @@ func (h *CPAHandler) Restart(c *gin.Context) {
 
 // InstallBinary 安装/升级二进制
 func (h *CPAHandler) InstallBinary(c *gin.Context) {
+	// 下载/解压可能超过 API Server 的默认 WriteTimeout（60 秒），避免客户端收到“响应提前结束”，
+	// 但后台实际已经完成安装的假失败。
+	clearLongRunningResponseDeadline(c.Writer)
+
 	// 从配置中读取出站代理，传给下载器
 	if cfg, err := h.cfgRepo.Get(); err == nil {
 		h.manager.SetProxyURL(cfg.ProxyURL)
@@ -128,6 +139,7 @@ func (h *CPAHandler) InstallBinary(c *gin.Context) {
 
 // CheckUpdate 检查更新
 func (h *CPAHandler) CheckUpdate(c *gin.Context) {
+	clearLongRunningResponseDeadline(c.Writer)
 	latest, hasUpdate, err := h.manager.CheckUpdate()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

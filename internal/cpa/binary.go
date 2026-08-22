@@ -146,28 +146,84 @@ func (m *Manager) InstallBinary(force bool) (string, error) {
 
 // downloadFile 下载文件到指定路径（带进度日志）
 // proxyURL 可选出站代理（http/https/socks5，支持 user:pass@ 认证），空=直连
-// 失败自动重试 3 次（网络错误/5xx/超时）
+// 失败自动重试 3 次（网络错误/5xx/超时），重试时支持 HTTP Range 断点续传。
 func downloadFile(url, dst string, expectedSize int64, proxyURL string) error {
 	const maxRetries = 3
+	partialPath := dst + ".part"
+
+	// 兼容旧版本留下的临时文件：旧 Windows 版本使用 CLIProxyAPI.tmp，
+	// 新版本使用 CLIProxyAPI.exe.tmp.part，优先迁移旧文件继续下载。
+	if err := migrateLegacyTempFile(partialPath); err != nil {
+		log.Printf("[CPA] 迁移旧下载临时文件失败: %v", err)
+	}
+
+	// 兼容当前版本留下的 dst.tmp：将已有残留转为可续传文件。
+	if _, err := os.Stat(dst); err == nil {
+		if _, partialErr := os.Stat(partialPath); os.IsNotExist(partialErr) {
+			if err := os.Rename(dst, partialPath); err != nil {
+				_ = os.Remove(dst)
+			}
+		} else {
+			_ = os.Remove(dst)
+		}
+	}
+
 	var lastErr error
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
 			log.Printf("[CPA] 下载重试 %d/%d...", attempt, maxRetries)
 			time.Sleep(time.Duration(attempt) * 2 * time.Second)
 		}
-		lastErr = downloadOnce(url, dst, expectedSize, proxyURL)
+		lastErr = downloadOnce(url, partialPath, expectedSize, proxyURL)
 		if lastErr == nil {
+			if err := os.Rename(partialPath, dst); err != nil {
+				lastErr = fmt.Errorf("保存下载文件失败: %w", err)
+				break
+			}
 			return nil
 		}
 		log.Printf("[CPA] 下载失败(第 %d 次): %v", attempt, lastErr)
 	}
+
+	// 最终失败时不留下半文件，避免下一次被误判为已下载。
+	_ = os.Remove(dst)
+	_ = os.Remove(partialPath)
 	return lastErr
+}
+
+// migrateLegacyTempFile 将旧版本使用的 CLIProxyAPI.tmp 迁移为当前临时下载路径。
+func migrateLegacyTempFile(currentPath string) error {
+	legacyPath := filepath.Join(filepath.Dir(currentPath), "CLIProxyAPI.tmp")
+	if legacyPath == currentPath {
+		return nil
+	}
+	if _, err := os.Stat(currentPath); err == nil {
+		return nil
+	}
+	if _, err := os.Stat(legacyPath); os.IsNotExist(err) {
+		return nil
+	}
+	return os.Rename(legacyPath, currentPath)
 }
 
 func downloadOnce(url, dst string, expectedSize int64, proxyURL string) error {
 	client := &http.Client{Timeout: 10 * time.Minute, Transport: buildTransport(proxyURL)}
-	req, _ := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
 	req.Header.Set("User-Agent", "zero-api-cpa-manager")
+
+	var offset int64
+	if info, statErr := os.Stat(dst); statErr == nil {
+		offset = info.Size()
+		if expectedSize > 0 && offset == expectedSize {
+			return nil
+		}
+		if offset > 0 {
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+		}
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -175,20 +231,32 @@ func downloadOnce(url, dst string, expectedSize int64, proxyURL string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	out, err := os.Create(dst)
+	appendMode := offset > 0 && resp.StatusCode == http.StatusPartialContent
+	flags := os.O_CREATE | os.O_WRONLY
+	if appendMode {
+		flags |= os.O_APPEND
+	} else {
+		flags |= os.O_TRUNC
+		offset = 0
+	}
+	out, err := os.OpenFile(dst, flags, 0600)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
-	written, err := io.Copy(out, resp.Body)
-	if err != nil {
-		return err
+	written, copyErr := io.Copy(out, resp.Body)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
 	}
+	if closeErr != nil {
+		return closeErr
+	}
+	written += offset
 	if expectedSize > 0 && written != expectedSize {
 		return fmt.Errorf("下载大小不匹配: got %d want %d", written, expectedSize)
 	}
@@ -218,10 +286,12 @@ func buildTransport(proxyURL string) *http.Transport {
 // extractBinary 从下载的归档中提取 CLIProxyAPI 二进制
 // 支持 .tar.gz / .zip / 裸二进制
 func extractBinary(src, dst string) error {
-	// 尝试 zip
+	// 尝试 zip。文件头已经表明是 ZIP 但归档损坏时，不能继续按裸二进制复制。
 	if zr, err := zip.OpenReader(src); err == nil {
 		defer zr.Close()
 		return extractFromZip(zr, dst)
+	} else if hasZipSignature(src) {
+		return fmt.Errorf("ZIP 归档损坏: %w", err)
 	}
 
 	// 尝试 tar.gz
@@ -245,6 +315,8 @@ func extractBinary(src, dst string) error {
 				}
 			}
 			return fmt.Errorf("tar.gz 中未找到 CLIProxyAPI 可执行文件")
+		} else if hasGzipSignature(src) {
+			return fmt.Errorf("gzip 归档损坏: %w", err)
 		}
 	}
 
@@ -255,6 +327,35 @@ func extractBinary(src, dst string) error {
 	}
 	defer in.Close()
 	return writeFileFromReader(dst, in, -1)
+}
+
+func hasZipSignature(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	var sig [4]byte
+	if _, err := io.ReadFull(f, sig[:]); err != nil {
+		return false
+	}
+	return sig[0] == 'P' && sig[1] == 'K' &&
+		((sig[2] == 0x03 && sig[3] == 0x04) ||
+			(sig[2] == 0x05 && sig[3] == 0x06) ||
+			(sig[2] == 0x07 && sig[3] == 0x08))
+}
+
+func hasGzipSignature(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	var sig [2]byte
+	if _, err := io.ReadFull(f, sig[:]); err != nil {
+		return false
+	}
+	return sig[0] == 0x1f && sig[1] == 0x8b
 }
 
 // extractFromZip 从 zip 提取
@@ -280,8 +381,12 @@ func isCPAExecutable(name string, mode int64, regular bool) bool {
 		return false
 	}
 	base := strings.ToLower(filepath.Base(name))
-	if base != "cli-proxy-api" && base != "cliproxyapi" && base != "cliproxyapi.exe" {
+	if base != "cli-proxy-api" && base != "cli-proxy-api.exe" && base != "cliproxyapi" && base != "cliproxyapi.exe" {
 		return false
+	}
+	// Windows ZIP 不携带 Unix 执行权限位，.exe 文件名本身即可确认其类型。
+	if strings.HasSuffix(base, ".exe") {
+		return true
 	}
 	return mode&0111 != 0
 }
