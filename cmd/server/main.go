@@ -256,6 +256,8 @@ func main() {
 		v1.POST("/completions", proxyH.ChatCompletion)
 		// Anthropic Messages 协议入口（下游）
 		v1.POST("/messages", proxyH.MessagesCompletion)
+		// OpenAI Responses WebSocket 协议入口（下游）
+		v1.GET("/responses", proxyH.ResponsesWebSocket)
 		// OpenAI Responses API 协议入口（下游）
 		v1.POST("/responses", proxyH.ResponsesCompletion)
 		// 功能类接口透传（embeddings / images / audio / moderations / batches）
