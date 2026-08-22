@@ -136,8 +136,8 @@ func (m *Manager) Start() error {
 		return err
 	}
 
-	// 打开日志文件
-	logFile, err := os.OpenFile(m.LogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	// 打开日志文件并在达到上限时轮转
+	logFile, err := prepareLogFile(m.LogPath())
 	if err != nil {
 		m.mu.Unlock()
 		return fmt.Errorf("打开日志文件失败: %w", err)
