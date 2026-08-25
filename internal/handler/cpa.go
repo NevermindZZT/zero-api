@@ -163,7 +163,13 @@ func (h *CPAHandler) InstallBinary(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"version": version, "status": "installed"})
+	// InstallBinary 在 sidecar 运行时会自动重启；重新读取磁盘版本，
+	// 返回真实版本而不是仅返回 GitHub release 的 tag。
+	installedVersion := h.manager.BinVersion()
+	if installedVersion == "" {
+		installedVersion = version
+	}
+	c.JSON(http.StatusOK, gin.H{"version": installedVersion, "release_version": version, "status": "installed", "running": h.manager.IsRunning()})
 }
 
 // CheckUpdate 检查更新

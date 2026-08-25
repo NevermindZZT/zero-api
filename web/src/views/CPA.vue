@@ -107,7 +107,7 @@ async function install(force = false) {
   busy.value = true
   try {
     const result = await cpaApi.installBinary(force)
-    message.success(`CLIProxyAPI ${result.data.version} 已安装`)
+    message.success(`CLIProxyAPI ${result.data.version} 已安装${result.data.running ? '并已重启' : ''}`)
     await refreshStatus()
   } catch (error: any) {
     message.error(error.response?.data?.error || '安装失败')
@@ -229,7 +229,7 @@ onUnmounted(() => {
         </div>
         <NSpace style="margin-top: 16px" wrap>
           <NButton :loading="busy" @click="checkUpdate">检查更新</NButton>
-          <NButton type="primary" :loading="busy" @click="install(!status.bin_exists)">{{ status.bin_exists ? '升级到最新版本' : '下载并安装' }}</NButton>
+          <NButton type="primary" :loading="busy" @click="install(true)">{{ status.bin_exists ? '升级到最新版本' : '下载并安装' }}</NButton>
         </NSpace>
         <NAlert v-if="update.has_update" type="success" style="margin-top: 16px">
           可升级至 {{ update.latest_version }}，安装操作不会修改认证目录。

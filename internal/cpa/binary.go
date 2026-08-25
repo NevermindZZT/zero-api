@@ -136,8 +136,29 @@ func (m *Manager) InstallBinary(force bool) (string, error) {
 	if err := os.Chmod(installPath, 0755); err != nil {
 		return "", fmt.Errorf("设置二进制权限失败: %w", err)
 	}
+
+	// 下载和校验完成后再停止 sidecar，避免网络失败导致现有服务中断。
+	// Linux 下替换磁盘文件不会改变已加载进程的代码，必须重启才能真正运行新版本；
+	// Windows 下运行中的文件也无法直接替换，因此同样需要先停止再替换。
+	wasRunning := m.IsRunning()
+	if wasRunning {
+		if err := m.Stop(); err != nil {
+			return "", fmt.Errorf("停止旧版 CLIProxyAPI 失败: %w", err)
+		}
+	}
 	if err := os.Rename(installPath, m.binPath); err != nil {
+		if wasRunning {
+			if restartErr := m.Start(); restartErr != nil {
+				return "", fmt.Errorf("替换二进制失败: %w（恢复启动也失败: %v）", err, restartErr)
+			}
+		}
 		return "", fmt.Errorf("替换二进制失败: %w", err)
+	}
+
+	if wasRunning {
+		if err := m.Start(); err != nil {
+			return "", fmt.Errorf("CLIProxyAPI 已安装但重启失败: %w", err)
+		}
 	}
 
 	log.Printf("[CPA] CLIProxyAPI 安装完成: %s", m.binPath)
