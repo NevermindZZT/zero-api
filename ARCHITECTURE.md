@@ -510,6 +510,9 @@ CREATE TABLE skill_combination_items (combination_id, skill_id, sort_order, ...)
 - **中转站（/v1/*）不实现模型映射**，client 直接发送实际模型名
 - 代理请求同样经过协议适配并记录用量（`recordUsage` 含定价计费）
 - **透传路径**：`tryForwardModel` 从客户端请求路径推导下游协议（`downstreamProtocolFromPath`），模型协议命中时透传（仅模型映射/参数注入，不过协议转换，URL 用 `ProtocolURL`）；gemini 渠道始终转换
+- **透传用量统计**：透传响应不会经过 `ConvertResponse`，用量解析必须使用真实下游协议适配器（`adapter.SelectUsageAdapter`）；例如 `openai` 渠道透传 Responses 时使用 `ResponsesAdapter` 解析 `input_tokens/output_tokens`
+- **Responses 原始状态链**：Responses 透传时完整保留客户端的 `previous_response_id`、`input`、`reasoning`、`function_call` 和 `function_call_output`。zero-api 不维护本地 replay 缓存，也不根据工具调用输出自动拼接历史条目，避免破坏上游服务端的状态链。
+- **Responses 会话头**：CLIProxyAPI/Codex 可能发送下划线形式的 `session_id`；该头以及 `x-codex-session-id`、`openai-conversation-id` 等会话关联头必须透传给上游，否则上游无法关联前一轮工具调用状态。
 - `GET /v1/models` 在代理中会被 `HandleModelsRequest` 处理，返回**精确匹配 ModelProxy 的 OpenRouter 格式**模型列表（pricing/supported_parameters/architecture 等字段，Android Studio Copilot 等客户端依赖此格式）
 - 透传判断：仅 `IsLLMRequest()` 决定是否拦截（历史上曾因 intercept_domains 内非 LLM 请求被误拦导致 502，见下方陷阱）
 - 代理认证：proxy_username/password 用于客户端连接认证，与 API 登录凭据相同
@@ -535,6 +538,22 @@ CREATE TABLE skill_combination_items (combination_id, skill_id, sort_order, ...)
 
 ---
 
+## CLIProxyAPI Sidecar
+
+- `internal/cpa/` 管理 CLIProxyAPI 二进制下载、配置生成、OAuth 登录和进程生命周期
+- 数据目录：`data/cliproxyapi/`；Windows 二进制名为 `CLIProxyAPI.exe`，Linux/macOS 为 `CLIProxyAPI`
+- Windows release 使用 ZIP，官方 ZIP 内 `.exe` 条目可能没有 Unix 执行权限位，不能用 `mode&0111` 判断可执行文件
+- 下载使用 `.part` 临时文件 + HTTP Range 断点续传，完成后原子改名；下载失败必须清理残留，避免把半截归档当作已下载
+- 旧版本 Windows 临时文件 `CLIProxyAPI.tmp` 会迁移为当前临时下载路径继续下载
+- 损坏 ZIP/GZip 不能回退为裸二进制复制，否则会安装不可执行的压缩包
+- CLIProxyAPI 安装接口是长耗时操作，必须在 handler 层清除主 API 的 `WriteTimeout`，否则下载成功后客户端可能收到 `Response ended prematurely`
+- **Codex 额度**：zero-api 自动生成独立 Management Key，写入 sidecar `remote-management.secret-key`；通过 `/v0/management/auth-files` + `/v0/management/api-call` 查询 ChatGPT `wham/usage`，只对已登录 Codex OAuth 账号执行
+- **Codex 窗口归类**：优先按 `limit_window_seconds` 判断窗口（18000=5h，604800=7d），不能只按 `primary_window`/`secondary_window` 字段名；因为当前 Codex 可能只返回 `primary_window` 但实际是 7d，前端只显示实际存在的窗口
+- **额度扩展**：`internal/cpa.QuotaProvider` 是 provider 抽象，首期实现 `CodexQuotaProvider`，后续 provider 通过同一统一窗口模型接入
+- 改动下载/解压逻辑后运行 `go test ./internal/cpa/`，额度/配置改动需验证 `go test ./...`、`go build ./...` 与 Linux 交叉构建
+
+---
+
 ## 已知问题 & 待改进
 
 ### 已修复的历史 Bug
@@ -546,6 +565,11 @@ CREATE TABLE skill_combination_items (combination_id, skill_id, sort_order, ...)
 6. **非 LLM 请求误拦截**：intercept_domains 内域名（如 openrouter.ai）的所有请求都被送入 LLM 处理路径，健康检查因缺 model 字段返回 502 → 透传判断仅用 `!IsLLMRequest()`
 7. **隧道稳定性**：认证失败日志区分"未携带"/"凭据错误"；`net.DialTimeout` 增至 20s；双向 io.Copy 增加 120s 超时防 goroutine 泄漏
 8. **usage_daily 零值日期**：CreatedAt 为零值导致 `0001-01-01` 脏数据 → 迁移时删除 + 幂等回填
+9. **Responses 透传用量为 0**：openai 类型渠道透传 Responses 时，原先按渠道类型使用 OpenAIAdapter，无法解析 Responses 的 `input_tokens/output_tokens` → 统一使用真实下游协议选择用量适配器
+10. **Codex 额度窗口误标**：当前 Codex 可能把 7 天窗口放在 `primary_window`，必须按 `limit_window_seconds` 判断窗口时长，不能按字段名固定映射
+11. **Responses 本地 replay 导致状态链风险**：旧实现曾按 `previous_response_id` 缓存并自动拼接 `reasoning/function_call`，可能破坏上游 Responses 状态链并触发工具调用错误。现已移除；Responses 透传只保留客户端原始请求和必要会话头
+12. **Responses session_id 未透传**：CLIProxyAPI/Codex 使用 `session_id` 维护 Agent 会话，旧实现仅允许连字符/HTTP 风格的头名称，导致下划线形式的会话头被丢弃，上游将合法的 `function_call_output` 视为孤立输出。现已加入 `session_id`/`session-id` 透传并补充测试
+13. **CLIProxyAPI Windows 下载/安装**：Windows ZIP 资产下载可能被代理提前截断，旧逻辑还会遗留半文件；官方 `.exe` ZIP 条目没有 Unix 执行位且文件名为 `cli-proxy-api.exe`。现已使用 `.part` + Range 续传、失败清理、旧临时文件迁移，并按 `.exe` 文件名识别
 
 ### 待实现功能
 - **渠道 API Key 测试**：`/api/channels/:id/test` 返回固定成功

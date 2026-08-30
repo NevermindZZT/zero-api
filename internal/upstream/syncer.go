@@ -14,9 +14,9 @@ import (
 
 // Syncer 负责从上游渠道同步模型信息
 type Syncer struct {
-	channelRepo    *store.ChannelRepo
-	modelRepo      *store.ModelRepo
-	modelPresets   *config.ModelPresets
+	channelRepo  *store.ChannelRepo
+	modelRepo    *store.ModelRepo
+	modelPresets *config.ModelPresets
 }
 
 func NewSyncer(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, presets *config.ModelPresets) *Syncer {
@@ -55,6 +55,15 @@ func (s *Syncer) mergeModelInfo(upstreamModel adapter.ModelInfo) adapter.ModelIn
 		if len(result.Protocols) == 0 && len(dbInfo.Protocols) > 0 {
 			result.Protocols = dbInfo.Protocols
 		}
+		if len(result.Capabilities) == 0 && len(dbInfo.Capabilities) > 0 {
+			result.Capabilities = dbInfo.Capabilities
+		}
+		if len(result.InputModalities) == 0 && len(dbInfo.InputModalities) > 0 {
+			result.InputModalities = dbInfo.InputModalities
+		}
+		if len(result.OutputModalities) == 0 && len(dbInfo.OutputModalities) > 0 {
+			result.OutputModalities = dbInfo.OutputModalities
+		}
 	}
 
 	// 从配置文件默认值覆盖（优先级2）
@@ -77,6 +86,15 @@ func (s *Syncer) mergeModelInfo(upstreamModel adapter.ModelInfo) adapter.ModelIn
 		}
 		if len(conf.Protocols) > 0 && len(result.Protocols) == 0 {
 			result.Protocols = conf.Protocols
+		}
+		if len(conf.Capabilities) > 0 && len(result.Capabilities) == 0 {
+			result.Capabilities = conf.Capabilities
+		}
+		if len(conf.InputModalities) > 0 && len(result.InputModalities) == 0 {
+			result.InputModalities = conf.InputModalities
+		}
+		if len(conf.OutputModalities) > 0 && len(result.OutputModalities) == 0 {
+			result.OutputModalities = conf.OutputModalities
 		}
 	}
 
@@ -134,6 +152,9 @@ func (s *Syncer) SyncModels(channelID int64) (int, error) {
 			SupportsThinking: merged.SupportsThinking,
 			SupportsTools:    merged.SupportsTools,
 			Protocols:        merged.Protocols,
+			Capabilities:     merged.Capabilities,
+			InputModalities:  merged.InputModalities,
+			OutputModalities: merged.OutputModalities,
 			Status:           "active",
 		}
 

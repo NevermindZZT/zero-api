@@ -119,11 +119,8 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 		}
 
 		// 构建输入/输出模态
-		inputModalities := []string{"text"}
-		outputModalities := []string{"text"}
-		if m.SupportsVision {
-			inputModalities = append(inputModalities, "image")
-		}
+		inputModalities := m.EffectiveInputModalities()
+		outputModalities := m.EffectiveOutputModalities()
 
 		// 构建 supported_parameters
 		supportedParams := []string{"max_tokens", "temperature", "top_p", "seed", "stop", "response_format", "structured_outputs"}
@@ -182,6 +179,11 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 			"knowledge_cutoff":     nil,
 			"expiration_date":      nil,
 		}
+		if len(m.Capabilities) > 0 {
+			entry["capabilities"] = m.Capabilities
+			entry["input_modalities"] = m.EffectiveInputModalities()
+			entry["output_modalities"] = m.EffectiveOutputModalities()
+		}
 
 		// reasoning 字段（OpenRouter 格式）
 		if m.SupportsThinking {
@@ -189,6 +191,11 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 				"mandatory":       false,
 				"default_enabled": true,
 			}
+		}
+		if m.SupportsCapability("image_generation") || m.SupportsCapability("image_editing") {
+			entry["capabilities"] = m.Capabilities
+			entry["input_modalities"] = m.EffectiveInputModalities()
+			entry["output_modalities"] = m.EffectiveOutputModalities()
 		}
 
 		data = append(data, entry)
@@ -365,9 +372,14 @@ func (h *ProxyHandler) PassthroughEndpoint(c *gin.Context) {
 	for i, m := range allModels {
 		if m.ModelID == reqBody.Model && m.Status == "active" {
 			ch, cerr := h.channelRepo.GetByID(m.ChannelID)
-			if cerr == nil && ch.Status == "active" && m.SupportsProtocol("openai", ch.Type) {
-				candidates = append(candidates, &allModels[i])
+			if cerr != nil || ch.Status != "active" || !m.SupportsProtocol("openai", ch.Type) {
+				continue
 			}
+			capability := imageCapabilityForPath(c.Request.URL.Path)
+			if capability != "" && !m.SupportsCapability(capability) {
+				continue
+			}
+			candidates = append(candidates, &allModels[i])
 		}
 	}
 	if len(candidates) == 0 {
@@ -485,6 +497,18 @@ func (h *ProxyHandler) tryForwardPassthrough(c *gin.Context, bodyBytes []byte, m
 	}
 	c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), respBytes)
 	return nil
+}
+
+func imageCapabilityForPath(path string) string {
+	path = strings.ToLower(strings.TrimSpace(path))
+	switch {
+	case strings.HasSuffix(path, "/images/generations"):
+		return "image_generation"
+	case strings.HasSuffix(path, "/images/edits"):
+		return "image_editing"
+	default:
+		return ""
+	}
 }
 
 // handleCompletion 核心中转逻辑（下游协议 → 规范格式 → 上游渠道）

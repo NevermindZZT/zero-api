@@ -267,6 +267,10 @@ func (d *DB) migrate() error {
 	d.Exec(`ALTER TABLE models ADD COLUMN protocols TEXT DEFAULT '[]'`)
 	// 迁移：添加 protocol_urls 字段到 models 表（JSON 对象，各协议独立的上游 URL）
 	d.Exec(`ALTER TABLE models ADD COLUMN protocol_urls TEXT DEFAULT '{}'`)
+	// 统一模型能力和输入/输出模态（旧字段继续保留兼容）
+	d.Exec(`ALTER TABLE models ADD COLUMN capabilities TEXT DEFAULT '[]'`)
+	d.Exec(`ALTER TABLE models ADD COLUMN input_modalities TEXT DEFAULT '[]'`)
+	d.Exec(`ALTER TABLE models ADD COLUMN output_modalities TEXT DEFAULT '[]'`)
 	// 迁移：添加 priority 字段到 channels 表（0=最高优先级，越大优先级越低）
 	d.Exec(`ALTER TABLE channels ADD COLUMN priority INTEGER DEFAULT 99`)
 	// 迁移：添加渠道支持的协议列表（空值自动继承 type）

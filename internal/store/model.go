@@ -44,6 +44,9 @@ type Model struct {
 	PricingRules      string            `json:"pricing_rules"`       // 定价规则 JSON
 	Protocols         []string          `json:"protocols"`           // 支持的协议列表，空 = 继承渠道 type
 	ProtocolURLs      map[string]string `json:"protocol_urls"`       // 各协议独立的上游 URL（如 {"anthropic":"https://.../v1/messages"}）
+	Capabilities      []string          `json:"capabilities"`        // 统一能力：chat/responses/image_generation/image_editing 等
+	InputModalities   []string          `json:"input_modalities"`    // 输入模态：text/image/audio
+	OutputModalities  []string          `json:"output_modalities"`   // 输出模态：text/image/audio
 	Status            string            `json:"status"`              // active, inactive
 	UserModified      bool              `json:"user_modified"`       // 用户是否手动编辑过
 	CreatedAt         time.Time         `json:"created_at"`
@@ -80,6 +83,44 @@ func (m *Model) SupportsProtocol(protocol, channelType string) bool {
 		}
 	}
 	return false
+}
+
+// SupportsCapability returns the unified capability, with legacy field fallback.
+func (m *Model) SupportsCapability(capability string) bool {
+	for _, c := range m.Capabilities {
+		if c == capability {
+			return true
+		}
+	}
+	switch capability {
+	case "vision":
+		return m.SupportsVision
+	case "thinking":
+		return m.SupportsThinking
+	case "tool_calling":
+		return m.SupportsTools
+	default:
+		return false
+	}
+}
+
+// EffectiveInputModalities returns declared modalities or legacy-compatible defaults.
+func (m *Model) EffectiveInputModalities() []string {
+	if len(m.InputModalities) > 0 {
+		return m.InputModalities
+	}
+	if m.SupportsVision {
+		return []string{"text", "image"}
+	}
+	return []string{"text"}
+}
+
+// EffectiveOutputModalities returns declared modalities or text by default.
+func (m *Model) EffectiveOutputModalities() []string {
+	if len(m.OutputModalities) > 0 {
+		return m.OutputModalities
+	}
+	return []string{"text"}
 }
 
 // ProtocolURL 返回指定协议的完整上游请求 URL
@@ -127,13 +168,16 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 	channelStatus := "COALESCE(c.status, 'active')"
 	protocolsField := "COALESCE(m.protocols, '[]')"
 	protocolURLsField := "COALESCE(m.protocol_urls, '{}')"
+	capabilitiesField := "COALESCE(m.capabilities, '[]')"
+	inputModalitiesField := "COALESCE(m.input_modalities, '[]')"
+	outputModalitiesField := "COALESCE(m.output_modalities, '[]')"
 	if channelID > 0 {
 		rows, err = r.db.Query(
 			`SELECT m.id, m.channel_id, m.model_id, m.display_name,
 			        m.context_window, m.max_output_tokens,
 			        m.supports_vision, m.supports_thinking, m.supports_tools,
 		        m.pricing_input, m.pricing_output, m.pricing_cache_read, m.pricing_cache_write,
-		        m.pricing_rules, `+protocolsField+`, `+protocolURLsField+`,
+			        m.pricing_rules, `+protocolsField+`, `+protocolURLsField+`, `+capabilitiesField+`, `+inputModalitiesField+`, `+outputModalitiesField+`,
 		        m.status,`+userModifiedField+`, m.created_at, m.updated_at,
 		        `+channelNameType+`, `+channelPriority+`, `+channelStatus+`
 			 FROM models m LEFT JOIN channels c ON m.channel_id = c.id
@@ -144,7 +188,7 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 		        m.context_window, m.max_output_tokens,
 		        m.supports_vision, m.supports_thinking, m.supports_tools,
 		        m.pricing_input, m.pricing_output, m.pricing_cache_read, m.pricing_cache_write,
-		        m.pricing_rules, ` + protocolsField + `, ` + protocolURLsField + `,
+		        m.pricing_rules, ` + protocolsField + `, ` + protocolURLsField + `, ` + capabilitiesField + `, ` + inputModalitiesField + `, ` + outputModalitiesField + `,
 		        m.status,` + userModifiedField + `, m.created_at, m.updated_at,
 		        ` + channelNameType + `, ` + channelPriority + `, ` + channelStatus + `
 			 FROM models m LEFT JOIN channels c ON m.channel_id = c.id
@@ -159,17 +203,22 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 	for rows.Next() {
 		var m Model
 		var protocolsStr, protocolURLsStr string
+		var capabilitiesStr, inputModalitiesStr, outputModalitiesStr string
 		if err := rows.Scan(&m.ID, &m.ChannelID, &m.ModelID, &m.DisplayName,
 			&m.ContextWindow, &m.MaxOutputTokens,
 			&m.SupportsVision, &m.SupportsThinking, &m.SupportsTools,
 			&m.PricingInput, &m.PricingOutput, &m.PricingCacheRead, &m.PricingCacheWrite,
 			&m.PricingRules, &protocolsStr, &protocolURLsStr,
+			&capabilitiesStr, &inputModalitiesStr, &outputModalitiesStr,
 			&m.Status, &m.UserModified, &m.CreatedAt, &m.UpdatedAt,
 			&m.ChannelName, &m.ChannelType, &m.ChannelPriority, &m.ChannelStatus); err != nil {
 			return nil, err
 		}
 		m.Protocols = parseProtocols(protocolsStr)
 		m.ProtocolURLs = parseProtocolURLs(protocolURLsStr)
+		m.Capabilities = parseStringList(capabilitiesStr)
+		m.InputModalities = parseStringList(inputModalitiesStr)
+		m.OutputModalities = parseStringList(outputModalitiesStr)
 		models = append(models, m)
 	}
 
@@ -187,12 +236,14 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 func (r *ModelRepo) GetByID(id int64) (*Model, error) {
 	m := &Model{}
 	var protocolsStr, protocolURLsStr string
+	var capabilitiesStr, inputModalitiesStr, outputModalitiesStr string
 	err := r.db.QueryRow(
 		`SELECT m.id, m.channel_id, m.model_id, m.display_name,
 		        m.context_window, m.max_output_tokens,
 		        m.supports_vision, m.supports_thinking, m.supports_tools,
 		        m.pricing_input, m.pricing_output, m.pricing_cache_read, m.pricing_cache_write,
 		        m.pricing_rules, COALESCE(m.protocols, '[]'), COALESCE(m.protocol_urls, '{}'),
+		        COALESCE(m.capabilities, '[]'), COALESCE(m.input_modalities, '[]'), COALESCE(m.output_modalities, '[]'),
 		        m.status, m.user_modified, m.created_at, m.updated_at,
 		        COALESCE(c.name, ''), COALESCE(c.type, ''), COALESCE(c.priority, 99), COALESCE(c.status, 'active')
 		 FROM models m LEFT JOIN channels c ON m.channel_id = c.id
@@ -202,6 +253,7 @@ func (r *ModelRepo) GetByID(id int64) (*Model, error) {
 		&m.SupportsVision, &m.SupportsThinking, &m.SupportsTools,
 		&m.PricingInput, &m.PricingOutput, &m.PricingCacheRead, &m.PricingCacheWrite,
 		&m.PricingRules, &protocolsStr, &protocolURLsStr,
+		&capabilitiesStr, &inputModalitiesStr, &outputModalitiesStr,
 		&m.Status, &m.UserModified, &m.CreatedAt, &m.UpdatedAt,
 		&m.ChannelName, &m.ChannelType, &m.ChannelPriority, &m.ChannelStatus)
 	if err != nil {
@@ -209,6 +261,9 @@ func (r *ModelRepo) GetByID(id int64) (*Model, error) {
 	}
 	m.Protocols = parseProtocols(protocolsStr)
 	m.ProtocolURLs = parseProtocolURLs(protocolURLsStr)
+	m.Capabilities = parseStringList(capabilitiesStr)
+	m.InputModalities = parseStringList(inputModalitiesStr)
+	m.OutputModalities = parseStringList(outputModalitiesStr)
 	return m, nil
 }
 
@@ -254,6 +309,17 @@ func parseProtocolURLs(s string) map[string]string {
 	return urls
 }
 
+func parseStringList(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var values []string
+	if json.Unmarshal([]byte(s), &values) != nil {
+		return nil
+	}
+	return values
+}
+
 // Upsert 插入或更新模型（同步时使用）
 // INSERT 时设置完整元信息，ON CONFLICT 仅更新 display_name（如原值等于 model_id 说明未手动修改过）
 // 其他字段（context_window / pricing / supports_*）保护手动编辑不被同步覆盖
@@ -261,12 +327,15 @@ func parseProtocolURLs(s string) map[string]string {
 func (r *ModelRepo) Upsert(m *Model) (int64, error) {
 	protocolsJSON, _ := json.Marshal(m.Protocols)
 	protocolURLsJSON, _ := json.Marshal(m.ProtocolURLs)
+	capabilitiesJSON, _ := json.Marshal(m.Capabilities)
+	inputModalitiesJSON, _ := json.Marshal(m.InputModalities)
+	outputModalitiesJSON, _ := json.Marshal(m.OutputModalities)
 	result, err := r.db.Exec(
 		`INSERT INTO models (channel_id, model_id, display_name, context_window, max_output_tokens,
 		                     supports_vision, supports_thinking, supports_tools,
 		                     pricing_input, pricing_output, pricing_cache_read, pricing_cache_write, pricing_rules,
-		                     protocols, protocol_urls, status)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                     protocols, protocol_urls, capabilities, input_modalities, output_modalities, status)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(channel_id, model_id) DO UPDATE SET
 		   display_name = CASE WHEN display_name = model_id THEN ? ELSE display_name END,
 		   context_window = CASE WHEN user_modified = 0 THEN ? ELSE context_window END,
@@ -281,16 +350,19 @@ func (r *ModelRepo) Upsert(m *Model) (int64, error) {
 		   pricing_rules = CASE WHEN user_modified = 0 THEN ? ELSE pricing_rules END,
 		   protocols = CASE WHEN user_modified = 0 THEN ? ELSE protocols END,
 		   protocol_urls = CASE WHEN user_modified = 0 THEN ? ELSE protocol_urls END,
+		   capabilities = CASE WHEN user_modified = 0 THEN ? ELSE capabilities END,
+		   input_modalities = CASE WHEN user_modified = 0 THEN ? ELSE input_modalities END,
+		   output_modalities = CASE WHEN user_modified = 0 THEN ? ELSE output_modalities END,
 		   updated_at = CURRENT_TIMESTAMP`,
 		m.ChannelID, m.ModelID, m.DisplayName, m.ContextWindow, m.MaxOutputTokens,
 		m.SupportsVision, m.SupportsThinking, m.SupportsTools,
 		m.PricingInput, m.PricingOutput, m.PricingCacheRead, m.PricingCacheWrite, m.PricingRules,
-		protocolsJSON, protocolURLsJSON, m.Status,
+		protocolsJSON, protocolURLsJSON, capabilitiesJSON, inputModalitiesJSON, outputModalitiesJSON, m.Status,
 		m.DisplayName,
 		m.ContextWindow, m.MaxOutputTokens,
 		m.SupportsVision, m.SupportsThinking, m.SupportsTools,
 		m.PricingInput, m.PricingOutput, m.PricingCacheRead, m.PricingCacheWrite,
-		m.PricingRules, protocolsJSON, protocolURLsJSON,
+		m.PricingRules, protocolsJSON, protocolURLsJSON, capabilitiesJSON, inputModalitiesJSON, outputModalitiesJSON,
 	)
 	if err != nil {
 		return 0, err
@@ -301,16 +373,19 @@ func (r *ModelRepo) Upsert(m *Model) (int64, error) {
 func (r *ModelRepo) Update(m *Model) error {
 	protocolsJSON, _ := json.Marshal(m.Protocols)
 	protocolURLsJSON, _ := json.Marshal(m.ProtocolURLs)
+	capabilitiesJSON, _ := json.Marshal(m.Capabilities)
+	inputModalitiesJSON, _ := json.Marshal(m.InputModalities)
+	outputModalitiesJSON, _ := json.Marshal(m.OutputModalities)
 	_, err := r.db.Exec(
 		`UPDATE models SET display_name=?, context_window=?, max_output_tokens=?,
 		 supports_vision=?, supports_thinking=?, supports_tools=?,
 		 pricing_input=?, pricing_output=?, pricing_cache_read=?, pricing_cache_write=?,
-		 pricing_rules=?, protocols=?, protocol_urls=?,
+			pricing_rules=?, protocols=?, protocol_urls=?, capabilities=?, input_modalities=?, output_modalities=?,
 		 status=?, user_modified=1, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
 		m.DisplayName, m.ContextWindow, m.MaxOutputTokens,
 		m.SupportsVision, m.SupportsThinking, m.SupportsTools,
 		m.PricingInput, m.PricingOutput, m.PricingCacheRead, m.PricingCacheWrite,
-		m.PricingRules, protocolsJSON, protocolURLsJSON,
+		m.PricingRules, protocolsJSON, protocolURLsJSON, capabilitiesJSON, inputModalitiesJSON, outputModalitiesJSON,
 		m.Status, m.ID,
 	)
 	return err
@@ -368,6 +443,9 @@ type ModelExportItem struct {
 	SupportsVision    bool            `json:"supports_vision,omitempty"`
 	SupportsThinking  bool            `json:"supports_thinking,omitempty"`
 	SupportsTools     bool            `json:"supports_tools,omitempty"`
+	Capabilities      []string        `json:"capabilities,omitempty"`
+	InputModalities   []string        `json:"input_modalities,omitempty"`
+	OutputModalities  []string        `json:"output_modalities,omitempty"`
 	PricingInput      float64         `json:"pricing_input,omitempty"`
 	PricingOutput     float64         `json:"pricing_output,omitempty"`
 	PricingCacheRead  float64         `json:"pricing_cache_read,omitempty"`
@@ -387,6 +465,9 @@ type BatchEditFields struct {
 	SupportsVision    *bool
 	SupportsThinking  *bool
 	SupportsTools     *bool
+	Capabilities      *[]string
+	InputModalities   *[]string
+	OutputModalities  *[]string
 }
 
 // ExportJSON 导出所有模型为 JSON
@@ -409,6 +490,9 @@ func (r *ModelRepo) ExportJSON() ([]byte, error) {
 			SupportsVision:    m.SupportsVision,
 			SupportsThinking:  m.SupportsThinking,
 			SupportsTools:     m.SupportsTools,
+			Capabilities:      append([]string(nil), m.Capabilities...),
+			InputModalities:   append([]string(nil), m.InputModalities...),
+			OutputModalities:  append([]string(nil), m.OutputModalities...),
 			PricingInput:      m.PricingInput,
 			PricingOutput:     m.PricingOutput,
 			PricingCacheRead:  m.PricingCacheRead,
@@ -452,6 +536,9 @@ func (r *ModelRepo) ImportJSON(items []ModelExportItem, overwriteUserModified bo
 			existing.SupportsVision = item.SupportsVision
 			existing.SupportsThinking = item.SupportsThinking
 			existing.SupportsTools = item.SupportsTools
+			existing.Capabilities = append([]string(nil), item.Capabilities...)
+			existing.InputModalities = append([]string(nil), item.InputModalities...)
+			existing.OutputModalities = append([]string(nil), item.OutputModalities...)
 			existing.PricingInput = item.PricingInput
 			existing.PricingOutput = item.PricingOutput
 			existing.PricingCacheRead = item.PricingCacheRead
@@ -530,6 +617,21 @@ func (r *ModelRepo) BatchEdit(ids []int64, fields BatchEditFields) error {
 	if fields.SupportsTools != nil {
 		setClauses = append(setClauses, "supports_tools = ?")
 		args = append(args, *fields.SupportsTools)
+	}
+	if fields.Capabilities != nil {
+		encoded, _ := json.Marshal(*fields.Capabilities)
+		setClauses = append(setClauses, "capabilities = ?")
+		args = append(args, encoded)
+	}
+	if fields.InputModalities != nil {
+		encoded, _ := json.Marshal(*fields.InputModalities)
+		setClauses = append(setClauses, "input_modalities = ?")
+		args = append(args, encoded)
+	}
+	if fields.OutputModalities != nil {
+		encoded, _ := json.Marshal(*fields.OutputModalities)
+		setClauses = append(setClauses, "output_modalities = ?")
+		args = append(args, encoded)
 	}
 	if len(setClauses) == 0 {
 		return nil

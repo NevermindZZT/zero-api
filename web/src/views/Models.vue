@@ -18,6 +18,7 @@ const editing = ref<any>(null)
 const form = ref({
   display_name: '', context_window: 0, max_output_tokens: 0,
   supports_vision: false, supports_thinking: false, supports_tools: false,
+  capabilities: [] as string[], input_modalities: [] as string[], output_modalities: [] as string[],
   pricing_input: 0, pricing_output: 0,
   pricing_cache_read: 0, pricing_cache_write: 0, status: 'active',
   pricing_rules: '[]',
@@ -296,6 +297,8 @@ const columns = [
       if (r.supports_vision) tags.push(h(NTag, { size: 'tiny', type: 'info', bordered: false }, () => '视觉'))
       if (r.supports_thinking) tags.push(h(NTag, { size: 'tiny', type: 'warning', bordered: false }, () => '思考'))
       if (r.supports_tools) tags.push(h(NTag, { size: 'tiny', type: 'success', bordered: false }, () => '工具'))
+      if ((r.capabilities || []).includes('image_generation')) tags.push(h(NTag, { size: 'tiny', type: 'info', bordered: false }, () => '生图'))
+      if ((r.capabilities || []).includes('image_editing')) tags.push(h(NTag, { size: 'tiny', type: 'warning', bordered: false }, () => '修图'))
       return tags.length
         ? h('div', { style: 'display:flex;flex-direction:column;gap:2px' }, tags)
         : '-'
@@ -374,6 +377,9 @@ function editModel(m: any) {
     supports_vision: !!m.supports_vision,
     supports_thinking: !!m.supports_thinking,
     supports_tools: !!m.supports_tools,
+    capabilities: m.capabilities || [],
+    input_modalities: m.input_modalities || [],
+    output_modalities: m.output_modalities || [],
     pricing_input: m.pricing_input,
     pricing_output: m.pricing_output,
     pricing_cache_read: m.pricing_cache_read || 0,
@@ -549,6 +555,19 @@ async function batchAction(action: string) {
           </NFormItem>
           <NFormItem label="支持工具">
             <NSwitch v-model:value="form.supports_tools" />
+          </NFormItem>
+          <NFormItem label="统一能力">
+            <NSelect v-model:value="form.capabilities" multiple :options="[
+              { label: '对话', value: 'chat' },
+              { label: 'Responses', value: 'responses' },
+              { label: '视觉理解', value: 'vision' },
+              { label: '思考', value: 'thinking' },
+              { label: '工具调用', value: 'tool_calling' },
+              { label: '图片生成', value: 'image_generation' },
+              { label: '图片编辑', value: 'image_editing' },
+              { label: '音频输入', value: 'audio_input' },
+              { label: '音频输出', value: 'audio_output' },
+            ]" placeholder="选择模型能力" />
           </NFormItem>
 
           <NFormItem label="支持的协议">

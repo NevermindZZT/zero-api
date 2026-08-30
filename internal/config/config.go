@@ -42,6 +42,9 @@ type ModelDefault struct {
 	SupportsThinking  bool          `yaml:"supports_thinking" json:"supports_thinking"`
 	SupportsTools     bool          `yaml:"supports_tools" json:"supports_tools"`
 	Protocols         []string      `yaml:"protocols,omitempty" json:"protocols,omitempty"` // 支持的协议列表
+	Capabilities      []string      `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
+	InputModalities   []string      `yaml:"input_modalities,omitempty" json:"input_modalities,omitempty"`
+	OutputModalities  []string      `yaml:"output_modalities,omitempty" json:"output_modalities,omitempty"`
 	PricingInput      float64       `yaml:"pricing_input" json:"pricing_input"`
 	PricingOutput     float64       `yaml:"pricing_output" json:"pricing_output"`
 	PricingCacheRead  float64       `yaml:"pricing_cache_read" json:"pricing_cache_read"`

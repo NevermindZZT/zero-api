@@ -40,14 +40,17 @@ type Adapter interface {
 
 // ModelInfo 上游模型信息
 type ModelInfo struct {
-	ID              string   `json:"id"`
-	Name            string   `json:"name"`
-	ContextWindow   int      `json:"context_window"`
-	MaxOutputTokens int      `json:"max_output_tokens"`
-	SupportsVision  bool     `json:"supports_vision"`
-	SupportsThinking bool    `json:"supports_thinking"`
-	SupportsTools   bool     `json:"supports_tools"`
-	Protocols       []string `json:"protocols"` // 模型支持的协议列表（可选，空 = 继承渠道 type）
+	ID               string   `json:"id"`
+	Name             string   `json:"name"`
+	ContextWindow    int      `json:"context_window"`
+	MaxOutputTokens  int      `json:"max_output_tokens"`
+	SupportsVision   bool     `json:"supports_vision"`
+	SupportsThinking bool     `json:"supports_thinking"`
+	SupportsTools    bool     `json:"supports_tools"`
+	Protocols        []string `json:"protocols"`    // 模型支持的协议列表（可选，空 = 继承渠道 type）
+	Capabilities     []string `json:"capabilities"` // image_generation/image_editing 等统一能力
+	InputModalities  []string `json:"input_modalities"`
+	OutputModalities []string `json:"output_modalities"`
 }
 
 // NewAdapter 根据渠道类型创建适配器
