@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -157,6 +160,61 @@ func (h *CPAHandler) SaveConfig(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, cfg)
+}
+
+// ManagementKey 获取 CLIProxyAPI 原始 Management Key。
+// 该密钥只提供给已经通过 zero-api 管理认证的管理员，用于登录本机原生管理面板；
+// config.yaml 中显示的 bcrypt 字符串不是可直接登录的密钥。
+func (h *CPAHandler) ManagementKey(c *gin.Context) {
+	key, err := h.cfgRepo.EnsureManagementKey()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取 CPA Management Key 失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"management_key": key})
+}
+
+// NativeManagementPanel 反向代理 CLIProxyAPI 原生管理面板。
+// 浏览器只访问 zero-api 暴露的同源路径，避免 Docker 场景下直接访问 sidecar 内网地址。
+func (h *CPAHandler) NativeManagementPanel(c *gin.Context) {
+	cfg, err := h.cfgRepo.Get()
+	if err != nil || cfg == nil || cfg.Port <= 0 {
+		c.String(http.StatusServiceUnavailable, "CPA 配置不可用")
+		return
+	}
+	baseURL := &url.URL{Scheme: "http", Host: "127.0.0.1:" + fmt.Sprint(cfg.Port)}
+	proxy := httputil.NewSingleHostReverseProxy(baseURL)
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		req.URL.Path = "/management.html"
+		req.URL.RawPath = ""
+	}
+	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, proxyErr error) {
+		http.Error(w, "CPA 原生管理面板暂不可用: "+proxyErr.Error(), http.StatusBadGateway)
+	}
+	proxy.ServeHTTP(c.Writer, c.Request)
+}
+
+// NativeManagementResource 代理原生管理面板的 API 和静态资源。
+func (h *CPAHandler) NativeManagementResource(c *gin.Context) {
+	cfg, err := h.cfgRepo.Get()
+	if err != nil || cfg == nil || cfg.Port <= 0 {
+		c.String(http.StatusServiceUnavailable, "CPA 配置不可用")
+		return
+	}
+	baseURL := &url.URL{Scheme: "http", Host: "127.0.0.1:" + fmt.Sprint(cfg.Port)}
+	proxy := httputil.NewSingleHostReverseProxy(baseURL)
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		req.URL.Path = "/v0/management" + c.Param("path")
+		req.URL.RawPath = ""
+	}
+	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, proxyErr error) {
+		http.Error(w, "CPA 原生管理请求失败: "+proxyErr.Error(), http.StatusBadGateway)
+	}
+	proxy.ServeHTTP(c.Writer, c.Request)
 }
 
 // Status 获取 sidecar 状态

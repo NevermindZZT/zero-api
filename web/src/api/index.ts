@@ -239,6 +239,7 @@ export const mcpApi = {
 export const cpaApi = {
   getConfig: () => api.get('/cpa'),
   saveConfig: (data: any) => api.put('/cpa', data),
+  managementKey: () => api.get('/cpa/management-key'),
   status: () => api.get('/cpa/status'),
   quota: (refresh = false) => api.get('/cpa/quota', { params: refresh ? { refresh: true } : undefined, timeout: 120000 }),
   start: () => api.post('/cpa/start'),

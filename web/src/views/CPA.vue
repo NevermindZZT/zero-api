@@ -5,6 +5,7 @@ import {
   NSpin, NSpace, NSwitch, NTag, useMessage,
 } from 'naive-ui'
 import { cpaApi } from '@/api'
+import { copyToClipboard } from '@/utils/clipboard'
 
 const message = useMessage()
 const loading = ref(true)
@@ -17,14 +18,16 @@ const status = ref<any>({})
 const update = ref<any>({})
 const quota = ref<any>(null)
 const quotaBusy = ref(false)
+const managementKey = ref('')
 let timer: ReturnType<typeof setInterval> | undefined
 let quotaTimer: ReturnType<typeof setInterval> | undefined
 
 async function load() {
   try {
-    const [cfg, state] = await Promise.all([cpaApi.getConfig(), cpaApi.status()])
+    const [cfg, state, key] = await Promise.all([cpaApi.getConfig(), cpaApi.status(), cpaApi.managementKey()])
     config.value = { ...config.value, ...cfg.data }
     status.value = state.data
+    managementKey.value = key.data.management_key || ''
   } catch (error: any) {
     message.error(error.response?.data?.error || '读取 CPA 配置失败')
   } finally {
@@ -69,6 +72,26 @@ function resetLabel(window: any): string {
 
 function quotaWindows(account: any): any[] {
   return [account.five_hour, account.weekly].filter(Boolean)
+}
+
+function nativeManagementURL(): string {
+  return `${window.location.origin}/cpa-native/management.html#/login`
+}
+
+function openNativeManagement() {
+  if (!managementKey.value) {
+    message.error('Management Key 尚未加载，请刷新页面后重试')
+    return
+  }
+
+  // 复制必须直接发生在用户点击事件中；等待异步 API 后再复制会丢失浏览器授权。
+  void copyToClipboard(managementKey.value).then((copied) => {
+    if (copied) message.success('正确的 Management Key 已复制，请在原生面板中粘贴登录')
+    else message.error('复制失败，请检查浏览器剪贴板权限')
+  })
+
+  const opened = window.open(nativeManagementURL(), '_blank')
+  if (!opened) message.warning('浏览器阻止了新窗口，请允许弹出窗口后重试')
 }
 
 async function save() {
@@ -151,7 +174,11 @@ onUnmounted(() => {
           <NButton :loading="busy" :disabled="!status.running" @click="action('restart')">重启</NButton>
           <NButton type="warning" :loading="busy" :disabled="!status.running" @click="action('stop')">停止</NButton>
           <NButton :loading="busy" @click="refreshStatus">刷新状态</NButton>
+          <NButton secondary :disabled="!status.bin_exists" @click="openNativeManagement">打开原生管理面板</NButton>
         </NSpace>
+        <div class="management-hint">
+          原生面板由 CLIProxyAPI 提供，可管理认证文件、提供商 API Key、模型别名、日志和运行时配置。
+        </div>
       </NCard>
 
       <NCard title="订阅额度" :segmented="{ content: true }">
@@ -250,6 +277,7 @@ onUnmounted(() => {
 
 <style scoped>
 .status-row { display: flex; align-items: center; gap: 16px; color: var(--text-secondary); flex-wrap: wrap; }
+.management-hint { margin-top: 12px; color: var(--text-secondary); font-size: 12px; }
 .paths { display: grid; gap: 10px; }
 .paths > div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 12px; align-items: baseline; }
 .paths span { color: var(--text-secondary); }

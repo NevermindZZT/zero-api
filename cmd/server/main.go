@@ -209,6 +209,7 @@ func main() {
 		// CLIProxyAPI sidecar 管理
 		api.GET("/cpa", cpaH.GetConfig)
 		api.PUT("/cpa", cpaH.SaveConfig)
+		api.GET("/cpa/management-key", cpaH.ManagementKey)
 		api.GET("/cpa/status", cpaH.Status)
 		api.GET("/cpa/quota", cpaH.Quota)
 		api.POST("/cpa/start", cpaH.Start)
@@ -274,6 +275,10 @@ func main() {
 		v1.POST("/moderations", proxyH.PassthroughEndpoint)
 		v1.POST("/batches", proxyH.PassthroughEndpoint)
 	}
+
+	// CLIProxyAPI 原生管理面板代理：浏览器访问 zero-api 地址，适配 Docker 中 sidecar 仅绑定容器内地址的场景。
+	r.GET("/cpa-native/management.html", cpaH.NativeManagementPanel)
+	r.Any("/v0/management/*path", cpaH.NativeManagementResource)
 
 	// 前端静态文件（SPA 路由兜底）
 	webSubFS, err := fs.Sub(webFS, "web/dist")
