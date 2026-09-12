@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"strings"
@@ -338,11 +340,14 @@ func (h *ProxyHandler) PassthroughEndpoint(c *gin.Context) {
 	}
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-	// 解析请求体获取模型名
-	var reqBody struct {
-		Model string `json:"model"`
+	// 解析请求体获取模型名。JSON 接口从顶层字段读取；文件上传接口
+	// 使用 multipart/form-data，model 位于普通表单字段中。
+	model, err := passthroughRequestModel(c.Request.Header.Get("Content-Type"), bodyBytes)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
-	if err := json.Unmarshal(bodyBytes, &reqBody); err != nil || reqBody.Model == "" {
+	if model == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 model 字段"})
 		return
 	}
@@ -356,7 +361,7 @@ func (h *ProxyHandler) PassthroughEndpoint(c *gin.Context) {
 	apiKeyID := &apiKey.ID
 
 	// 模型访问校验（allowed_models 限制）
-	if err := h.checkAPIKeyModelAccess(apiKey, reqBody.Model); err != nil {
+	if err := h.checkAPIKeyModelAccess(apiKey, model); err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
 	}
@@ -370,7 +375,7 @@ func (h *ProxyHandler) PassthroughEndpoint(c *gin.Context) {
 	// 查找启用的匹配模型（仅支持 openai 协议的模型支持功能类接口透传）
 	var candidates []*store.Model
 	for i, m := range allModels {
-		if m.ModelID == reqBody.Model && m.Status == "active" {
+		if m.ModelID == model && m.Status == "active" {
 			ch, cerr := h.channelRepo.GetByID(m.ChannelID)
 			if cerr != nil || ch.Status != "active" || !m.SupportsProtocol("openai", ch.Type) {
 				continue
@@ -383,7 +388,7 @@ func (h *ProxyHandler) PassthroughEndpoint(c *gin.Context) {
 		}
 	}
 	if len(candidates) == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("模型 %s 未找到、未启用或渠道类型不支持功能类接口（需 OpenAI 兼容渠道）", reqBody.Model)})
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("模型 %s 未找到、未启用或渠道类型不支持功能类接口（需 OpenAI 兼容渠道）", model)})
 		return
 	}
 
@@ -402,21 +407,57 @@ func (h *ProxyHandler) PassthroughEndpoint(c *gin.Context) {
 			continue
 		}
 
-		if err := h.tryForwardPassthrough(c, bodyBytes, matchedModel, ch, apiKeyID, requestTimeout, proxyConfig); err == nil {
+		if err := h.tryForwardPassthrough(c, bodyBytes, c.Request.Header.Get("Content-Type"), matchedModel, ch, apiKeyID, requestTimeout, proxyConfig); err == nil {
 			h.breaker.RecordSuccess(ch.ID)
 			return
 		} else {
 			lastErr = err
 			h.breaker.RecordFailure(ch.ID)
-			log.Printf("[透传] 模型 %s 渠道 %s 失败，尝试下一渠道: %v", reqBody.Model, ch.Name, err)
+			log.Printf("[透传] 模型 %s 渠道 %s 失败，尝试下一渠道: %v", model, ch.Name, err)
 		}
 	}
 
 	c.JSON(http.StatusBadGateway, gin.H{"error": fmt.Sprintf("所有渠道均失败: %v", lastErr)})
 }
 
+// passthroughRequestModel extracts the model field without altering the original body.
+func passthroughRequestModel(contentType string, body []byte) (string, error) {
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return "", fmt.Errorf("无效的 Content-Type: %w", err)
+	}
+
+	switch strings.ToLower(mediaType) {
+	case "application/json":
+		var reqBody struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(body, &reqBody); err != nil {
+			return "", fmt.Errorf("请求 JSON 格式无效: %w", err)
+		}
+		return strings.TrimSpace(reqBody.Model), nil
+	case "multipart/form-data":
+		boundary := params["boundary"]
+		if boundary == "" {
+			return "", errors.New("multipart 请求缺少 boundary")
+		}
+		form, err := multipart.NewReader(bytes.NewReader(body), boundary).ReadForm(32 << 20)
+		if err != nil {
+			return "", fmt.Errorf("解析 multipart 请求失败: %w", err)
+		}
+		defer form.RemoveAll()
+		values := form.Value["model"]
+		if len(values) == 0 {
+			return "", nil
+		}
+		return strings.TrimSpace(values[0]), nil
+	default:
+		return "", fmt.Errorf("不支持的请求 Content-Type: %s", mediaType)
+	}
+}
+
 // tryForwardPassthrough 功能类接口透传：请求体原样转发，响应原样返回
-func (h *ProxyHandler) tryForwardPassthrough(c *gin.Context, bodyBytes []byte, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, requestTimeout time.Duration, proxyConfig *store.ProxyConfigData) error {
+func (h *ProxyHandler) tryForwardPassthrough(c *gin.Context, bodyBytes []byte, contentType string, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, requestTimeout time.Duration, proxyConfig *store.ProxyConfigData) error {
 	adapt := adapter.NewAdapter(ch.Type)
 
 	// 功能类接口上游 URL 与聊天不同：/v1/embeddings、/v1/images/... 等
@@ -442,7 +483,10 @@ func (h *ProxyHandler) tryForwardPassthrough(c *gin.Context, bodyBytes []byte, m
 	if err != nil {
 		return fmt.Errorf("构造上游请求失败: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if contentType == "" {
+		return errors.New("请求缺少 Content-Type")
+	}
+	req.Header.Set("Content-Type", contentType)
 
 	// 认证头
 	if ch.APIKey != "" {
