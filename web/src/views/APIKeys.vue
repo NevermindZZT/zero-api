@@ -26,15 +26,28 @@ const editingKey = ref<any>(null)
 const configForm = ref({ quota_enabled: false, quota_balance: 0, allowed_models: [] as string[] })
 const savingConfig = ref(false)
 const allModels = ref<string[]>([])
+const virtualModels = ref<string[]>([])
 
-// 解析模型列表
+// 解析模型列表，并去除历史配置中的重复项
 function parseModels(s: string | undefined): string[] {
   if (!s || s === '[]' || s === 'null') return []
-  try { return JSON.parse(s) } catch { return [] }
+  try {
+    const models = JSON.parse(s)
+    return Array.isArray(models) ? [...new Set(models.filter((m): m is string => typeof m === 'string' && m.trim() !== ''))] : []
+  } catch { return [] }
 }
 
-// 模型选择选项
-const modelOptions = computed(() => allModels.value.map((m) => ({ label: m, value: m })))
+// 模型选择选项：渠道模型按 model_id 去重，同时加入启用的虚拟模型
+const modelOptions = computed(() => {
+  const options = allModels.value.map((m) => ({ label: m, value: m }))
+  const existing = new Set(options.map((item) => item.value))
+  for (const model of virtualModels.value) {
+    if (!existing.has(model)) {
+      options.push({ label: `${model}（虚拟模型）`, value: model })
+    }
+  }
+  return options
+})
 
 onMounted(async () => {
   apiBase.value = window.location.origin + '/v1'
@@ -80,9 +93,18 @@ function now() {
 // 加载全部模型供选择
 async function loadModels() {
   try {
-    const res = await api.get('/models')
-    const ids = (res.data || []).map((m: any) => m.model_id)
-    allModels.value = ids
+    const [modelsRes, virtualModelsRes] = await Promise.all([
+      api.get('/models'),
+      api.get('/virtual-models'),
+    ])
+    const ids: string[] = (modelsRes.data || [])
+      .filter((m: any) => m.status === 'active' && m.model_id)
+      .map((m: any) => String(m.model_id))
+    allModels.value = Array.from(new Set<string>(ids))
+    const virtualIds: string[] = (virtualModelsRes.data || [])
+      .filter((m: any) => m.status === 'active' && m.name)
+      .map((m: any) => String(m.name))
+    virtualModels.value = Array.from(new Set<string>(virtualIds))
   } catch { /* ignore */ }
 }
 
