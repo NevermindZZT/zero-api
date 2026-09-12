@@ -7,8 +7,10 @@ const message = useMessage()
 const provider = ref('codex')
 const device = ref(false)
 const noBrowser = ref(false)
+const managementMode = ref(true)
 const busy = ref(false)
 const auth = ref<any>({ auth_files: [] })
+const managementAuth = ref<any>(null)
 let timer: ReturnType<typeof setInterval> | undefined
 
 const providers = [
@@ -26,9 +28,20 @@ async function refresh() {
 async function start() {
   busy.value = true
   try {
-    await cpaApi.startAuth(provider.value, device.value, noBrowser.value)
-    message.success('登录流程已启动，请按输出提示完成授权')
-    await refresh()
+    if (managementMode.value) {
+      if (device.value) {
+        message.warning('Management API 不支持设备码，将切换为普通 OAuth 登录')
+        device.value = false
+      }
+      const result = (await cpaApi.startManagementAuth(provider.value)).data
+      managementAuth.value = result
+      window.open(result.url, '_blank', 'noopener,noreferrer')
+      message.success('授权页面已打开，完成授权后请等待状态更新')
+    } else {
+      await cpaApi.startAuth(provider.value, device.value, noBrowser.value)
+      message.success('登录流程已启动，请按输出提示完成授权')
+      await refresh()
+    }
   } catch (error: any) {
     message.error(error.response?.data?.error || '启动登录失败')
   } finally { busy.value = false }
@@ -37,15 +50,39 @@ async function start() {
 async function stop() {
   busy.value = true
   try {
-    await cpaApi.stopAuth()
-    message.info('登录流程已取消')
-    await refresh()
+    if (managementAuth.value?.state) {
+      managementAuth.value = null
+      message.info('已停止等待当前 Management API 登录状态')
+    } else {
+      await cpaApi.stopAuth()
+      message.info('登录流程已取消')
+      await refresh()
+    }
   } catch (error: any) {
     message.error(error.response?.data?.error || '取消登录失败')
   } finally { busy.value = false }
 }
 
-onMounted(() => { refresh(); timer = setInterval(refresh, 2000) })
+async function refreshManagementAuth() {
+  if (!managementAuth.value?.state) return
+  try {
+    const result = (await cpaApi.managementAuthStatus(managementAuth.value.state)).data
+    managementAuth.value = { ...managementAuth.value, ...result }
+    if (result.status === 'ok') message.success('OAuth 登录成功，认证文件已保存')
+    if (result.status === 'error') message.error(result.error || 'OAuth 登录失败')
+    if (result.status === 'ok' || result.status === 'error') managementAuth.value = null
+  } catch { /* preserve current OAuth state */ }
+}
+
+function openManagementAuth() {
+  const url = managementAuth.value?.url
+  if (url) window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+onMounted(() => {
+  refresh()
+  timer = setInterval(() => { refresh(); refreshManagementAuth() }, 2000)
+})
 onUnmounted(() => { if (timer) clearInterval(timer) })
 </script>
 
@@ -70,9 +107,13 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
 
     <NCard title="添加订阅账号">
       <NSpace vertical size="large">
-        <NSelect v-model:value="provider" :options="providers" :disabled="auth.running" />
+        <NSelect v-model:value="provider" :options="providers" :disabled="auth.running || !!managementAuth" />
         <NSpace align="center" wrap>
-          <NSwitch v-model:value="device" :disabled="provider !== 'codex' || auth.running" />
+          <NSwitch v-model:value="managementMode" :disabled="auth.running || !!managementAuth" />
+          <span>使用 CPA Management API 登录（不需要 OAuth 回调端口）</span>
+        </NSpace>
+        <NSpace align="center" wrap>
+          <NSwitch v-model:value="device" :disabled="provider !== 'codex' || auth.running || !!managementAuth || managementMode" />
           <span>Codex 使用设备码登录</span>
         </NSpace>
         <NSpace align="center" wrap>
@@ -80,11 +121,22 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           <span>不自动打开浏览器</span>
         </NSpace>
         <NSpace>
-          <NButton type="primary" :loading="busy" :disabled="auth.running" @click="start">开始登录</NButton>
-          <NButton type="warning" :loading="busy" :disabled="!auth.running" @click="stop">取消登录</NButton>
+          <NButton type="primary" :loading="busy" :disabled="auth.running || !!managementAuth" @click="start">开始登录</NButton>
+          <NButton type="warning" :loading="busy" :disabled="!auth.running && !managementAuth" @click="stop">取消登录</NButton>
           <NButton :loading="busy" @click="refresh">刷新状态</NButton>
         </NSpace>
       </NSpace>
+    </NCard>
+
+    <NCard v-if="managementAuth" title="Management API 登录">
+      <NSpace align="center" wrap>
+        <NTag type="warning">等待 {{ managementAuth.provider }} OAuth 回调</NTag>
+        <span v-if="managementAuth.state">state: {{ managementAuth.state }}</span>
+      </NSpace>
+      <NAlert type="info" style="margin-top:16px">
+        授权页面的回调会先进入 zero-api 的 8080 端口，再由 CPA Management API 处理；无需暴露 1455、54545 或 51121，也无需 SSH 转发。
+      </NAlert>
+      <NButton v-if="managementAuth.url" style="margin-top:16px" @click="openManagementAuth">重新打开授权页面</NButton>
     </NCard>
 
     <NCard title="当前登录流程">

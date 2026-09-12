@@ -254,4 +254,8 @@ export const cpaApi = {
   startAuth: (provider: string, device = false, noBrowser = false) =>
     api.post('/cpa/auth/login', { provider, device, no_browser: noBrowser }),
   stopAuth: () => api.post('/cpa/auth/stop'),
+  startManagementAuth: (provider: string) =>
+    api.post('/cpa/auth/management/start', { provider }),
+  managementAuthStatus: (state: string) =>
+    api.get('/cpa/auth/management/status', { params: { state } }),
 }

@@ -73,11 +73,13 @@ func main() {
 	}
 	cpaManager := cpa.NewManager(cpaDataDir, cpaHost, cpaPort)
 	cpaH := handler.NewCPAHandler(svc.CPAConfig, cpaManager)
-	// Quota service uses the separate Management Key and never reads Codex access tokens.
+	// Management API 使用独立密钥，既用于额度查询，也用于无命令行的 OAuth 登录。
 	if managementKey, keyErr := svc.CPAConfig.EnsureManagementKey(); keyErr != nil {
 		log.Printf("[CPA] 初始化 Management Key 失败: %v", keyErr)
 	} else {
-		cpaH.SetQuotaService(cpa.NewQuotaService(cpa.NewManagementClient(cpaHost, cpaPort, managementKey)))
+		managementClient := cpa.NewManagementClient(cpaHost, cpaPort, managementKey)
+		cpaH.SetManagementClient(managementClient)
+		cpaH.SetQuotaService(cpa.NewQuotaService(managementClient))
 	}
 	if cpaCfg != nil {
 		if err := cpaH.PrepareConfig(); err != nil {
@@ -217,6 +219,8 @@ func main() {
 		api.GET("/cpa/auth/status", cpaH.AuthStatus)
 		api.POST("/cpa/auth/login", cpaH.StartAuth)
 		api.POST("/cpa/auth/stop", cpaH.StopAuth)
+		api.POST("/cpa/auth/management/start", cpaH.StartManagementAuth)
+		api.GET("/cpa/auth/management/status", cpaH.ManagementAuthStatus)
 
 		// MCP 配置
 		api.GET("/mcp/status", mcpCfgH.GetMCPStatus)

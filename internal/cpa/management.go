@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -55,6 +56,44 @@ type AuthFile struct {
 	Status      string         `json:"status"`
 	Error       string         `json:"error,omitempty"`
 	Raw         map[string]any `json:"-"`
+}
+
+// OAuthURLResponse 是 Management API OAuth 登录启动结果。
+type OAuthURLResponse struct {
+	Status string `json:"status"`
+	URL    string `json:"url"`
+	State  string `json:"state"`
+	Flow   string `json:"flow,omitempty"`
+}
+
+// OAuthStatusResponse 是 Management API OAuth 会话状态。
+type OAuthStatusResponse struct {
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+// StartOAuth 通过 CLIProxyAPI Management API 启动 OAuth 流程。
+// provider 使用 CLIProxyAPI 的名称：anthropic、codex、antigravity、kimi、xai。
+func (m *ManagementClient) StartOAuth(ctx context.Context, provider string) (*OAuthURLResponse, error) {
+	var response OAuthURLResponse
+	path := fmt.Sprintf("/v0/management/%s-auth-url?is_webui=true", url.PathEscape(strings.TrimSpace(provider)))
+	if err := m.getJSON(ctx, path, &response); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(response.URL) == "" || strings.TrimSpace(response.State) == "" {
+		return nil, fmt.Errorf("CPA Management API 返回了无效 OAuth 会话")
+	}
+	return &response, nil
+}
+
+// OAuthStatus 查询 CLIProxyAPI Management API OAuth 会话状态。
+func (m *ManagementClient) OAuthStatus(ctx context.Context, state string) (*OAuthStatusResponse, error) {
+	var response OAuthStatusResponse
+	path := "/v0/management/get-auth-status?state=" + url.QueryEscape(strings.TrimSpace(state))
+	if err := m.getJSON(ctx, path, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
 }
 
 func (m *ManagementClient) GetAuthFiles(ctx context.Context) ([]AuthFile, error) {

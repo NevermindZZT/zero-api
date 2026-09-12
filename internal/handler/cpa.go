@@ -11,9 +11,10 @@ import (
 
 // CPAHandler CLIProxyAPI sidecar 管理
 type CPAHandler struct {
-	cfgRepo *store.CPAConfigRepo
-	manager *cpa.Manager
-	quota   *cpa.QuotaService
+	cfgRepo    *store.CPAConfigRepo
+	manager    *cpa.Manager
+	quota      *cpa.QuotaService
+	management *cpa.ManagementClient
 }
 
 type loginRequest struct {
@@ -26,9 +27,67 @@ func NewCPAHandler(cfgRepo *store.CPAConfigRepo, manager *cpa.Manager) *CPAHandl
 	return &CPAHandler{cfgRepo: cfgRepo, manager: manager}
 }
 
+// SetManagementClient 注入 CLIProxyAPI Management API 客户端。
+func (h *CPAHandler) SetManagementClient(client *cpa.ManagementClient) {
+	h.management = client
+}
+
 // SetQuotaService 注入 Codex/其他 provider 额度服务。
 func (h *CPAHandler) SetQuotaService(service *cpa.QuotaService) {
 	h.quota = service
+}
+
+func managementOAuthProvider(provider string) string {
+	switch provider {
+	case "claude":
+		return "anthropic"
+	case "grok":
+		return "xai"
+	default:
+		return provider
+	}
+}
+
+// StartManagementAuth 使用 CLIProxyAPI Management API 启动 OAuth 登录。
+func (h *CPAHandler) StartManagementAuth(c *gin.Context) {
+	if h.management == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "CPA Management API 未初始化"})
+		return
+	}
+	var req loginRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.Provider == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "provider 为必填项"})
+		return
+	}
+	if req.Device {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Management API 登录不支持设备码模式，请使用普通登录"})
+		return
+	}
+	result, err := h.management.StartOAuth(c.Request.Context(), managementOAuthProvider(req.Provider))
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": result.Status, "provider": req.Provider, "url": result.URL, "state": result.State, "flow": result.Flow})
+}
+
+// ManagementAuthStatus 查询 Management API OAuth 状态。
+func (h *CPAHandler) ManagementAuthStatus(c *gin.Context) {
+	if h.management == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "CPA Management API 未初始化"})
+		return
+	}
+	state := c.Query("state")
+	if state == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "state 为必填项"})
+		return
+	}
+	result, err := h.management.OAuthStatus(c.Request.Context(), state)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 // clearLongRunningResponseDeadline 取消 API Server 的写超时。
@@ -88,6 +147,9 @@ func (h *CPAHandler) SaveConfig(c *gin.Context) {
 	h.manager.UpdateEndpoint(cfg.Host, cfg.Port)
 	if h.quota != nil {
 		h.quota.UpdateEndpoint(cfg.Host, cfg.Port)
+	}
+	if h.management != nil {
+		h.management.UpdateEndpoint(cfg.Host, cfg.Port)
 	}
 	// 写入 CLIProxyAPI config.yaml
 	if err := h.PrepareConfig(); err != nil {
