@@ -60,6 +60,9 @@ export const modelApi = {
   update: (id: number, data: any) => api.put(`/models/${id}`, data),
   delete: (id: number) => api.delete(`/models/${id}`),
   toggle: (id: number) => api.post(`/models/${id}/toggle`),
+  openRouterPreview: (modelIds: number[]) =>
+    api.post('/models/openrouter/preview', { model_ids: modelIds }),
+  openRouterSync: (data: any) => api.post('/models/openrouter/sync', data),
   batch: (action: string, ids: number[], extra?: any) =>
     api.post('/models/batch', { action, ids, ...extra }),
   export: () => api.get('/models/export', { responseType: 'blob' }),

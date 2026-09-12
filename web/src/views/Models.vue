@@ -3,7 +3,7 @@ import { onMounted, ref, h, computed, type VNode } from 'vue'
 import {
   NButton, NCard, NDataTable, NSpace, NTag, NModal, NPopconfirm,
   NForm, NFormItem, NInput, NInputNumber, NSwitch, NDivider, NSelect,
-  useMessage, NSpin, NIcon,
+  NCheckboxGroup, NCheckbox, useMessage, NSpin, NIcon,
 } from 'naive-ui'
 import { HardwareChipSharp, CloudDownloadSharp, CloudUploadSharp } from '@vicons/ionicons5'
 import { modelApi, channelApi } from '@/api'
@@ -128,6 +128,33 @@ const channelFilter = ref<number | null>(null)
 
 // 批量编辑对话框
 const showBatchEditModal = ref(false)
+const showOpenRouterModal = ref(false)
+const openRouterLoading = ref(false)
+const openRouterSyncing = ref(false)
+const openRouterItems = ref<any[]>([])
+const openRouterMappings = ref<Record<number, string>>({})
+const openRouterFields = ref([
+  'display_name', 'context_window', 'max_output_tokens',
+  'supports_vision', 'supports_thinking', 'supports_tools',
+  'capabilities', 'input_modalities', 'output_modalities',
+])
+const openRouterIncludePricing = ref(false)
+const openRouterOverwriteUserModified = ref(false)
+const openRouterFieldOptions = [
+  { label: '显示名称', value: 'display_name' },
+  { label: '上下文窗口', value: 'context_window' },
+  { label: '最大输出 Tokens', value: 'max_output_tokens' },
+  { label: '视觉能力', value: 'supports_vision' },
+  { label: '思考能力', value: 'supports_thinking' },
+  { label: '工具调用', value: 'supports_tools' },
+  { label: '统一能力', value: 'capabilities' },
+  { label: '输入模态', value: 'input_modalities' },
+  { label: '输出模态', value: 'output_modalities' },
+  { label: '输入价格', value: 'pricing_input' },
+  { label: '输出价格', value: 'pricing_output' },
+  { label: '缓存读取价格', value: 'pricing_cache_read' },
+  { label: '缓存写入价格', value: 'pricing_cache_write' },
+]
 const batchEditForm = ref({
   pricing_input: null as number | null,
   pricing_output: null as number | null,
@@ -161,6 +188,89 @@ function toggleTriState(field: keyof typeof batchEditForm.value) {
 function triStateLabel(v: boolean | null) {
   if (v === null) return '未设置'
   return v ? '是' : '否'
+}
+
+async function openOpenRouterSync() {
+  const ids = checkedRowKeys.value.map(Number)
+  if (!ids.length) {
+    message.warning('请先选择要同步的模型')
+    return
+  }
+  openRouterLoading.value = true
+  try {
+    const res = await modelApi.openRouterPreview(ids)
+    openRouterItems.value = res.data?.items || []
+    const allCandidates = res.data?.candidates || []
+    const mappings: Record<number, string> = {}
+    for (const item of openRouterItems.value) {
+      item.all_candidates = allCandidates
+      item.openrouter_model_name = item.exact_match_id || (item.candidates?.length === 1 ? item.candidates[0].id : '')
+      if (item.exact_match_id) mappings[item.local_model_id] = item.exact_match_id
+      else if (item.candidates?.length === 1) mappings[item.local_model_id] = item.candidates[0].id
+    }
+    openRouterMappings.value = mappings
+    showOpenRouterModal.value = true
+  } catch (e: any) {
+    message.error(e.response?.data?.error || '获取 OpenRouter 模型信息失败')
+  } finally {
+    openRouterLoading.value = false
+  }
+}
+
+async function submitOpenRouterSync() {
+  const mappings = Object.entries(openRouterMappings.value)
+    .filter(([, openRouterId]) => !!openRouterId)
+    .map(([localModelId, openRouterId]) => ({ local_model_id: Number(localModelId), openrouter_id: openRouterId }))
+  if (!mappings.length) {
+    message.warning('请至少确认一个 OpenRouter 模型映射')
+    return
+  }
+  openRouterSyncing.value = true
+  try {
+    const res = await modelApi.openRouterSync({
+      mappings,
+      fields: openRouterFields.value,
+      include_pricing: openRouterIncludePricing.value,
+      overwrite_user_modified: openRouterOverwriteUserModified.value,
+    })
+    message.success(`OpenRouter 同步完成：更新 ${res.data?.updated || 0} 个，跳过 ${res.data?.skipped || 0} 个`)
+    showOpenRouterModal.value = false
+    checkedRowKeys.value = []
+    await loadModels()
+  } catch (e: any) {
+    message.error(e.response?.data?.error || 'OpenRouter 同步失败')
+  } finally {
+    openRouterSyncing.value = false
+  }
+}
+
+function openRouterCandidateOptions(item: any) {
+  return (item.candidates || []).map((candidate: any) => ({
+    label: `${candidate.name || candidate.id} (${candidate.id})`,
+    value: candidate.id,
+  }))
+}
+
+function updateOpenRouterModelName(item: any, value: string) {
+  item.openrouter_model_name = value
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) {
+    delete openRouterMappings.value[item.local_model_id]
+    return
+  }
+  const exact = (item.all_candidates || []).find((candidate: any) => candidate.id.toLowerCase() === normalized)
+  const compatible = exact || (item.all_candidates || []).find((candidate: any) => candidate.id.toLowerCase().endsWith(`/${normalized}`))
+  if (compatible) openRouterMappings.value[item.local_model_id] = compatible.id
+  else delete openRouterMappings.value[item.local_model_id]
+}
+
+function manualOpenRouterOptions(item: any) {
+  const value = (item.openrouter_model_name || '').trim().toLowerCase()
+  if (!value) return openRouterCandidateOptions(item)
+  return (item.all_candidates || [])
+    .filter((candidate: any) => candidate.id.toLowerCase().includes(value) || (candidate.name || '').toLowerCase().includes(value))
+    .slice(0, 100)
+    .map((candidate: any) => ({ label: `${candidate.name || candidate.id} (${candidate.id})`, value: candidate.id }))
 }
 
 async function submitBatchEdit() {
@@ -499,6 +609,7 @@ async function batchAction(action: string) {
           <NButton size="small" type="success" @click="batchAction('enable')">批量启用</NButton>
           <NButton size="small" @click="batchAction('disable')">批量禁用</NButton>
           <NButton size="small" type="info" @click="openBatchEdit">批量编辑</NButton>
+          <NButton size="small" type="primary" :loading="openRouterLoading" @click="openOpenRouterSync">从 OpenRouter 同步</NButton>
           <NPopconfirm @positive-click="batchReset">
             <template #trigger>
               <NButton size="small" type="warning">重置为默认</NButton>
@@ -678,6 +789,54 @@ async function batchAction(action: string) {
           <NSpace justify="end">
             <NButton @click="showModal = false">取消</NButton>
             <NButton type="primary" @click="saveModel">保存</NButton>
+          </NSpace>
+        </template>
+      </NModal>
+      <!-- OpenRouter 同步对话框 -->
+      <NModal v-model:show="showOpenRouterModal" title="从 OpenRouter 同步模型信息" preset="card" style="width:min(760px, calc(100vw - 32px));max-height:calc(100vh - 48px)">
+        <div style="max-height:calc(100vh - 180px);overflow:auto">
+          <NAlert type="info" size="small" style="margin-bottom:12px">
+            OpenRouter 信息只在本次操作中临时使用，不会保存 OpenRouter 模型目录。默认跳过已手动修改的模型；价格同步需单独勾选。
+          </NAlert>
+          <NFormItem label="同步字段" label-placement="left" label-width="100">
+            <NCheckboxGroup v-model:value="openRouterFields">
+              <NSpace wrap>
+                <NCheckbox v-for="option in openRouterFieldOptions" :key="option.value" :value="option.value" :label="option.label" />
+              </NSpace>
+            </NCheckboxGroup>
+          </NFormItem>
+          <NSpace vertical style="width:100%;margin-bottom:12px">
+            <NCheckbox v-model:checked="openRouterIncludePricing">同步 OpenRouter 价格（会覆盖本地计费价格）</NCheckbox>
+            <NCheckbox v-model:checked="openRouterOverwriteUserModified">覆盖已手动修改的本地模型</NCheckbox>
+          </NSpace>
+          <NDivider style="margin:8px 0" />
+          <div v-for="item in openRouterItems" :key="item.local_model_id" style="padding:10px 0;border-bottom:1px solid rgba(148,163,184,.15)">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+              <b>{{ item.model_id }}</b>
+              <NTag v-if="item.exact_match_id" size="tiny" type="success">完全匹配</NTag>
+              <NTag v-else-if="item.candidates?.length" size="tiny" type="warning">候选匹配</NTag>
+              <NTag v-else size="tiny" type="error">未找到</NTag>
+            </div>
+            <NInput
+              :value="item.openrouter_model_name || ''"
+              placeholder="可手动输入 OpenRouter 模型名，例如 openai/gemini-3.6-flash"
+              clearable
+              @update:value="value => updateOpenRouterModelName(item, value)"
+              style="margin-bottom:6px"
+            />
+            <NSelect
+              v-if="item.candidates?.length || item.openrouter_model_name"
+              v-model:value="openRouterMappings[item.local_model_id]"
+              :options="manualOpenRouterOptions(item)"
+              placeholder="选择匹配结果（也可直接输入完整 ID）"
+              clearable
+            />
+          </div>
+        </div>
+        <template #footer>
+          <NSpace justify="end">
+            <NButton @click="showOpenRouterModal = false">取消</NButton>
+            <NButton type="primary" :loading="openRouterSyncing" @click="submitOpenRouterSync">确认同步</NButton>
           </NSpace>
         </template>
       </NModal>

@@ -112,6 +112,7 @@ func main() {
 	// 初始化处理器
 	channelH := handler.NewChannelHandler(svc.Channel, svc.Model)
 	modelH := handler.NewModelHandler(svc.Model)
+	openRouterH := handler.NewOpenRouterHandler(svc.Model)
 	usageH := handler.NewUsageHandler(svc.Usage)
 	proxyH := handler.NewProxyHandler(svc.Channel, svc.Model, svc.Usage, svc.APIKey, svc.ProxyConfig, svc.VirtualModel)
 	proxyConfigH := handler.NewProxyConfigHandler(svc.ProxyConfig, "certs")
@@ -164,6 +165,8 @@ func main() {
 		api.PUT("/models/:id", modelH.UpdateModel)
 		api.DELETE("/models/:id", modelH.DeleteModel)
 		api.POST("/models/:id/toggle", modelH.ToggleModel)
+		api.POST("/models/openrouter/preview", openRouterH.Preview)
+		api.POST("/models/openrouter/sync", openRouterH.Sync)
 		api.POST("/models/batch", modelH.BatchAction)
 		api.GET("/models/export", modelH.ExportModels)
 		api.POST("/models/import", modelH.ImportModels)

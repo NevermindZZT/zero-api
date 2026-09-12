@@ -92,6 +92,17 @@ func (h *ProxyHandler) getProxyConfig() *store.ProxyConfigData {
 // ListLocalModels 返回本地启用的模型列表（兼容 OpenAI /v1/models）
 // 格式参考 OpenRouter /api/v1/models，返回丰富的模型元信息
 // 使用缓存避免频繁 JSON 编码
+func modalityFromModalities(input, output []string) string {
+	format := func(values []string) string {
+		if len(values) == 0 {
+			return "text"
+		}
+		copyValues := append([]string(nil), values...)
+		return strings.Join(copyValues, "+")
+	}
+	return format(input) + "->" + format(output)
+}
+
 func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 	// 尝试使用缓存（TTL 60s）
 	h.modelsCacheMu.RLock()
@@ -110,10 +121,16 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 	}
 
 	var data []gin.H
+	seenModelIDs := make(map[string]struct{})
 	for _, m := range models {
 		if m.Status != "active" {
 			continue
 		}
+		// models 已按渠道 priority 排序；同名模型只暴露优先级最高的渠道记录。
+		if _, exists := seenModelIDs[m.ModelID]; exists {
+			continue
+		}
+		seenModelIDs[m.ModelID] = struct{}{}
 
 		displayName := m.DisplayName
 		if displayName == "" {
@@ -157,12 +174,14 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 
 		entry := gin.H{
 			"id":             m.ModelID,
-			"name":           displayName,
+			"object":         "model",
 			"created":        m.CreatedAt.Unix(),
+			"owned_by":       "zero-api",
+			"name":           displayName,
 			"description":    fmt.Sprintf("zero-api model: %s via %s", m.ModelID, m.ChannelName),
 			"context_length": m.ContextWindow,
 			"architecture": gin.H{
-				"modality":          "text->text",
+				"modality":          modalityFromModalities(inputModalities, outputModalities),
 				"input_modalities":  inputModalities,
 				"output_modalities": outputModalities,
 				"tokenizer":         "Custom",
@@ -232,20 +251,20 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 			}
 			// 视觉能力：配置了识图模型（识图扩展）或主模型本身支持视觉时，宣称支持 image
 			// 否则按纯文本声明（避免下游误认为可识图）
-			modality := "text->text"
 			inputMods := []string{"text"}
 			if vm.VisionModel != "" || main.SupportsVision {
-				modality = "text+image->text"
 				inputMods = []string{"text", "image"}
 			}
 			entry := gin.H{
 				"id":             vm.Name,
+				"object":         "model",
 				"name":           displayName,
 				"created":        main.CreatedAt.Unix(),
+				"owned_by":       "zero-api",
 				"description":    fmt.Sprintf("虚拟模型: 路由到 %s（识图扩展: %s）", vm.MainModel, vm.VisionModel),
 				"context_length": main.ContextWindow,
 				"architecture": gin.H{
-					"modality":          modality,
+					"modality":          modalityFromModalities(inputMods, []string{"text"}),
 					"input_modalities":  inputMods,
 					"output_modalities": []string{"text"},
 					"tokenizer":         "Custom",
