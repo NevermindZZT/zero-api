@@ -46,16 +46,21 @@ func (m *ManagementClient) UpdateEndpoint(host string, port int) {
 }
 
 type AuthFile struct {
-	ID          string         `json:"id"`
-	AuthIndex   string         `json:"auth_index"`
-	Provider    string         `json:"provider"`
-	AccountType string         `json:"account_type"`
-	Email       string         `json:"email"`
-	AccountID   string         `json:"account_id"`
-	PlanType    string         `json:"plan_type"`
-	Status      string         `json:"status"`
-	Error       string         `json:"error,omitempty"`
-	Raw         map[string]any `json:"-"`
+	ID            string         `json:"id"`
+	Name          string         `json:"name"`
+	AuthIndex     string         `json:"auth_index"`
+	Provider      string         `json:"provider"`
+	AccountType   string         `json:"account_type"`
+	Email         string         `json:"email"`
+	AccountID     string         `json:"account_id"`
+	PlanType      string         `json:"plan_type"`
+	ProjectID     string         `json:"project_id"`
+	Status        string         `json:"status"`
+	StatusMessage string         `json:"status_message,omitempty"`
+	Disabled      bool           `json:"disabled"`
+	Unavailable   bool           `json:"unavailable"`
+	Error         string         `json:"error,omitempty"`
+	Raw           map[string]any `json:"-"`
 }
 
 // OAuthURLResponse 是 Management API OAuth 登录启动结果。
@@ -189,23 +194,70 @@ func (m *ManagementClient) doJSON(ctx context.Context, method, path string, body
 
 func authFileFromMap(raw map[string]any) AuthFile {
 	file := AuthFile{Raw: raw}
-	file.ID, _ = raw["id"].(string)
-	file.AuthIndex, _ = raw["auth_index"].(string)
-	file.Provider, _ = raw["provider"].(string)
-	file.AccountType, _ = raw["account_type"].(string)
-	file.Email, _ = raw["email"].(string)
-	file.AccountID, _ = raw["chatgpt_account_id"].(string)
-	file.PlanType, _ = raw["plan_type"].(string)
-	file.Status, _ = raw["status"].(string)
+	file.ID = readString(raw, "id")
+	file.Name = readString(raw, "name")
+	file.AuthIndex = readString(raw, "auth_index", "authIndex", "AuthIndex", "auth-index")
+	file.Provider = readString(raw, "provider", "type")
+	file.AccountType = readString(raw, "account_type", "accountType")
+	file.Email = readString(raw, "email")
+	file.AccountID = readString(raw, "chatgpt_account_id", "account_id")
+	file.PlanType = readString(raw, "plan_type", "planType")
+	file.ProjectID = readString(raw, "project_id", "projectId")
+	file.Status = readString(raw, "status")
+	file.StatusMessage = readString(raw, "status_message", "statusMessage")
+	file.Disabled = readBool(raw, "disabled")
+	file.Unavailable = readBool(raw, "unavailable")
 	if claims, ok := raw["id_token"].(map[string]any); ok {
 		if file.AccountID == "" {
-			file.AccountID, _ = claims["chatgpt_account_id"].(string)
+			file.AccountID = readString(claims, "chatgpt_account_id", "account_id")
 		}
 		if file.PlanType == "" {
-			file.PlanType, _ = claims["plan_type"].(string)
+			file.PlanType = readString(claims, "plan_type", "planType")
+		}
+	}
+	if file.AccountID == "" && strings.EqualFold(file.AccountType, "oauth") {
+		file.AccountID = readString(raw, "account")
+	}
+	if file.ProjectID == "" {
+		for _, key := range []string{"metadata", "attributes"} {
+			if nested, ok := raw[key].(map[string]any); ok {
+				file.ProjectID = readString(nested, "project_id", "projectId", "gemini_virtual_project")
+				if file.ProjectID != "" {
+					break
+				}
+			}
 		}
 	}
 	return file
+}
+
+func readString(m map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := m[key]; ok {
+			switch v := value.(type) {
+			case string:
+				if text := strings.TrimSpace(v); text != "" {
+					return text
+				}
+			case json.Number:
+				return v.String()
+			case float64:
+				return fmt.Sprintf("%v", v)
+			}
+		}
+	}
+	return ""
+}
+
+func readBool(m map[string]any, keys ...string) bool {
+	for _, key := range keys {
+		if value, ok := m[key]; ok {
+			if result, ok := value.(bool); ok {
+				return result
+			}
+		}
+	}
+	return false
 }
 
 func readNumber(m map[string]any, keys ...string) (float64, bool) {

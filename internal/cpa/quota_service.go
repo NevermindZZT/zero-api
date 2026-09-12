@@ -2,6 +2,7 @@ package cpa
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 )
@@ -43,6 +44,41 @@ func (s *QuotaService) UpdateEndpoint(host string, port int) {
 	s.Invalidate()
 }
 
+func providerOwnsAuth(provider QuotaProvider, auth AuthFile) bool {
+	return strings.EqualFold(strings.TrimSpace(provider.ID()), strings.TrimSpace(auth.Provider))
+}
+
+func authUnavailableReason(auth AuthFile) string {
+	if strings.TrimSpace(auth.AuthIndex) == "" {
+		return "认证记录缺少 auth_index，无法查询额度"
+	}
+	if auth.Disabled {
+		return "该订阅已禁用"
+	}
+	if auth.Unavailable {
+		if auth.StatusMessage != "" {
+			return "该订阅当前不可用：" + auth.StatusMessage
+		}
+		return "该订阅当前不可用"
+	}
+	switch strings.ToLower(strings.TrimSpace(auth.Status)) {
+	case "disabled", "error", "revoked", "unavailable":
+		if auth.StatusMessage != "" {
+			return "认证状态异常：" + auth.StatusMessage
+		}
+		return "认证状态异常：" + auth.Status
+	}
+	return ""
+}
+
+func errorQuotaSnapshot(provider string, auth AuthFile, message string) *QuotaSnapshot {
+	return &QuotaSnapshot{
+		Provider: provider, AuthIndex: auth.AuthIndex, CredentialName: auth.Name,
+		AccountID: auth.AccountID, Email: auth.Email, PlanType: auth.PlanType,
+		Status: "error", QueriedAt: time.Now().UTC(), Error: message,
+	}
+}
+
 func (s *QuotaService) Query(ctx context.Context, refresh bool) (*QuotaResponse, error) {
 	s.mu.Lock()
 	if !refresh && s.cached != nil && time.Since(s.cachedAt) < s.ttl {
@@ -60,16 +96,21 @@ func (s *QuotaService) Query(ctx context.Context, refresh bool) (*QuotaResponse,
 	result := &QuotaResponse{Provider: "all", Accounts: []*QuotaSnapshot{}, QueriedAt: time.Now().UTC()}
 	for _, provider := range s.providers {
 		for _, auth := range authFiles {
+			if !providerOwnsAuth(provider, auth) {
+				continue
+			}
+			if reason := authUnavailableReason(auth); reason != "" {
+				result.Accounts = append(result.Accounts, errorQuotaSnapshot(provider.ID(), auth, reason))
+				continue
+			}
 			if !provider.Match(auth) {
 				continue
 			}
 			snapshot, queryErr := provider.Query(ctx, s.client, auth)
 			if queryErr != nil {
-				snapshot = &QuotaSnapshot{
-					Provider: provider.ID(), AuthIndex: auth.AuthIndex, AccountID: auth.AccountID,
-					Email: auth.Email, PlanType: auth.PlanType, Status: "error",
-					QueriedAt: time.Now().UTC(), Error: queryErr.Error(),
-				}
+				snapshot = errorQuotaSnapshot(provider.ID(), auth, queryErr.Error())
+			} else {
+				snapshot.CredentialName = auth.Name
 			}
 			result.Accounts = append(result.Accounts, snapshot)
 		}

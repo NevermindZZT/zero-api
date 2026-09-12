@@ -1,32 +1,44 @@
 package cpa
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
-func TestParseAntigravityQuota(t *testing.T) {
-	got, err := parseAntigravityQuota([]byte(`{"paidTier":{"id":"tier-1","availableCredits":[{"creditType":"GOOGLE_ONE_AI","creditAmount":"25000","minimumCreditAmountForUsage":"50"}]}}`), AuthFile{AuthIndex: "ag-1", Email: "user@example.com"})
+func TestParseAntigravityQuotaSummary(t *testing.T) {
+	body := []byte(`{"groups":[{"displayName":"Gemini Models","description":"Models within this group: Gemini Flash, Gemini Pro","buckets":[{"bucketId":"gemini-5h","displayName":"Five Hour Limit Remaining","window":"5h","resetTime":"2026-09-12T06:19:10Z","remainingFraction":0.726},{"bucketId":"gemini-weekly","displayName":"Weekly Limit Remaining","window":"weekly","resetTime":"2026-09-19T01:19:10Z","remainingFraction":"0.946"}]},{"displayName":"Claude and GPT models","buckets":[{"bucketId":"3p-5h","displayName":"Five Hour Limit Remaining","window":"5h","remainingFraction":1}]}]}`)
+	got, err := parseAntigravityQuotaSummary(body, AuthFile{AuthIndex: "ag-1", Email: "user@example.com", PlanType: "pro"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Provider != "antigravity" || got.AICredits == nil || *got.AICredits != 25000 {
-		t.Fatalf("unexpected credits: %#v", got)
+	if got.Provider != "antigravity" || len(got.AntigravityGroups) != 2 {
+		t.Fatalf("unexpected snapshot: %#v", got)
 	}
-	if got.AICreditsMinimum == nil || *got.AICreditsMinimum != 50 {
-		t.Fatalf("unexpected minimum credits: %#v", got.AICreditsMinimum)
+	gemini := got.AntigravityGroups[0]
+	if gemini.Label != "Gemini Models" || len(gemini.Buckets) != 2 {
+		t.Fatalf("unexpected Gemini group: %#v", gemini)
 	}
-}
-
-func TestParseAntigravityQuotaAcceptsEmptyCreditAmountAsZero(t *testing.T) {
-	got, err := parseAntigravityQuota([]byte(`{"paidTier":{"availableCredits":[{"creditType":"GOOGLE_ONE_AI","creditAmount":"","minimumCreditAmountForUsage":"50"}]}}`), AuthFile{AuthIndex: "ag-1"})
-	if err != nil {
-		t.Fatal(err)
+	if math.Abs(gemini.Buckets[0].RemainingPercent-72.6) > 0.001 || gemini.Buckets[0].ResetAt == nil {
+		t.Fatalf("unexpected 5h bucket: %#v", gemini.Buckets[0])
 	}
-	if got.AICredits == nil || *got.AICredits != 0 {
-		t.Fatalf("credits = %#v, want zero", got.AICredits)
+	if math.Abs(gemini.Buckets[1].RemainingPercent-94.6) > 0.001 {
+		t.Fatalf("unexpected weekly bucket: %#v", gemini.Buckets[1])
 	}
 }
 
-func TestParseAntigravityQuotaRejectsMissingGoogleOneCredits(t *testing.T) {
-	if _, err := parseAntigravityQuota([]byte(`{"paidTier":{"availableCredits":[{"creditType":"OTHER","creditAmount":"1"}]}}`), AuthFile{AuthIndex: "ag-1"}); err == nil {
-		t.Fatal("expected missing GOOGLE_ONE_AI credits error")
+func TestParseAntigravityQuotaSummaryRejectsEmptyGroups(t *testing.T) {
+	if _, err := parseAntigravityQuotaSummary([]byte(`{"groups":[]}`), AuthFile{AuthIndex: "ag-1"}); err == nil {
+		t.Fatal("expected empty groups error")
+	}
+}
+
+func TestAntigravityMatchAcceptsTypeFallbackAndRejectsDisabled(t *testing.T) {
+	auth := authFileFromMap(map[string]any{"type": "antigravity", "auth_index": "ag-1", "project_id": "project"})
+	if !(AntigravityQuotaProvider{}).Match(auth) {
+		t.Fatalf("expected type fallback to match: %#v", auth)
+	}
+	auth.Disabled = true
+	if (AntigravityQuotaProvider{}).Match(auth) {
+		t.Fatal("disabled auth must not match")
 	}
 }

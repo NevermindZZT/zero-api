@@ -8,6 +8,20 @@ import (
 	"testing"
 )
 
+func TestAuthFileFromMapSupportsCurrentAndLegacyFields(t *testing.T) {
+	file := authFileFromMap(map[string]any{
+		"id": "ag.json", "name": "ag.json", "authIndex": "idx-1", "type": "antigravity",
+		"account_type": "oauth", "account": "user@example.com", "project_id": "aicode-consumers",
+		"status": "active", "status_message": "ok", "disabled": false, "unavailable": false,
+	})
+	if file.Provider != "antigravity" || file.AuthIndex != "idx-1" || file.ProjectID != "aicode-consumers" {
+		t.Fatalf("unexpected auth file: %#v", file)
+	}
+	if file.AccountID != "user@example.com" || file.Name != "ag.json" || file.StatusMessage != "ok" {
+		t.Fatalf("unexpected auth metadata: %#v", file)
+	}
+}
+
 func TestManagementClientCallUpstreamPayload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v0/management/api-call" || r.Header.Get("Authorization") != "Bearer management-key" {

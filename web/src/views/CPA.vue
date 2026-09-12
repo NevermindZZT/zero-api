@@ -193,7 +193,7 @@ onUnmounted(() => {
           <div v-for="account in quota.accounts" :key="account.auth_index" class="quota-account">
             <div class="quota-account-header">
               <div>
-                <strong>{{ account.email || account.account_id || account.auth_index }}</strong>
+                <strong>{{ account.email || account.account_id || account.credential_name || account.auth_index || '未知订阅' }}</strong>
                 <NTag v-if="account.plan_type" size="small" type="info" style="margin-left: 8px">{{ account.plan_type }}</NTag>
               </div>
               <NTag :type="account.status === 'available' ? 'success' : 'error'" size="small">
@@ -201,14 +201,23 @@ onUnmounted(() => {
               </NTag>
             </div>
             <NAlert v-if="account.error" type="error" style="margin: 12px 0">{{ account.error }}</NAlert>
-            <NGrid v-else-if="account.provider === 'antigravity'" :cols="2" :x-gap="24" responsive="screen" item-responsive>
-              <NGi span="2">
-                <div class="quota-window">
-                  <div class="quota-window-title"><span>Google One AI credits</span><b>{{ account.ai_credits?.toLocaleString() ?? '-' }}</b></div>
-                  <div class="quota-window-meta">最低使用额度：{{ account.ai_credits_minimum?.toLocaleString() ?? '-' }} · 数据来源：Antigravity loadCodeAssist</div>
+            <NSpace v-else-if="account.provider === 'antigravity'" vertical size="large">
+              <div v-for="group in account.antigravity_groups || []" :key="group.id" class="quota-group">
+                <div class="quota-group-header">
+                  <strong>{{ group.label }}</strong>
+                  <span v-if="group.description">{{ group.description }}</span>
                 </div>
-              </NGi>
-            </NGrid>
+                <NGrid :cols="2" :x-gap="24" responsive="screen" item-responsive>
+                  <NGi v-for="bucket in group.buckets" :key="bucket.id" span="2 m:1">
+                    <div class="quota-window">
+                      <div class="quota-window-title"><span>{{ bucket.label }}</span><b>{{ bucket.remaining_percent?.toFixed(1) ?? '-' }}% 剩余</b></div>
+                      <div class="quota-bar"><div class="quota-bar-fill" :style="{ width: `${quotaPercent(bucket.remaining_percent)}%`, background: quotaColor(bucket.remaining_percent) }" /></div>
+                      <div class="quota-window-meta">{{ bucket.window === '5h' ? '5 小时窗口' : bucket.window === 'weekly' ? '周窗口' : bucket.window || '额度窗口' }} · 刷新：{{ resetLabel(bucket) }}</div>
+                    </div>
+                  </NGi>
+                </NGrid>
+              </div>
+            </NSpace>
             <NGrid v-else :cols="2" :x-gap="24" responsive="screen" item-responsive>
               <NGi v-for="window in quotaWindows(account)" :key="window.id" span="2 m:1">
                 <div class="quota-window">
@@ -220,7 +229,7 @@ onUnmounted(() => {
             </NGrid>
             <div class="quota-account-footer">
               <span v-if="account.provider === 'codex'">主动重置次数：{{ account.reset_credits ?? 0 }}</span>
-              <span v-else>额度类型：Google One AI credits</span>
+              <span v-else>数据来源：Antigravity retrieveUserQuotaSummary</span>
               <span>查询时间：{{ account.queried_at ? new Date(account.queried_at).toLocaleString() : '-' }}</span>
             </div>
           </div>
@@ -285,6 +294,10 @@ onUnmounted(() => {
 .quota-account { padding: 16px; border: 1px solid rgba(148,163,184,.18); border-radius: 8px; background: rgba(15,23,42,.28); }
 .quota-account-header, .quota-window-title, .quota-account-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .quota-account-footer { margin-top:14px; color:var(--text-secondary); font-size:12px; flex-wrap:wrap; }
+.quota-group { padding-top:4px; }
+.quota-group + .quota-group { padding-top:16px; border-top:1px solid rgba(148,163,184,.14); }
+.quota-group-header { margin-bottom:12px; display:flex; flex-direction:column; gap:3px; }
+.quota-group-header span { color:var(--text-secondary); font-size:12px; }
 .quota-window-title { margin-bottom:8px; color:#cbd5e1; }
 .quota-window-title b { font-size:13px; }
 .quota-bar { height:10px; overflow:hidden; border-radius:999px; background:rgba(100,116,139,.25); }

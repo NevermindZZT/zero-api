@@ -26,19 +26,37 @@ type QuotaWindow struct {
 }
 
 type QuotaSnapshot struct {
-	Provider         string       `json:"provider"`
-	AuthIndex        string       `json:"auth_index"`
-	AccountID        string       `json:"account_id,omitempty"`
-	Email            string       `json:"email,omitempty"`
-	PlanType         string       `json:"plan_type,omitempty"`
-	Status           string       `json:"status"`
-	FiveHour         *QuotaWindow `json:"five_hour,omitempty"`
-	Weekly           *QuotaWindow `json:"weekly,omitempty"`
-	ResetCredits     int64        `json:"reset_credits,omitempty"`
-	AICredits        *int64       `json:"ai_credits,omitempty"`
-	AICreditsMinimum *int64       `json:"ai_credits_minimum,omitempty"`
-	QueriedAt        time.Time    `json:"queried_at"`
-	Error            string       `json:"error,omitempty"`
+	Provider          string                  `json:"provider"`
+	AuthIndex         string                  `json:"auth_index"`
+	CredentialName    string                  `json:"credential_name,omitempty"`
+	AccountID         string                  `json:"account_id,omitempty"`
+	Email             string                  `json:"email,omitempty"`
+	PlanType          string                  `json:"plan_type,omitempty"`
+	Status            string                  `json:"status"`
+	FiveHour          *QuotaWindow            `json:"five_hour,omitempty"`
+	Weekly            *QuotaWindow            `json:"weekly,omitempty"`
+	AntigravityGroups []AntigravityQuotaGroup `json:"antigravity_groups,omitempty"`
+	ResetCredits      int64                   `json:"reset_credits,omitempty"`
+	AICredits         *int64                  `json:"ai_credits,omitempty"`
+	AICreditsMinimum  *int64                  `json:"ai_credits_minimum,omitempty"`
+	QueriedAt         time.Time               `json:"queried_at"`
+	Error             string                  `json:"error,omitempty"`
+}
+
+type AntigravityQuotaGroup struct {
+	ID          string                   `json:"id"`
+	Label       string                   `json:"label"`
+	Description string                   `json:"description,omitempty"`
+	Buckets     []AntigravityQuotaBucket `json:"buckets"`
+}
+
+type AntigravityQuotaBucket struct {
+	ID               string     `json:"id"`
+	Label            string     `json:"label"`
+	Window           string     `json:"window,omitempty"`
+	RemainingPercent float64    `json:"remaining_percent"`
+	ResetAt          *time.Time `json:"reset_at,omitempty"`
+	Description      string     `json:"description,omitempty"`
 }
 
 type CodexQuotaProvider struct{}
@@ -48,91 +66,155 @@ type AntigravityQuotaProvider struct{}
 func (CodexQuotaProvider) ID() string       { return "codex" }
 func (AntigravityQuotaProvider) ID() string { return "antigravity" }
 
+var antigravityQuotaURLs = []string{
+	"https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+	"https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
+	"https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+}
+
 func (AntigravityQuotaProvider) Match(auth AuthFile) bool {
-	return strings.EqualFold(strings.TrimSpace(auth.Provider), "antigravity") && strings.TrimSpace(auth.AuthIndex) != ""
+	return authUsable(auth) && strings.EqualFold(strings.TrimSpace(auth.Provider), "antigravity")
+}
+
+func authUsable(auth AuthFile) bool {
+	if strings.TrimSpace(auth.AuthIndex) == "" || auth.Disabled || auth.Unavailable {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(auth.Status)) {
+	case "disabled", "error", "revoked", "unavailable":
+		return false
+	}
+	return true
 }
 
 func (AntigravityQuotaProvider) Query(ctx context.Context, client *ManagementClient, auth AuthFile) (*QuotaSnapshot, error) {
-	// loadCodeAssist 只接受 metadata；enabledCreditTypes 是生成请求在额度兜底
-	// 场景下才注入的字段，不能放到额度探测请求中，否则 Google API 返回 400。
-	requestBody, err := json.Marshal(map[string]any{
-		"metadata": map[string]string{"ideType": "ANTIGRAVITY"},
-	})
+	if strings.TrimSpace(auth.ProjectID) == "" {
+		return nil, fmt.Errorf("Antigravity 认证信息缺少 project_id")
+	}
+	requestBody, err := json.Marshal(map[string]string{"project": auth.ProjectID})
 	if err != nil {
 		return nil, fmt.Errorf("序列化 Antigravity 额度请求失败: %w", err)
 	}
-	body, status, err := client.CallUpstreamWithBody(ctx, auth.AuthIndex, "POST", "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist", map[string]string{
+	headers := map[string]string{
 		"Authorization": "Bearer $TOKEN$",
-		"Accept":        "*/*",
 		"Content-Type":  "application/json",
-		"User-Agent":    "antigravity/hub/2.2.1",
-	}, requestBody)
-	if err != nil {
-		return nil, err
+		"User-Agent":    "antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)",
 	}
-	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("Antigravity 额度 API 返回 HTTP %d: %s", status, truncateQuotaBody(body))
+	var lastError error
+	for _, endpoint := range antigravityQuotaURLs {
+		body, status, callErr := client.CallUpstreamWithBody(ctx, auth.AuthIndex, "POST", endpoint, headers, requestBody)
+		if callErr != nil {
+			lastError = callErr
+			continue
+		}
+		if status < 200 || status >= 300 {
+			lastError = fmt.Errorf("Antigravity 额度 API 返回 HTTP %d: %s", status, truncateQuotaBody(body))
+			continue
+		}
+		snapshot, parseErr := parseAntigravityQuotaSummary(body, auth)
+		if parseErr != nil {
+			lastError = parseErr
+			continue
+		}
+		return snapshot, nil
 	}
-	return parseAntigravityQuota(body, auth)
+	if lastError == nil {
+		lastError = fmt.Errorf("Antigravity 额度 API 无可用端点")
+	}
+	return nil, lastError
 }
 
-func parseAntigravityQuota(body []byte, auth AuthFile) (*QuotaSnapshot, error) {
+func parseAntigravityQuotaSummary(body []byte, auth AuthFile) (*QuotaSnapshot, error) {
 	var raw struct {
-		PaidTier struct {
-			AvailableCredits []map[string]any `json:"availableCredits"`
-		} `json:"paidTier"`
+		Groups []struct {
+			DisplayName string `json:"displayName"`
+			Description string `json:"description"`
+			Buckets     []struct {
+				BucketID          string      `json:"bucketId"`
+				DisplayName       string      `json:"displayName"`
+				Window            string      `json:"window"`
+				ResetTime         string      `json:"resetTime"`
+				RemainingFraction interface{} `json:"remainingFraction"`
+				Description       string      `json:"description"`
+			} `json:"buckets"`
+		} `json:"groups"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("解析 Antigravity 额度响应失败: %w", err)
 	}
 	snapshot := &QuotaSnapshot{Provider: "antigravity", AuthIndex: auth.AuthIndex, AccountID: auth.AccountID, Email: auth.Email, PlanType: auth.PlanType, Status: "available", QueriedAt: time.Now().UTC()}
-	for _, credit := range raw.PaidTier.AvailableCredits {
-		creditType, _ := credit["creditType"].(string)
-		if !strings.EqualFold(creditType, "GOOGLE_ONE_AI") {
-			continue
+	for groupIndex, rawGroup := range raw.Groups {
+		group := AntigravityQuotaGroup{
+			ID:    stableQuotaID(rawGroup.DisplayName, fmt.Sprintf("group-%d", groupIndex+1)),
+			Label: strings.TrimSpace(rawGroup.DisplayName), Description: strings.TrimSpace(rawGroup.Description),
+			Buckets: []AntigravityQuotaBucket{},
 		}
-		// Google 在无可用额度、免费层或不同版本中可能返回空字符串、0 或数字。
-		// 空值表示当前 credits 为 0，不应被 fmt.Sscan 解析成 EOF 并误报查询失败。
-		amount, ok := quotaInt64(credit["creditAmount"])
-		if !ok {
-			amount = 0
+		for bucketIndex, rawBucket := range rawGroup.Buckets {
+			fraction, ok := quotaFloat64(rawBucket.RemainingFraction)
+			if !ok {
+				continue
+			}
+			fraction = max(0, min(1, fraction))
+			bucket := AntigravityQuotaBucket{
+				ID: strings.TrimSpace(rawBucket.BucketID), Label: strings.TrimSpace(rawBucket.DisplayName),
+				Window: strings.TrimSpace(rawBucket.Window), RemainingPercent: fraction * 100,
+				Description: strings.TrimSpace(rawBucket.Description),
+			}
+			if bucket.ID == "" {
+				bucket.ID = fmt.Sprintf("%s-bucket-%d", group.ID, bucketIndex+1)
+			}
+			if resetAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(rawBucket.ResetTime)); err == nil {
+				resetAt = resetAt.UTC()
+				bucket.ResetAt = &resetAt
+			}
+			group.Buckets = append(group.Buckets, bucket)
 		}
-		snapshot.AICredits = &amount
-		if minimum, ok := quotaInt64(credit["minimumCreditAmountForUsage"]); ok {
-			snapshot.AICreditsMinimum = &minimum
+		if len(group.Buckets) > 0 {
+			snapshot.AntigravityGroups = append(snapshot.AntigravityGroups, group)
 		}
-		break
 	}
-	if snapshot.AICredits == nil {
-		return nil, fmt.Errorf("Antigravity 额度响应缺少 GOOGLE_ONE_AI credits")
+	if len(snapshot.AntigravityGroups) == 0 {
+		return nil, fmt.Errorf("Antigravity 额度响应缺少有效额度分组")
 	}
 	return snapshot, nil
 }
 
-func parseInt64String(value string) (int64, error) {
-	var result int64
-	if _, err := fmt.Sscan(strings.TrimSpace(value), &result); err != nil {
-		return 0, err
+func stableQuotaID(label, fallback string) string {
+	var builder strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(label)) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			builder.WriteRune(r)
+			lastDash = false
+		} else if !lastDash && builder.Len() > 0 {
+			builder.WriteByte('-')
+			lastDash = true
+		}
 	}
-	return result, nil
+	result := strings.Trim(builder.String(), "-")
+	if result == "" {
+		return fallback
+	}
+	return result
 }
 
-func quotaInt64(value any) (int64, bool) {
+func quotaFloat64(value any) (float64, bool) {
 	switch v := value.(type) {
 	case int:
-		return int64(v), true
+		return float64(v), true
 	case int64:
-		return v, true
+		return float64(v), true
 	case float64:
-		return int64(v), true
+		return v, true
 	case json.Number:
-		result, err := v.Int64()
+		result, err := v.Float64()
 		return result, err == nil
 	case string:
 		if strings.TrimSpace(v) == "" {
 			return 0, false
 		}
-		result, err := parseInt64String(v)
+		var result float64
+		_, err := fmt.Sscan(strings.TrimSpace(v), &result)
 		return result, err == nil
 	default:
 		return 0, false
@@ -151,7 +233,7 @@ func truncateQuotaBody(body []byte) string {
 }
 
 func (CodexQuotaProvider) Match(auth AuthFile) bool {
-	if !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") || auth.AuthIndex == "" {
+	if !authUsable(auth) || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
 		return false
 	}
 	// auth-files 的 account_type 在不同 CLIProxyAPI 版本中可能缺失；
