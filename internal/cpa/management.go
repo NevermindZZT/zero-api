@@ -111,11 +111,19 @@ func (m *ManagementClient) GetAuthFiles(ctx context.Context) ([]AuthFile, error)
 }
 
 func (m *ManagementClient) CallUpstream(ctx context.Context, authIndex, method, upstreamURL string, headers map[string]string) ([]byte, int, error) {
+	return m.CallUpstreamWithBody(ctx, authIndex, method, upstreamURL, headers, nil)
+}
+
+// CallUpstreamWithBody 通过 CLIProxyAPI Management API 调用上游并携带 JSON 请求体。
+func (m *ManagementClient) CallUpstreamWithBody(ctx context.Context, authIndex, method, upstreamURL string, headers map[string]string, requestBody []byte) ([]byte, int, error) {
 	payload := map[string]any{
 		"auth_index": authIndex,
 		"method":     method,
 		"url":        upstreamURL,
 		"header":     headers,
+	}
+	if len(requestBody) > 0 {
+		payload["data"] = string(requestBody)
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

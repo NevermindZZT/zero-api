@@ -154,13 +154,13 @@ onUnmounted(() => {
         </NSpace>
       </NCard>
 
-      <NCard title="Codex 订阅额度" :segmented="{ content: true }">
+      <NCard title="订阅额度" :segmented="{ content: true }">
         <template #header-extra>
           <NButton size="small" :loading="quotaBusy" @click="refreshQuota(true)">刷新额度</NButton>
         </template>
         <NAlert v-if="quota?.error" type="error" style="margin-bottom: 16px">{{ quota.error }}</NAlert>
         <NAlert v-else-if="!quota?.accounts?.length" type="info">
-          尚未发现 Codex 订阅登录账号，完成 Codex OAuth 登录后将在这里显示 5 小时和 7 天额度。
+          尚未发现支持额度查询的订阅账号。完成 Codex 或 Antigravity OAuth 登录后，额度会显示在这里。
         </NAlert>
         <NSpace v-else vertical size="large">
           <div v-for="account in quota.accounts" :key="account.auth_index" class="quota-account">
@@ -174,6 +174,14 @@ onUnmounted(() => {
               </NTag>
             </div>
             <NAlert v-if="account.error" type="error" style="margin: 12px 0">{{ account.error }}</NAlert>
+            <NGrid v-else-if="account.provider === 'antigravity'" :cols="2" :x-gap="24" responsive="screen" item-responsive>
+              <NGi span="2">
+                <div class="quota-window">
+                  <div class="quota-window-title"><span>Google One AI credits</span><b>{{ account.ai_credits?.toLocaleString() ?? '-' }}</b></div>
+                  <div class="quota-window-meta">最低使用额度：{{ account.ai_credits_minimum?.toLocaleString() ?? '-' }} · 数据来源：Antigravity loadCodeAssist</div>
+                </div>
+              </NGi>
+            </NGrid>
             <NGrid v-else :cols="2" :x-gap="24" responsive="screen" item-responsive>
               <NGi v-for="window in quotaWindows(account)" :key="window.id" span="2 m:1">
                 <div class="quota-window">
@@ -184,7 +192,8 @@ onUnmounted(() => {
               </NGi>
             </NGrid>
             <div class="quota-account-footer">
-              <span>主动重置次数：{{ account.reset_credits ?? 0 }}</span>
+              <span v-if="account.provider === 'codex'">主动重置次数：{{ account.reset_credits ?? 0 }}</span>
+              <span v-else>额度类型：Google One AI credits</span>
               <span>查询时间：{{ account.queried_at ? new Date(account.queried_at).toLocaleString() : '-' }}</span>
             </div>
           </div>

@@ -25,7 +25,7 @@ type QuotaResponse struct {
 }
 
 func NewQuotaService(client *ManagementClient) *QuotaService {
-	return &QuotaService{client: client, providers: []QuotaProvider{CodexQuotaProvider{}}, ttl: 5 * time.Minute}
+	return &QuotaService{client: client, providers: []QuotaProvider{CodexQuotaProvider{}, AntigravityQuotaProvider{}}, ttl: 5 * time.Minute}
 }
 
 func (s *QuotaService) Invalidate() {
@@ -57,21 +57,22 @@ func (s *QuotaService) Query(ctx context.Context, refresh bool) (*QuotaResponse,
 	if err != nil {
 		return nil, err
 	}
-	result := &QuotaResponse{Provider: "codex", Accounts: []*QuotaSnapshot{}, QueriedAt: time.Now().UTC()}
-	provider := CodexQuotaProvider{}
-	for _, auth := range authFiles {
-		if !provider.Match(auth) {
-			continue
-		}
-		snapshot, queryErr := provider.Query(ctx, s.client, auth)
-		if queryErr != nil {
-			snapshot = &QuotaSnapshot{
-				Provider: "codex", AuthIndex: auth.AuthIndex, AccountID: auth.AccountID,
-				Email: auth.Email, PlanType: auth.PlanType, Status: "error",
-				QueriedAt: time.Now().UTC(), Error: queryErr.Error(),
+	result := &QuotaResponse{Provider: "all", Accounts: []*QuotaSnapshot{}, QueriedAt: time.Now().UTC()}
+	for _, provider := range s.providers {
+		for _, auth := range authFiles {
+			if !provider.Match(auth) {
+				continue
 			}
+			snapshot, queryErr := provider.Query(ctx, s.client, auth)
+			if queryErr != nil {
+				snapshot = &QuotaSnapshot{
+					Provider: provider.ID(), AuthIndex: auth.AuthIndex, AccountID: auth.AccountID,
+					Email: auth.Email, PlanType: auth.PlanType, Status: "error",
+					QueriedAt: time.Now().UTC(), Error: queryErr.Error(),
+				}
+			}
+			result.Accounts = append(result.Accounts, snapshot)
 		}
-		result.Accounts = append(result.Accounts, snapshot)
 	}
 
 	s.mu.Lock()
