@@ -203,7 +203,11 @@ func (h *CPAHandler) StartAuth(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "started", "provider": req.Provider})
+	c.JSON(http.StatusOK, gin.H{
+		"status":        "started",
+		"provider":      req.Provider,
+		"callback_port": cpa.OAuthCallbackPort(req.Provider),
+	})
 }
 
 // StopAuth 取消当前 OAuth 登录。

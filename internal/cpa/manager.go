@@ -306,6 +306,21 @@ var loginFlags = map[string]string{
 	"antigravity": "-antigravity-login",
 }
 
+// OAuthCallbackPort 返回 CLIProxyAPI 官方 OAuth 回调端口。
+// 固定端口便于 Docker 远程部署时建立 SSH 隧道。
+func OAuthCallbackPort(provider string) int {
+	switch provider {
+	case "codex":
+		return 1455
+	case "claude":
+		return 54545
+	case "antigravity":
+		return 51121
+	default:
+		return 0
+	}
+}
+
 // StartLogin 启动一个 CLIProxyAPI OAuth 登录流程。
 func (m *Manager) StartLogin(provider string, device bool, noBrowser bool) error {
 	flag, ok := loginFlags[provider]
@@ -331,6 +346,11 @@ func (m *Manager) StartLogin(provider string, device bool, noBrowser bool) error
 		return err
 	}
 	cmd := exec.Command(m.binPath, "-config", m.ConfigPath(), flag)
+	// 显式固定官方回调端口，避免容器重启或远程登录时端口不一致。
+	// Codex 设备码登录不使用本地 OAuth 回调。
+	if callbackPort := OAuthCallbackPort(provider); callbackPort > 0 && !(provider == "codex" && device) {
+		cmd.Args = append(cmd.Args, "-oauth-callback-port", fmt.Sprintf("%d", callbackPort))
+	}
 	if noBrowser {
 		cmd.Args = append(cmd.Args, "-no-browser")
 	}
@@ -403,11 +423,12 @@ func (m *Manager) AuthStatus() map[string]interface{} {
 		}
 	}
 	status := map[string]interface{}{
-		"running":    authRunning,
-		"provider":   provider,
-		"output":     output,
-		"auth_dir":   m.AuthDir(),
-		"auth_files": authFiles,
+		"running":       authRunning,
+		"provider":      provider,
+		"callback_port": OAuthCallbackPort(provider),
+		"output":        output,
+		"auth_dir":      m.AuthDir(),
+		"auth_files":    authFiles,
 	}
 	if !started.IsZero() {
 		status["started_at"] = started

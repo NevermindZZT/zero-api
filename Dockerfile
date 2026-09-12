@@ -30,6 +30,7 @@ COPY --from=go-builder /build/configs/config.yaml ./configs/config.yaml
 
 VOLUME ["/app/data", "/app/certs"]
 
-EXPOSE 8080 8520
+# 1455/54545/51121 为 CLIProxyAPI 远程 OAuth 回调端口。
+EXPOSE 8080 8520 1455 54545 51121
 
 ENTRYPOINT ["/app/zero-api"]

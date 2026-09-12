@@ -61,6 +61,13 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
       每次只运行一个登录流程。授权完成后，CLIProxyAPI 会把凭据保存在自己的 auth 目录，zero-api 不读取或保存 token 内容。
     </NAlert>
 
+    <NAlert v-if="provider === 'codex' || provider === 'claude' || provider === 'antigravity'" type="warning">
+      Docker 或无桌面的远程服务器登录：先在本地电脑建立 SSH 端口转发，再点击“开始登录”。
+      {{ provider === 'codex' ? 'Codex 回调端口为 1455。' : provider === 'claude' ? 'Claude 回调端口为 54545。' : 'Antigravity 回调端口为 51121。' }}
+      示例：<code>ssh -L {{ provider === 'codex' ? 1455 : provider === 'claude' ? 54545 : 51121 }}:127.0.0.1:{{ provider === 'codex' ? 1455 : provider === 'claude' ? 54545 : 51121 }} root@服务器地址 -p SSH端口</code>
+      建立隧道后，在本地浏览器打开输出中的授权链接；不要把 OAuth 回调端口暴露到公网。
+    </NAlert>
+
     <NCard title="添加订阅账号">
       <NSpace vertical size="large">
         <NSelect v-model:value="provider" :options="providers" :disabled="auth.running" />
