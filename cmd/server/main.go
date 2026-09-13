@@ -25,7 +25,7 @@ import (
 	"github.com/never/zero-api/internal/upstream"
 )
 
-//go:embed web/dist/index.html web/dist/assets/*
+//go:embed web/dist/index.html web/dist/logo.svg web/dist/assets/*
 var webFS embed.FS
 
 func main() {
@@ -292,6 +292,15 @@ func main() {
 			// 根路径
 			r.GET("/", func(c *gin.Context) {
 				c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
+			})
+			// 根目录静态文件（Logo、favicon 等）
+			r.GET("/logo.svg", func(c *gin.Context) {
+				data, err := fs.ReadFile(webSubFS, "logo.svg")
+				if err != nil {
+					c.Status(http.StatusNotFound)
+					return
+				}
+				c.Data(http.StatusOK, "image/svg+xml", data)
 			})
 			// 静态资源
 			r.GET("/assets/*filepath", func(c *gin.Context) {

@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { NButton, NInput, NCard, NForm, NFormItem, NIcon, useMessage } from 'naive-ui'
-import { FlashSharp } from '@vicons/ionicons5'
+import { NButton, NInput, NCard, NForm, NFormItem, useMessage } from 'naive-ui'
 import api from '@/api'
 
 const router = useRouter()
@@ -40,9 +39,9 @@ async function login() {
     <NCard class="login-card" :bordered="false">
       <div class="login-header">
         <div class="login-icon-wrapper">
-          <NIcon size="40" color="#fff"><FlashSharp /></NIcon>
+          <img src="/logo.svg" alt="zero-api" class="login-logo" />
         </div>
-        <h1>zero-api</h1>
+        <h1><span class="logo-zero">zero</span><span class="logo-api">-api</span></h1>
         <p class="subtitle">大模型 API 中转站</p>
       </div>
       <NForm @submit.prevent="login">
@@ -112,24 +111,24 @@ async function login() {
   margin-bottom: 32px;
 }
 .login-icon-wrapper {
-  width: 64px;
-  height: 64px;
-  border-radius: 18px;
-  background: linear-gradient(135deg, #667eea, #764ba2);
+  width: 76px;
+  height: 76px;
+  border-radius: 22px;
+  background: #111a4f;
+  box-shadow: 0 8px 28px rgba(71, 117, 255, .32);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 16px;
-  box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
 }
+.login-logo { width: 62px; height: 62px; }
 .login-header h1 {
   font-size: 28px;
   font-weight: 700;
-  background: linear-gradient(135deg, #667eea, #764ba2);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
   margin: 0 0 8px 0;
 }
+.logo-zero { color: #e2e8f0; }
+.logo-api { color: #6d8cff; }
 .subtitle {
   color: #94a3b8;
   font-size: 14px;

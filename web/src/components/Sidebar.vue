@@ -10,7 +10,6 @@ import {
   ShieldCheckmarkSharp,
   KeySharp,
   TrendingUpSharp,
-  FlashSharp,
   RocketSharp,
   ServerSharp,
   SettingsSharp,
@@ -124,9 +123,9 @@ function closeMobile() {
       </NButton>
     </div>    <div class="sidebar-logo">
       <div class="logo-icon-wrapper">
-        <NIcon size="22" color="#fff"><FlashSharp /></NIcon>
+        <img src="/logo.svg" alt="zero-api" class="brand-logo" />
       </div>
-      <span v-show="!collapsed" class="logo-text">zero-api</span>
+      <span v-show="!collapsed" class="logo-text"><span class="logo-zero">zero</span><span class="logo-api">-api</span></span>
     </div>
 
     <NMenu
@@ -164,12 +163,14 @@ function closeMobile() {
   width: 34px;
   height: 34px;
   border-radius: 10px;
-  background: linear-gradient(135deg, #667eea, #764ba2);
+  background: #111a4f;
+  box-shadow: 0 0 18px rgba(71, 117, 255, .28);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
 }
+.brand-logo { width: 29px; height: 29px; display: block; }
 /* 侧边栏内容：flex 列布局，让菜单区独立滚动、footer 固定在底部
    原实现 footer 为 absolute 定位，而 NLayoutSider 的滚动容器包裹了所有内容，
    菜单滚动时会从 footer 底下穿过造成重叠。改为：
