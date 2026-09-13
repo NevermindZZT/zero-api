@@ -19,3 +19,13 @@ func TestRenderIncludesLocalManagementAPI(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderAllowsRemoteManagement(t *testing.T) {
+	content, err := (&Config{AllowRemote: true, ManagementKey: "management-secret"}).Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "allow-remote: true") {
+		t.Fatalf("config missing enabled remote management:\n%s", content)
+	}
+}

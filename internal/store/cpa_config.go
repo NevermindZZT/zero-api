@@ -19,6 +19,7 @@ type CPAConfig struct {
 	ProxyURL      string   `json:"proxy_url,omitempty"`
 	RequestRetry  int      `json:"request_retry"`
 	Debug         bool     `json:"debug"`
+	AllowRemote   bool     `json:"allow_remote"`
 	ManagementKey string   `json:"-"` // CLIProxyAPI Management API 密钥，不返回前端
 	// 数据目录（不可通过 API 修改）
 	DataDir   string    `json:"data_dir"`
@@ -62,11 +63,11 @@ func (r *CPAConfigRepo) Get() (*CPAConfig, error) {
 	var c CPAConfig
 	var apiKeysJSON, createdAt, updatedAt string
 	err := r.db.QueryRow(
-		`SELECT id, enabled, auto_start, host, port, api_keys, proxy_url, request_retry, debug,
+		`SELECT id, enabled, auto_start, host, port, api_keys, proxy_url, request_retry, debug, allow_remote,
 		        management_key, data_dir, created_at, updated_at
 		 FROM cpa_config LIMIT 1`,
 	).Scan(&c.ID, &c.Enabled, &c.AutoStart, &c.Host, &c.Port, &apiKeysJSON,
-		&c.ProxyURL, &c.RequestRetry, &c.Debug, &c.ManagementKey,
+		&c.ProxyURL, &c.RequestRetry, &c.Debug, &c.AllowRemote, &c.ManagementKey,
 		&c.DataDir, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
@@ -85,10 +86,10 @@ func (r *CPAConfigRepo) Save(c *CPAConfig) error {
 	apiKeysJSON, _ := json.Marshal(c.APIKeys)
 	_, err := r.db.Exec(
 		`UPDATE cpa_config SET enabled=?, auto_start=?, host=?, port=?, api_keys=?, proxy_url=?,
-		        request_retry=?, debug=?, updated_at=CURRENT_TIMESTAMP
+		        request_retry=?, debug=?, allow_remote=?, updated_at=CURRENT_TIMESTAMP
 		 WHERE id=1`,
 		boolToInt(c.Enabled), boolToInt(c.AutoStart), c.Host, c.Port, string(apiKeysJSON),
-		c.ProxyURL, c.RequestRetry, boolToInt(c.Debug),
+		c.ProxyURL, c.RequestRetry, boolToInt(c.Debug), boolToInt(c.AllowRemote),
 	)
 	if err != nil {
 		return err
@@ -118,7 +119,7 @@ func (r *CPAConfigRepo) Init(dataDir string) error {
 		return nil
 	}
 	_, err := r.db.Exec(
-		`INSERT INTO cpa_config (enabled, auto_start, host, port, api_keys, request_retry, debug, data_dir)
-		 VALUES (1, 1, '127.0.0.1', 8317, '[]', 3, 0, ?)`, dataDir)
+		`INSERT INTO cpa_config (enabled, auto_start, host, port, api_keys, request_retry, debug, allow_remote, data_dir)
+		 VALUES (1, 1, '127.0.0.1', 8317, '[]', 3, 0, 0, ?)`, dataDir)
 	return err
 }

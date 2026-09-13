@@ -29,6 +29,8 @@ type Config struct {
 	RequestRetry int `json:"request_retry"`
 	// Debug 调试模式
 	Debug bool `json:"debug"`
+	// AllowRemote 是否允许 CLIProxyAPI Management API 远程访问
+	AllowRemote bool `json:"allow_remote"`
 
 	// 订阅渠道可用性由 auths 目录中的认证文件决定，无需开关配置。
 }
@@ -77,7 +79,7 @@ func (c *Config) Render() ([]byte, error) {
 	y.AuthDir = "auths" // 相对 config 文件所在目录（CLIProxyAPI 相对 auth-dir 解释）
 	y.APIKeys = c.APIKeys
 	y.Debug = c.Debug
-	y.RemoteManagement.AllowRemote = false
+	y.RemoteManagement.AllowRemote = c.AllowRemote
 	y.RemoteManagement.SecretKey = c.ManagementKey
 	if c.ProxyURL != "" {
 		y.ProxyURL = c.ProxyURL

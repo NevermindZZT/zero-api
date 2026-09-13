@@ -12,7 +12,7 @@ const loading = ref(true)
 const busy = ref(false)
 const config = ref<any>({
   enabled: true, auto_start: true, host: '127.0.0.1', port: 8317,
-  api_keys: [], proxy_url: '', request_retry: 3, debug: false,
+  api_keys: [], proxy_url: '', request_retry: 3, debug: false, allow_remote: false,
 })
 const status = ref<any>({})
 const update = ref<any>({})
@@ -258,6 +258,9 @@ onUnmounted(() => {
               </NFormItem>
               <NFormItem label="请求重试"><NInputNumber v-model:value="config.request_retry" :min="0" :max="10" style="width: 100%" /></NFormItem>
               <NFormItem label="调试日志"><NSwitch v-model:value="config.debug" /></NFormItem>
+              <NFormItem label="允许远程访问">
+                <NSwitch v-model:value="config.allow_remote" />
+              </NFormItem>
             </NGi>
           </NGrid>
           <NButton type="primary" :loading="busy" @click="save">保存配置</NButton>

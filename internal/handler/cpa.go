@@ -351,5 +351,6 @@ func cfgToCPAConfig(cfg *store.CPAConfig) *cpa.Config {
 		ProxyURL:      cfg.ProxyURL,
 		RequestRetry:  cfg.RequestRetry,
 		Debug:         cfg.Debug,
+		AllowRemote:   cfg.AllowRemote,
 	}
 }
