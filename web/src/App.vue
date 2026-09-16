@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { darkTheme, zhCN, dateZhCN } from 'naive-ui'
 import { NConfigProvider, NMessageProvider, NDialogProvider } from 'naive-ui'
 import Sidebar from '@/components/Sidebar.vue'
@@ -9,10 +9,23 @@ import { useRoute } from 'vue-router'
 const route = useRoute()
 const isLoginPage = computed(() => route.path === '/login')
 
+// 登录页需要保留浏览器的账号密码填充；其他 zero-api 页面统一避免被识别为登录表单。
+function disableAutofillOnAppForms() {
+  if (isLoginPage.value) return
+
+  document.querySelectorAll<HTMLFormElement>('#app form').forEach((form) => {
+    form.setAttribute('autocomplete', 'off')
+  })
+  document.querySelectorAll<HTMLInputElement>('#app input').forEach((input) => {
+    input.setAttribute('autocomplete', input.type === 'password' ? 'new-password' : 'off')
+  })
+}
+
 // 移动端检测
 const isMobile = ref(false)
 const sidebarOpen = ref(false)
 let mq: MediaQueryList | null = null
+let autofillObserver: MutationObserver | null = null
 
 function onMqChange(e: MediaQueryListEvent | MediaQueryList) {
   isMobile.value = e.matches
@@ -24,12 +37,19 @@ onMounted(() => {
   mq.addEventListener('change', onMqChange)
   onMqChange(mq)
 
+  disableAutofillOnAppForms()
+  autofillObserver = new MutationObserver(disableAutofillOnAppForms)
+  autofillObserver.observe(document.getElementById('app')!, { childList: true, subtree: true })
+
   window.addEventListener('toggle-sidebar', toggleSidebar)
   window.addEventListener('close-mobile-sidebar', closeSidebar)
 })
 
+watch(isLoginPage, () => disableAutofillOnAppForms())
+
 onUnmounted(() => {
   mq?.removeEventListener('change', onMqChange)
+  autofillObserver?.disconnect()
   window.removeEventListener('toggle-sidebar', toggleSidebar)
   window.removeEventListener('close-mobile-sidebar', closeSidebar)
 })
