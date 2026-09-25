@@ -79,7 +79,7 @@ async function confirmRestore() {
     <NSpace vertical size="large">
       <div class="page-header">
         <h2>
-          <NIcon size="20" color="#667eea" style="vertical-align:-2px;margin-right:6px"><CloudDownloadSharp /></NIcon>
+          <NIcon size="20" color="var(--accent-primary)" style="vertical-align:-2px;margin-right:6px"><CloudDownloadSharp /></NIcon>
           数据库管理
         </h2>
       </div>

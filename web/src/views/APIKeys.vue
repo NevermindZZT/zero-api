@@ -161,7 +161,7 @@ const columns = [
     render: (r: any) => {
       // 无论是否启用额度都显示累计使用（后端 DeductQuota 对不限额 key 也统计 quota_used）
       const used = r.quota_used || 0
-      return h('span', { style: 'font-size:12px;color:#94a3b8' }, `$${used.toFixed(4)}`)
+      return h('span', { style: 'font-size:12px;color:var(--text-secondary)' }, `$${used.toFixed(4)}`)
     },
   },
   {
@@ -275,7 +275,7 @@ function copyKey(key: string) {
     <NSpace vertical size="large">
       <div class="page-header">
         <h2>
-          <NIcon size="20" color="#667eea" style="vertical-align:-2px;margin-right:6px"><KeySharp /></NIcon>
+          <NIcon size="20" color="var(--accent-primary)" style="vertical-align:-2px;margin-right:6px"><KeySharp /></NIcon>
           API 密钥管理
         </h2>
         <p class="page-subtitle">用于客户端调用中转 API 的认证凭据</p>
@@ -284,16 +284,16 @@ function copyKey(key: string) {
       <NCard title="使用说明" size="small">
         <div style="display:flex;flex-direction:column;gap:12px">
           <div style="display:flex;align-items:center;gap:12px">
-            <span style="color:#94a3b8;font-size:13px;white-space:nowrap">Base URL：</span>
+            <span style="color:var(--text-secondary);font-size:13px;white-space:nowrap">Base URL：</span>
             <NInputGroup>
               <NInput :value="apiBase" readonly :style="{ fontFamily: 'monospace', fontSize: '13px' }" />
               <NButton type="primary" @click="copyKey(apiBase)">复制</NButton>
             </NInputGroup>
           </div>
-          <p style="color:#94a3b8;font-size:13px;margin:0">
+          <p style="color:var(--text-secondary);font-size:13px;margin:0">
             客户端调用时，在请求头中携带 API Key 即可完成认证：
           </p>
-          <pre style="background:rgba(0,0,0,0.2);padding:12px;border-radius:8px;font-size:12px;margin:0"><span style="color:#94a3b8">Authorization: Bearer </span><span style="color:#22c55e">sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</span></pre>
+          <pre style="background:var(--surface-input);padding:12px;border-radius:8px;font-size:12px;margin:0"><span style="color:var(--text-secondary)">Authorization: Bearer </span><span style="color:#22c55e">sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</span></pre>
         </div>
       </NCard>
 
@@ -302,7 +302,7 @@ function copyKey(key: string) {
           <div style="display:flex;justify-content:space-between;align-items:center">
             <span>密钥列表</span>
             <div style="display:flex;align-items:center;gap:12px">
-              <span v-if="lastUpdated" style="font-size:12px;color:#64748b">
+              <span v-if="lastUpdated" style="font-size:12px;color:var(--text-muted)">
                 更新: {{ lastUpdated }} <span style="color:#22c55e;margin-left:4px">● 15s 自动刷新</span>
               </span>
               <NButton type="primary" size="small" @click="openCreate">新建密钥</NButton>
@@ -330,8 +330,8 @@ function copyKey(key: string) {
             ⚠️ 密钥只显示一次，请立即复制保存！
           </div>
           <div style="display:flex;gap:0">
-            <div style="background:rgba(255,255,255,0.05);padding:8px 12px;border-radius:8px 0 0 8px;font-size:12px;color:#94a3b8;display:flex;align-items:center;border:1px solid rgba(255,255,255,0.1);border-right:none">密钥</div>
-            <div style="flex:1;padding:8px 12px;font-family:monospace;font-size:12px;border:1px solid rgba(255,255,255,0.1);border-radius:0;background:rgba(0,0,0,0.2)">{{ createdKey }}</div>
+            <div style="background:var(--bg-muted);padding:8px 12px;border-radius:8px 0 0 8px;font-size:12px;color:var(--text-secondary);display:flex;align-items:center;border:1px solid var(--border-strong);border-right:none">密钥</div>
+            <div style="flex:1;padding:8px 12px;font-family:monospace;font-size:12px;border:1px solid var(--border-strong);border-radius:0;background:var(--surface-input)">{{ createdKey }}</div>
             <NButton type="primary" @click="copyKey(createdKey!)" style="border-radius:0 8px 8px 0">复制</NButton>
           </div>
           <div style="margin-top:16px">
@@ -343,19 +343,19 @@ function copyKey(key: string) {
       <!-- 配置弹窗：额度 + 模型限制 -->
       <NModal v-model:show="showConfigModal" title="密钥配置" preset="card" style="width:520px;max-width:calc(100vw - 32px)">
         <template v-if="editingKey">
-          <div style="margin-bottom:12px;font-size:13px;color:#94a3b8">
+          <div style="margin-bottom:12px;font-size:13px;color:var(--text-secondary)">
             密钥：<code>{{ editingKey.key?.substring(0, 20) }}...</code>
           </div>
           <NForm label-placement="left" label-width="100">
             <NFormItem label="额度限制">
               <NSwitch v-model:value="configForm.quota_enabled" />
-              <span style="color:#94a3b8;font-size:12px;margin-left:8px">开启后按用量扣减，余额为 0 时拒绝请求</span>
+              <span style="color:var(--text-secondary);font-size:12px;margin-left:8px">开启后按用量扣减，余额为 0 时拒绝请求</span>
             </NFormItem>
             <NFormItem v-if="configForm.quota_enabled" label="剩余余额 ($)" label-description="输入新值即覆盖，可随时充值/重置">
               <NInputNumber v-model:value="configForm.quota_balance" :min="0" :step="0.01" style="width:100%" placeholder="剩余额度" />
             </NFormItem>
             <NFormItem v-if="configForm.quota_enabled" label="累计已用 ($)">
-              <span style="color:#94a3b8">$ {{ (editingKey.quota_used || 0).toFixed(4) }}</span>
+              <span style="color:var(--text-secondary)">$ {{ (editingKey.quota_used || 0).toFixed(4) }}</span>
             </NFormItem>
             <NFormItem label="可用模型" label-description="留空=全部模型可用">
               <NSelect
@@ -381,7 +381,7 @@ function copyKey(key: string) {
 <style scoped>
 /* page-header styles are now global in App.vue */
 code {
-  background: rgba(102,126,234,0.2);
+  background: var(--accent-soft);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 12px;

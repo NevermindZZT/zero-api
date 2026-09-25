@@ -270,13 +270,13 @@ function renderBalance(r: any) {
   const b = balances.value[r.id]
   if (!b) {
     return h('div', { style: 'display:flex;align-items:center;gap:6px' }, [
-      h('span', { style: 'color:#64748b;font-size:12px' }, '未查询'),
+      h('span', { style: 'color:var(--text-muted);font-size:12px' }, '未查询'),
       h(NButton, { size: 'tiny', quaternary: true, loading: refreshingId.value === r.id, disabled: refreshingId.value !== null, onClick: () => refreshBalance(r.id) }, { icon: () => h(NIcon, null, { default: () => h(RefreshSharp) }) }),
     ])
   }
 
   let content: any
-  const color = b.status === 'error' ? '#f87171' : b.status === 'warning' ? '#fbbf24' : b.status === 'unsupported' ? '#94a3b8' : '#22c55e'
+  const color = b.status === 'error' ? '#f87171' : b.status === 'warning' ? '#fbbf24' : b.status === 'unsupported' ? 'var(--text-secondary)' : '#22c55e'
   if (b.status === 'error') {
     content = h(NTooltip, { trigger: 'hover' }, {
       trigger: () => h('span', { style: 'color:#f87171;font-size:12px' }, '查询失败'),
@@ -284,17 +284,17 @@ function renderBalance(r: any) {
     })
   } else if (b.status === 'unsupported') {
     content = h(NTooltip, { trigger: 'hover' }, {
-      trigger: () => h('span', { style: 'color:#94a3b8;font-size:12px' }, '手动维护'),
+      trigger: () => h('span', { style: 'color:var(--text-secondary);font-size:12px' }, '手动维护'),
       default: () => '该供应商无公开余额接口，点击查看详情可手动维护余额',
     })
   } else if (b.status === 'manual') {
-    content = h('span', { style: 'font-size:12px;color:#94a3b8' }, `${formatCurrency(b.balance, b.currency)} (手动)`)
+    content = h('span', { style: 'font-size:12px;color:var(--text-secondary)' }, `${formatCurrency(b.balance, b.currency)} (手动)`)
   } else if (b.plan_type) {
     content = h('span', { style: 'font-size:12px' }, `${b.plan_type} · ${b.plan_status || ''}`)
   } else if (b.balance !== undefined && b.balance !== null) {
     content = h('span', { style: 'font-size:12px' }, formatCurrency(b.balance, b.currency))
   } else {
-    content = h('span', { style: 'color:#64748b;font-size:12px' }, '—')
+    content = h('span', { style: 'color:var(--text-muted);font-size:12px' }, '—')
   }
 
   return h('div', { style: 'display:flex;align-items:center;gap:6px;cursor:pointer' }, [
@@ -372,7 +372,7 @@ async function toggleChannel(ch: any) {
     <NSpace vertical size="large">
         <div class="page-header" style="display:flex;justify-content:space-between;align-items:center">
         <h2>
-          <NIcon size="20" color="#667eea" style="vertical-align:-2px;margin-right:6px"><GlobeSharp /></NIcon>
+          <NIcon size="20" color="var(--accent-primary)" style="vertical-align:-2px;margin-right:6px"><GlobeSharp /></NIcon>
           渠道管理
         </h2>
         <NSpace>
@@ -417,13 +417,13 @@ async function toggleChannel(ch: any) {
           </NFormItem>
           <NFormItem label="出站代理">
             <NSwitch v-model:value="form.use_proxy" />
-            <span style="color:#94a3b8;font-size:13px;margin-left:8px">
+            <span style="color:var(--text-secondary);font-size:13px;margin-left:8px">
               启用后此渠道的请求通过全局代理转发
             </span>
           </NFormItem>
           <NFormItem label="熔断回落">
             <NSwitch v-model:value="form.failover_enabled" />
-            <span style="color:#94a3b8;font-size:13px;margin-left:8px">
+            <span style="color:var(--text-secondary);font-size:13px;margin-left:8px">
               启用后，渠道失败会触发熔断，自动回落到其他渠道
             </span>
           </NFormItem>
@@ -467,11 +467,11 @@ async function toggleChannel(ch: any) {
               <NDescriptionsItem label="Token 剩余">{{ balanceDetail.token_remaining }}</NDescriptionsItem>
             </template>
             <NDescriptionsItem v-if="balanceDetail.error_msg" label="说明" :span="2">
-              <span style="color:#94a3b8;word-break:break-all">{{ balanceDetail.error_msg }}</span>
+              <span style="color:var(--text-secondary);word-break:break-all">{{ balanceDetail.error_msg }}</span>
             </NDescriptionsItem>
             <NDescriptionsItem label="查询时间" :span="2">{{ balanceDetail.last_checked_at || '-' }}</NDescriptionsItem>
             <NDescriptionsItem v-if="balanceDetail.raw_data && balanceDetail.raw_data !== '{}'" label="原始响应" :span="2">
-              <pre style="white-space:pre-wrap;font-size:12px;color:#94a3b8;max-height:200px;overflow:auto">{{ balanceDetail.raw_data }}</pre>
+              <pre style="white-space:pre-wrap;font-size:12px;color:var(--text-secondary);max-height:200px;overflow:auto">{{ balanceDetail.raw_data }}</pre>
             </NDescriptionsItem>
           </NDescriptions>
 
@@ -486,7 +486,7 @@ async function toggleChannel(ch: any) {
           </div>
           <div v-else style="display:flex;flex-direction:column;gap:8px">
             <div style="display:flex;align-items:center;gap:8px">
-              <span style="font-size:13px;color:#94a3b8;width:60px">余额</span>
+              <span style="font-size:13px;color:var(--text-secondary);width:60px">余额</span>
               <NInputNumber v-model:value="manualBalanceVal" :min="0" style="flex:1" placeholder="当前余额" />
               <NSelect v-model:value="manualCurrency" :options="[{label:'USD',value:'USD'},{label:'CNY',value:'CNY'}]" style="width:90px" />
             </div>

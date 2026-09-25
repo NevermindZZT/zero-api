@@ -155,14 +155,14 @@ async function del(id: number) {
     <NSpace vertical size="large">
       <div class="page-header">
         <h2>
-          <NIcon size="20" color="#667eea" style="vertical-align:-2px;margin-right:6px"><GitNetworkSharp /></NIcon>
+          <NIcon size="20" color="var(--accent-primary)" style="vertical-align:-2px;margin-right:6px"><GitNetworkSharp /></NIcon>
           虚拟模型
         </h2>
         <p class="page-subtitle">稳定模型入口：下游固定使用虚拟模型名，可随时切换主模型；识图扩展为可选能力</p>
       </div>
 
       <NCard size="small" title="使用说明">
-        <div style="font-size:13px;color:#94a3b8;line-height:1.8">
+        <div style="font-size:13px;color:var(--text-secondary);line-height:1.8">
           <p style="margin:0">📌 <b>模型路由</b>：所有请求默认路由到 <b>主模型</b>。更新主模型后，Agent 无需切换模型名。</p>
           <p style="margin:0">📷 <b>主模型原生识图</b>：主模型支持视觉时，识图模型可留空，图片会原样转发给主模型。</p>
           <p style="margin:0">🧩 <b>识图扩展</b>：主模型不支持视觉时，可配置识图模型，系统会先生成图片描述再交给主模型。</p>

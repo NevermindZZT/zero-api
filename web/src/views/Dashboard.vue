@@ -15,6 +15,7 @@ import {
 } from '@vicons/ionicons5'
 import { usageApi } from '@/api'
 import { formatDateTime } from '@/utils/format'
+import { isDarkTheme } from '@/utils/theme'
 import * as echarts from 'echarts'
 import { CalendarHeatmap } from '@silverwind/vue3-calendar-heatmap'
 import '@silverwind/vue3-calendar-heatmap/dist/style.css'
@@ -61,7 +62,7 @@ const tpsColumns = [
 ]
 
 const statCards = [
-  { label: '请求数', value: 'total_requests', icon: SendSharp, color: '#667eea', bg: 'rgba(102,126,234,0.15)' },
+  { label: '请求数', value: 'total_requests', icon: SendSharp, color: 'var(--accent-primary)', bg: 'var(--accent-soft)' },
   { label: 'Tokens', value: 'total_tokens', icon: DocumentTextSharp, color: '#22c55e', bg: 'rgba(34,197,94,0.15)', format: 'tokens', subLabel: '总 Tokens', subLeft: '入', subLeftKey: 'total_prompt_tokens', subRight: '出', subRightKey: 'total_output_tokens', subLeftColor: '#3b82f6', subRightColor: '#f97316' },
   { label: '费用', value: 'total_cost', icon: CashSharp, color: '#eab308', bg: 'rgba(250,204,21,0.15)', format: 'cost' },
   { label: '活跃渠道', value: 'active_channels', icon: CubeSharp, color: '#a855f7', bg: 'rgba(168,85,247,0.15)' },
@@ -197,6 +198,8 @@ watch(timeRange, async () => {
   nextTick(renderCharts)
 })
 
+watch(isDarkTheme, () => nextTick(renderCharts))
+
 async function loadData() {
   try {
     const { start, end, granularity } = getRangeParams(timeRange.value)
@@ -292,6 +295,10 @@ function renderCharts() {
   renderPieChart()
 }
 
+function themeColor(token: string) {
+  return getComputedStyle(document.documentElement).getPropertyValue(token).trim()
+}
+
 function renderTrendChart() {
   // 服务端已根据时间范围过滤，直接使用 dailyStats
   const stats = dailyStats.value
@@ -302,6 +309,9 @@ function renderTrendChart() {
   if (!chartContainer.value || !stats || stats.length === 0) return
 
   trendChart = echarts.init(chartContainer.value)
+  const textColor = themeColor('--text-secondary')
+  const accentColor = themeColor('--accent-primary')
+  const accentHover = themeColor('--accent-hover')
   const isHour = stats[0]?.date?.length === 13 // "2025-07-21 08" = 13 chars
   const dates = stats.map((d: any) => {
     const raw = d.date
@@ -314,16 +324,16 @@ function renderTrendChart() {
   trendChart.setOption({
     tooltip: { trigger: 'axis' },
     grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-    xAxis: { type: 'category', data: dates, axisLabel: { color: '#94a3b8' } },
+    xAxis: { type: 'category', data: dates, axisLabel: { color: textColor } },
     yAxis: [
-      { type: 'value', name: 'Tokens', nameTextStyle: { color: '#94a3b8' },
-        axisLabel: { color: '#94a3b8', formatter: (v: number) => formatTokens(v) } },
-      { type: 'value', name: '请求数', nameTextStyle: { color: '#94a3b8' }, axisLabel: { color: '#94a3b8' } },
+      { type: 'value', name: 'Tokens', nameTextStyle: { color: textColor },
+        axisLabel: { color: textColor, formatter: (v: number) => formatTokens(v) } },
+      { type: 'value', name: '请求数', nameTextStyle: { color: textColor }, axisLabel: { color: textColor } },
     ],
     series: [
       {
         name: 'Tokens', type: 'bar', data: tokens,
-        itemStyle: { borderRadius: [4, 4, 0, 0], color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: '#667eea' }, { offset: 1, color: '#764ba2' }] } },
+        itemStyle: { borderRadius: [4, 4, 0, 0], color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: accentColor }, { offset: 1, color: accentHover }] } },
       },
       {
         name: '请求数', type: 'line', yAxisIndex: 1, data: requests,
@@ -343,13 +353,15 @@ function renderPieChart() {
   if (!pieContainer.value || !stats || stats.length === 0) return
 
   pieChart = echarts.init(pieContainer.value)
+  const textColor = themeColor('--text-primary')
+  const backgroundColor = themeColor('--bg-primary')
   const data = stats.map((s: any) => ({ name: s.request_model, value: s.total_tokens }))
   pieChart.setOption({
     tooltip: { trigger: 'item', formatter: '{b}: {c} tokens ({d}%)' },
     series: [{
       type: 'pie', radius: ['40%', '70%'],
-      label: { show: true, formatter: '{b}', color: '#e2e8f0', fontSize: 11 },
-      data, itemStyle: { borderRadius: 6, borderColor: '#0f172a', borderWidth: 2 },
+      label: { show: true, formatter: '{b}', color: textColor, fontSize: 11 },
+      data, itemStyle: { borderRadius: 6, borderColor: backgroundColor, borderWidth: 2 },
     }],
   })
 }
@@ -380,7 +392,7 @@ function formatTokens(n: number) {
       <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start">
         <div>
           <h2>
-            <NIcon size="22" color="#667eea" style="vertical-align:-3px;margin-right:6px"><StatsChartSharp /></NIcon>
+            <NIcon size="22" color="var(--accent-primary)" style="vertical-align:-3px;margin-right:6px"><StatsChartSharp /></NIcon>
             仪表盘
           </h2>
           <p class="page-subtitle">zero-api 全局概览</p>
@@ -398,7 +410,7 @@ function formatTokens(n: number) {
           style="width: 240px"
           @update:value="onCustomRangeChange"
         />
-        <span v-if="lastUpdated" style="font-size:12px;color:#64748b">
+        <span v-if="lastUpdated" style="font-size:12px;color:var(--text-muted)">
           上次更新: {{ lastUpdated }}
           <span style="color:#22c55e;margin-left:4px">● 15s 自动刷新</span>
         </span>
@@ -423,7 +435,7 @@ function formatTokens(n: number) {
             </p>
             <p v-if="card.subLeftKey" class="stat-sub">
               <span :style="{ color: card.subLeftColor }">{{ card.subLeft }} {{ formatTokens(overview[card.subLeftKey]) }}</span>
-              <span style="color:#64748b;margin:0 4px">/</span>
+              <span style="color:var(--text-muted);margin:0 4px">/</span>
               <span :style="{ color: card.subRightColor }">{{ card.subRight }} {{ formatTokens(overview[card.subRightKey]) }}</span>
             </p>
           </NCard>
@@ -438,7 +450,7 @@ function formatTokens(n: number) {
           </div>
         </template>
         <template #header-extra>
-          <span style="font-size:12px;color:#64748b">近 5 分钟 · 跟随仪表盘刷新</span>
+          <span style="font-size:12px;color:var(--text-muted)">近 5 分钟 · 跟随仪表盘刷新</span>
         </template>
         <NDataTable
           v-if="tpsStats.length > 0"
@@ -449,7 +461,7 @@ function formatTokens(n: number) {
           size="small"
           :scroll-x="620"
         />
-        <p v-else style="color:#94a3b8;text-align:center;padding:28px 12px;margin:0">
+        <p v-else style="color:var(--text-secondary);text-align:center;padding:28px 12px;margin:0">
           暂无有效样本；只统计上游返回输出 Token 用量的已完成流式请求。
         </p>
       </NCard>
@@ -479,7 +491,7 @@ function formatTokens(n: number) {
                     <span class="cache-stat-label">今日请求</span>
                     <span class="cache-stat-value">{{ overview.today_requests || 0 }}</span>
                   </div>
-                  <p style="color:#64748b;font-size:12px;margin-top:12px">缓存命中率 = 缓存命中 Tokens / 总 Tokens</p>
+                  <p style="color:var(--text-muted);font-size:12px;margin-top:12px">缓存命中率 = 缓存命中 Tokens / 总 Tokens</p>
                 </div>
               </div>
             </div>
@@ -495,10 +507,10 @@ function formatTokens(n: number) {
             </template>
             <div class="chart-card-body" style="flex-direction:column">
               <div ref="pieContainer" style="height:200px;width:100%"></div>
-              <p v-if="recentRecords.length === 0" style="color:#94a3b8;text-align:center;padding:40px">暂无数据</p>
-              <div v-else style="display:flex;gap:16px;font-size:12px;color:#94a3b8;padding:4px 0 0">
-                <span>范围: <b style="color:#e2e8f0">{{ rangeLabel }}</b></span>
-                <span>统计模型: <b style="color:#e2e8f0">{{ modelStats.length }}</b> 个</span>
+              <p v-if="recentRecords.length === 0" style="color:var(--text-secondary);text-align:center;padding:40px">暂无数据</p>
+              <div v-else style="display:flex;gap:16px;font-size:12px;color:var(--text-secondary);padding:4px 0 0">
+                <span>范围: <b style="color:var(--text-primary)">{{ rangeLabel }}</b></span>
+                <span>统计模型: <b style="color:var(--text-primary)">{{ modelStats.length }}</b> 个</span>
               </div>
             </div>
           </NCard>
@@ -508,19 +520,19 @@ function formatTokens(n: number) {
       <NCard class="chart-card">
         <template #header>
           <div class="card-header-with-icon">
-            <NIcon size="18" color="#667eea"><TrendingUpSharp /></NIcon>
+            <NIcon size="18" color="var(--accent-primary)"><TrendingUpSharp /></NIcon>
             <span>使用趋势</span>
           </div>
         </template>
         <div ref="chartContainer" style="height:300px"></div>
-        <p v-if="dailyStats.length === 0" style="color:#94a3b8;text-align:center;padding:60px">暂无使用数据</p>
+        <p v-if="dailyStats.length === 0" style="color:var(--text-secondary);text-align:center;padding:60px">暂无使用数据</p>
       </NCard>
 
       <NCard class="chart-card">
         <template #header>
           <div class="card-header-with-icon">
             <NIcon size="18" color="#26a641"><GridSharp /></NIcon>
-            <span>年度 Token 热力图 <span style="font-size:12px;color:#64748b;font-weight:400">(过去一年每日 Tokens 用量)</span></span>
+            <span>年度 Token 热力图 <span style="font-size:12px;color:var(--text-muted);font-weight:400">(过去一年每日 Tokens 用量)</span></span>
           </div>
         </template>
         <div style="padding:12px 0">
@@ -528,15 +540,15 @@ function formatTokens(n: number) {
             v-if="yearHeatmap.length > 0"
             :values="heatmapValues"
             :end-date="heatmapEndDate"
-            :range-color="['#00000000', '#161b22', '#0e4429', '#006d32', '#26a641', '#39d353']"
+            :range-color="isDarkTheme ? ['#00000000', '#252525', '#14532d', '#15803d', '#22c55e', '#4ade80'] : ['#00000000', '#f4f4f5', '#dcfce7', '#86efac', '#22c55e', '#15803d']"
             :max="heatmapMax"
             tooltip-unit="tokens"
             :tooltip-formatter="(v: any) => v.date + ': ' + formatTokens(v.count) + ' tokens'"
             :round="2"
-            dark-mode
+            :dark-mode="isDarkTheme"
             no-data-text="无数据"
           />
-          <p v-else style="color:#94a3b8;text-align:center;padding:30px">暂无数据</p>
+          <p v-else style="color:var(--text-secondary);text-align:center;padding:30px">暂无数据</p>
         </div>
       </NCard>
 
@@ -598,12 +610,12 @@ function formatTokens(n: number) {
   margin-bottom: 14px;
 }
 .stat-label {
-  color: #94a3b8;
+  color: var(--text-secondary);
   font-size: 13px;
   margin: 0 0 6px 0;
 }
 .stat-sub {
-  color: #94a3b8;
+  color: var(--text-secondary);
   font-size: 12px;
   margin: 6px 0 0 0;
 }
@@ -611,7 +623,7 @@ function formatTokens(n: number) {
   font-size: 26px;
   font-weight: 700;
   margin: 0;
-  background: linear-gradient(135deg, #f1f5f9, #94a3b8);
+  background: linear-gradient(135deg, var(--text-primary), var(--text-secondary));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -622,10 +634,10 @@ function formatTokens(n: number) {
   justify-content: space-between;
   align-items: center;
   padding: 6px 0;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
+  border-bottom: 1px solid var(--border-color);
 }
-.cache-stat-label { color: #94a3b8; font-size: 13px; }
-.cache-stat-value { color: #e2e8f0; font-size: 14px; font-weight: 600; }
+.cache-stat-label { color: var(--text-secondary); font-size: 13px; }
+.cache-stat-value { color: var(--text-primary); font-size: 14px; font-weight: 600; }
 
 /* 响应式 */
 @media (max-width: 767px) {

@@ -149,7 +149,7 @@ function extractResponseContent(data: any, protocol: string): string | null {
     <div class="page-header">
       <div>
         <h2>
-          <NIcon size="20" color="#667eea" style="vertical-align:-2px;margin-right:6px"><ChatbubbleEllipsesSharp /></NIcon>
+          <NIcon size="20" color="var(--accent-primary)" style="vertical-align:-2px;margin-right:6px"><ChatbubbleEllipsesSharp /></NIcon>
           Chat 测试
         </h2>
         <p class="page-subtitle">通过中转接口直接发起测试请求</p>
@@ -172,7 +172,7 @@ function extractResponseContent(data: any, protocol: string): string | null {
         </NFormItem>
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
           <NSwitch v-model:value="streamEnabled" />
-          <span style="color:#a0aec0;font-size:13px">流式传输（stream: true）</span>
+          <span style="color:var(--text-secondary);font-size:13px">流式传输（stream: true）</span>
         </div>
         <div style="display:flex;gap:8px">
           <NButton type="primary" :disabled="!selectedKey || !selectedModel || !prompt.trim() || loading" :loading="loading && !streamEnabled" @click="sendMessage" style="flex:1">发送测试</NButton>
@@ -186,7 +186,7 @@ function extractResponseContent(data: any, protocol: string): string | null {
     </div>
 
     <NCard title="响应结果" style="min-width:100%;width:100%">
-      <pre style="white-space:pre-wrap;word-break:break-word;min-height:160px;color:#e2e8f0">{{ responseText || '暂无响应' }}</pre>
+      <pre style="white-space:pre-wrap;word-break:break-word;min-height:160px;color:var(--text-primary)">{{ responseText || '暂无响应' }}</pre>
     </NCard>
   </div>
 </template>

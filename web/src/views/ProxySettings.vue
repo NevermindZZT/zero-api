@@ -296,7 +296,7 @@ async function downloadCert(format: string) {
     <NSpace vertical size="large">
       <div class="page-header">
         <h2>
-          <NIcon size="20" color="#667eea" style="vertical-align:-2px;margin-right:6px"><ShieldCheckmarkSharp /></NIcon>
+          <NIcon size="20" color="var(--accent-primary)" style="vertical-align:-2px;margin-right:6px"><ShieldCheckmarkSharp /></NIcon>
           代理设置
         </h2>
       </div>
@@ -326,7 +326,7 @@ async function downloadCert(format: string) {
                 >
                   {{ d }}
                 </NTag>
-                <span v-if="!config.intercept_domains?.length" style="color:#888">暂无域名</span>
+                <span v-if="!config.intercept_domains?.length" style="color:var(--text-muted)">暂无域名</span>
               </NSpace>
             </div>
           </NFormItem>
@@ -342,7 +342,7 @@ async function downloadCert(format: string) {
         <NForm label-placement="left" label-width="120">
           <NFormItem label="全量 MITM">
             <NSwitch v-model:value="config.mitm_all" />
-            <span style="color:#94a3b8;font-size:13px;margin-left:8px">
+            <span style="color:var(--text-secondary);font-size:13px;margin-left:8px">
               开启后所有 HTTPS 域名都会尝试 MITM 解密并自动检测 LLM 请求，无需逐个配置拦截域名
             </span>
           </NFormItem>
@@ -406,24 +406,24 @@ async function downloadCert(format: string) {
               <template #suffix>
                 <NPopover v-model:show="showSourcePopover" trigger="click" placement="bottom-end" :width="280" scrollable>
                   <template #trigger>
-                    <NButton text size="tiny" style="color:#888;padding:0 2px">
+                    <NButton text size="tiny" style="color:var(--text-muted);padding:0 2px">
                       <NIcon size="16"><ChevronDownSharp /></NIcon>
                     </NButton>
                   </template>
                   <div style="padding:4px 0">
                     <NInput v-model:value="modelSearch" placeholder="搜索模型…" clearable style="margin-bottom:8px" />
-                    <div v-if="filteredModelOptions.length === 0" style="color:#888;padding:8px;text-align:center;font-size:13px">无匹配模型</div>
+                    <div v-if="filteredModelOptions.length === 0" style="color:var(--text-muted);padding:8px;text-align:center;font-size:13px">无匹配模型</div>
                     <div style="max-height:280px;overflow-y:auto;overscroll-behavior:contain">
                       <div
                         v-for="m in filteredModelOptions"
                         :key="m.value"
                         style="padding:6px 10px;cursor:pointer;border-radius:4px;font-size:13px"
                         @click="pickSourceModel(m.value)"
-                        @mouseenter="(e: any) => e.target.style.background='rgba(255,255,255,0.06)'"
+                        @mouseenter="(e: any) => e.target.style.background='var(--surface-table-hover)'"
                         @mouseleave="(e: any) => e.target.style.background='transparent'"
                       >
-                        <span style="color:#e2e8f0">{{ m.value }}</span>
-                        <span v-if="m.label !== m.value" style="color:#888;margin-left:8px;font-size:12px">{{ m.label.replace(m.value + ' (', '').replace(')', '') }}</span>
+                        <span style="color:var(--text-primary)">{{ m.value }}</span>
+                        <span v-if="m.label !== m.value" style="color:var(--text-muted);margin-left:8px;font-size:12px">{{ m.label.replace(m.value + ' (', '').replace(')', '') }}</span>
                       </div>
                     </div>
                   </div>
@@ -444,24 +444,24 @@ async function downloadCert(format: string) {
                 <template #suffix>
                   <NPopover v-model:show="showTargetPopover" trigger="click" placement="bottom-end" :width="280" scrollable>
                     <template #trigger>
-                      <NButton text size="tiny" style="color:#888;padding:0 2px">
+                      <NButton text size="tiny" style="color:var(--text-muted);padding:0 2px">
                         <NIcon size="16"><ChevronDownSharp /></NIcon>
                       </NButton>
                     </template>
                     <div style="padding:4px 0">
                       <NInput v-model:value="modelSearch" placeholder="搜索模型…" clearable style="margin-bottom:8px" />
-                      <div v-if="filteredModelOptions.length === 0" style="color:#888;padding:8px;text-align:center;font-size:13px">无匹配模型</div>
+                      <div v-if="filteredModelOptions.length === 0" style="color:var(--text-muted);padding:8px;text-align:center;font-size:13px">无匹配模型</div>
                       <div style="max-height:280px;overflow-y:auto;overscroll-behavior:contain">
                         <div
                           v-for="m in filteredModelOptions"
                           :key="m.value"
                           style="padding:6px 10px;cursor:pointer;border-radius:4px;font-size:13px"
                           @click="pickTargetModel(m.value)"
-                          @mouseenter="(e: any) => e.target.style.background='rgba(255,255,255,0.06)'"
+                          @mouseenter="(e: any) => e.target.style.background='var(--surface-table-hover)'"
                           @mouseleave="(e: any) => e.target.style.background='transparent'"
                         >
-                          <span style="color:#e2e8f0">{{ m.value }}</span>
-                          <span v-if="m.label !== m.value" style="color:#888;margin-left:8px;font-size:12px">{{ m.label.replace(m.value + ' (', '').replace(')', '') }}</span>
+                          <span style="color:var(--text-primary)">{{ m.value }}</span>
+                          <span v-if="m.label !== m.value" style="color:var(--text-muted);margin-left:8px;font-size:12px">{{ m.label.replace(m.value + ' (', '').replace(')', '') }}</span>
                         </div>
                       </div>
                     </div>

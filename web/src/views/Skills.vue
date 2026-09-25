@@ -312,7 +312,7 @@ const columns = [
       const isUpdating = syncingSkills.value.has(row.id)
       if (isUpdating) return h(NSpace, { align: 'center', size: 'small' }, { default: () => [
         h(NTag, { size: 'small', type: 'info' }, { default: () => 'GitHub' }),
-        h('span', { style: 'color:#888;font-size:12px;' }, '同步中...'),
+        h('span', { style: 'color:var(--text-muted);font-size:12px;' }, '同步中...'),
       ]})
       if (status?.hasUpdate) return h(NSpace, { align: 'center', size: 'small' }, { default: () => [
         h(NTag, { size: 'small', type: 'info' }, { default: () => 'GitHub' }),
@@ -352,9 +352,9 @@ const columns = [
 
 function expandRow(row: any) {
   const files = row.files || []
-  if (!files.length) return h('div', { style: 'padding:12px;color:#888;' }, '暂无文件')
+  if (!files.length) return h('div', { style: 'padding:12px;color:var(--text-muted);' }, '暂无文件')
   return h('div', { style: 'padding:8px 24px;' }, [
-    h('div', { style: 'margin-bottom:8px;font-size:12px;color:#888;' }, `📂 共 ${files.length} 个文件 · 点击文件预览内容`),
+    h('div', { style: 'margin-bottom:8px;font-size:12px;color:var(--text-muted);' }, `📂 共 ${files.length} 个文件 · 点击文件预览内容`),
     h(NTree, {
       data: getFileTree(files),
       defaultExpandAll: true,
@@ -373,7 +373,7 @@ function expandRow(row: any) {
     <NSpace vertical size="large">
       <div class="page-header" style="display:flex;justify-content:space-between;align-items:center">
         <h2>
-          <NIcon size="20" color="#667eea" style="vertical-align:-2px;margin-right:6px"><DocumentTextSharp /></NIcon>
+          <NIcon size="20" color="var(--accent-primary)" style="vertical-align:-2px;margin-right:6px"><DocumentTextSharp /></NIcon>
           技能管理
         </h2>
         <NSpace>
@@ -401,7 +401,7 @@ function expandRow(row: any) {
     <NCard style="width:100%">
       <NDataTable :columns="columns" :data="skills" :loading="loading" :row-key="(r:any) => r.id" striped>
       <template #empty>
-        <div style="padding:40px;text-align:center;color:#888;">
+        <div style="padding:40px;text-align:center;color:var(--text-muted);">
           <p>暂无技能</p>
           <p style="margin-top:8px;font-size:13px;">点击「上传技能文件夹」上传本地的 SKILL.md 技能包，或从 GitHub 导入</p>
         </div>
@@ -410,10 +410,10 @@ function expandRow(row: any) {
     </NCard>
 
     <!-- skill 说明 -->
-    <div style="margin-top:16px;padding:12px 16px;background:#1a1a2e;border-radius:6px;font-size:13px;color:#888;line-height:1.8;">
-      <strong style="color:#ccc;">📦 什么是 Skill？</strong><br/>
+    <div style="margin-top:16px;padding:12px 16px;background:var(--bg-muted);border-radius:6px;font-size:13px;color:var(--text-muted);line-height:1.8;">
+      <strong style="color:var(--text-primary);">📦 什么是 Skill？</strong><br/>
       Skill 是 AI Agent 的指令包，每个 skill 是一个包含 <code>SKILL.md</code> 的文件夹：
-      <pre style="margin-top:6px;padding:8px;background:#0d0d1a;border-radius:4px;font-size:12px;">
+      <pre style="margin-top:6px;padding:8px;background:var(--bg-primary);border-radius:4px;font-size:12px;">
 my-skill/
 ├── SKILL.md          ← 入口文件（YAML frontmatter 定义 name/description + 指令内容）
 ├── scripts/          ← 可选：可执行脚本
@@ -445,7 +445,7 @@ my-skill/
     <!-- GitHub 导入 Modal -->
     <NModal v-model:show="showImportModal" title="从 GitHub 导入" preset="card" style="width:600px;max-width:calc(100vw - 32px);">
       <NDivider style="margin-top:0;">导入仓库（推荐）</NDivider>
-      <p style="margin-bottom:8px; font-size:13px; color:#888;">
+      <p style="margin-bottom:8px; font-size:13px; color:var(--text-muted);">
         扫描整个仓库，自动发现所有包含 <code>SKILL.md</code> 的技能目录，批量导入并创建技能组合。<br/>
         例如 <code>https://github.com/Leonxlnx/taste-skill</code> 或 <code>https://github.com/owner/repo/tree/main/skills</code>
       </p>
@@ -457,7 +457,7 @@ my-skill/
       </NSpace>
 
       <NDivider>导入单个技能</NDivider>
-      <p style="margin-bottom:8px; font-size:13px; color:#888;">
+      <p style="margin-bottom:8px; font-size:13px; color:var(--text-muted);">
         导入 GitHub 仓库中的单个 skill 目录：<br/>
         <code>https://github.com/user/repo/tree/main/skills/my-skill</code>
       </p>
@@ -479,7 +479,7 @@ my-skill/
     <NModal v-model:show="showUploadModal" title="上传技能" preset="card" style="width:550px;max-width:calc(100vw - 32px);">
       <div style="margin-bottom:20px;">
         <h4 style="margin-bottom:8px;">📁 方式一：选择文件夹</h4>
-        <p style="font-size:13px;color:#888;margin-bottom:8px;">直接选择本地的 skill 文件夹（需包含 SKILL.md）</p>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:8px;">直接选择本地的 skill 文件夹（需包含 SKILL.md）</p>
         <input type="file" webkitdirectory multiple @change="handleFolderUpload" style="display:block;margin-bottom:8px;" />
       </div>
 
@@ -492,7 +492,7 @@ my-skill/
         <input type="file" accept=".zip" @change="(e: any) => { const f = e.target.files?.[0]; if (f) handleUpload({ file: f }) }" />
       </div>
 
-      <div v-if="uploadLoading" style="margin-top:12px;text-align:center;color:#888;">正在上传...</div>
+      <div v-if="uploadLoading" style="margin-top:12px;text-align:center;color:var(--text-muted);">正在上传...</div>
       <template #footer>
         <NSpace justify="end">
           <NButton @click="showUploadModal = false">取消</NButton>

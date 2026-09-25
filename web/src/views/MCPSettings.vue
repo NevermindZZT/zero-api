@@ -127,7 +127,7 @@ const curlWithToken = computed(() => `curl -X POST ${mcpUrl.value} \\
     <NSpace vertical size="large">
       <div class="page-header">
         <h2>
-          <NIcon size="20" color="#667eea" style="vertical-align:-2px;margin-right:6px"><CodeSlashSharp /></NIcon>
+          <NIcon size="20" color="var(--accent-primary)" style="vertical-align:-2px;margin-right:6px"><CodeSlashSharp /></NIcon>
           MCP 设置
         </h2>
         <p class="page-subtitle">AI Agent Skill MCP 服务连接管理</p>
@@ -157,7 +157,7 @@ const curlWithToken = computed(() => `curl -X POST ${mcpUrl.value} \\
       </NCard>
 
       <NCard title="GitHub Token 配置">
-        <p style="font-size:13px;color:#888;margin-bottom:8px;">
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:8px;">
           用于从 GitHub 导入技能时的 API 认证，可提升速率限制至 5000次/小时。
           所有 <code>import-repo</code> / <code>sync-repo</code> / <code>import-github</code> 请求将默认使用此 Token。
         </p>
@@ -178,13 +178,13 @@ const curlWithToken = computed(() => `curl -X POST ${mcpUrl.value} \\
         </NAlert>
 
         <h4 style="margin-bottom:8px;">Claude Desktop / Cursor 配置</h4>
-        <pre style="background:#1a1a2e;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto;white-space:pre-wrap;">{{ hasToken ? configWithToken : configNoToken }}</pre>
+        <pre style="background:var(--bg-muted);padding:12px;border-radius:6px;font-size:12px;overflow-x:auto;white-space:pre-wrap;">{{ hasToken ? configWithToken : configNoToken }}</pre>
 
         <h4 style="margin:16px 0 8px;">GitHub Copilot (VS Code 设置)</h4>
-        <pre style="background:#1a1a2e;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto;white-space:pre-wrap;">{{ hasToken ? configCopilotWithToken : configCopilotNoToken }}</pre>
+        <pre style="background:var(--bg-muted);padding:12px;border-radius:6px;font-size:12px;overflow-x:auto;white-space:pre-wrap;">{{ hasToken ? configCopilotWithToken : configCopilotNoToken }}</pre>
 
         <h4 style="margin:16px 0 8px;">curl 测试命令</h4>
-        <pre style="background:#1a1a2e;padding:12px;border-radius:6px;font-size:12px;overflow-x:auto;white-space:pre-wrap;">{{ hasToken ? curlWithToken : curlNoToken }}</pre>
+        <pre style="background:var(--bg-muted);padding:12px;border-radius:6px;font-size:12px;overflow-x:auto;white-space:pre-wrap;">{{ hasToken ? curlWithToken : curlNoToken }}</pre>
       </NCard>
 
       <NCard title="使用说明">

@@ -166,22 +166,22 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
   margin-top: 16px;
   overflow: auto;
   overscroll-behavior: contain;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-color);
   border-radius: 6px;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--bg-elevated);
   scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 .auth-output pre {
   min-width: max-content;
   margin: 0;
   padding: 12px;
-  color: #cbd5e1;
+  color: var(--text-secondary);
   font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .auth-output::-webkit-scrollbar { width: 6px; height: 6px; }
-.auth-output::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.35); border-radius: 3px; }
+.auth-output::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
 .auth-dir { margin-top: 16px; color: var(--text-secondary); font-size: 13px; overflow-wrap: anywhere; }
 </style>

@@ -6,7 +6,11 @@ import {
   HomeSharp,
   PersonCircleSharp,
   LogOutSharp,
+  DesktopSharp,
+  MoonSharp,
+  SunnySharp,
 } from '@vicons/ionicons5'
+import { useTheme, type ThemePreference } from '@/utils/theme'
 
 defineProps<{
   isMobile?: boolean
@@ -18,6 +22,7 @@ const emit = defineEmits<{
 
 const route = useRoute()
 const router = useRouter()
+const { isDarkTheme, setThemePreference, themePreference } = useTheme()
 
 const username = localStorage.getItem('user') || '管理员'
 
@@ -33,6 +38,30 @@ const breadcrumbMap: Record<string, string> = {
 }
 
 const currentTitle = computed(() => breadcrumbMap[route.path] || '')
+const themeIcon = computed(() => themePreference.value === 'system'
+  ? DesktopSharp
+  : isDarkTheme.value ? MoonSharp : SunnySharp)
+const themeButtonLabel = computed(() => {
+  if (themePreference.value === 'system') return '主题：跟随系统'
+  return isDarkTheme.value ? '主题：深色' : '主题：浅色'
+})
+const themeMenuOptions = computed(() => {
+  const options: { label: string; key: ThemePreference; icon: () => ReturnType<typeof h> }[] = [
+    { label: '跟随系统', key: 'system', icon: () => h(NIcon, { size: 16 }, { default: () => h(DesktopSharp) }) },
+    { label: '浅色模式', key: 'light', icon: () => h(NIcon, { size: 16 }, { default: () => h(SunnySharp) }) },
+    { label: '深色模式', key: 'dark', icon: () => h(NIcon, { size: 16 }, { default: () => h(MoonSharp) }) },
+  ]
+  return options.map((option) => ({
+    ...option,
+    label: option.key === themePreference.value ? `${option.label} ✓` : option.label,
+  }))
+})
+
+function handleThemeSelect(key: string | number) {
+  if (key === 'system' || key === 'light' || key === 'dark') {
+    setThemePreference(key)
+  }
+}
 
 const userMenuOptions = [
   {
@@ -75,6 +104,13 @@ function handleUserMenuAction(key: string) {
     </div>
 
     <div class="header-right">
+      <NDropdown :options="themeMenuOptions" @select="handleThemeSelect">
+        <NButton quaternary size="small" :title="themeButtonLabel" :aria-label="themeButtonLabel">
+          <template #icon>
+            <NIcon size="18"><component :is="themeIcon" /></NIcon>
+          </template>
+        </NButton>
+      </NDropdown>
       <NDropdown :options="userMenuOptions" @select="handleUserMenuAction">
         <NButton quaternary size="small" class="user-btn">
           <template #icon>
@@ -117,7 +153,7 @@ function handleUserMenuAction(key: string) {
 .home-text {
   font-size: 15px;
   font-weight: 700;
-  background: linear-gradient(135deg, #667eea, #764ba2);
+  background: var(--gradient-primary);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }

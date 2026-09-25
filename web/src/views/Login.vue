@@ -85,24 +85,24 @@ async function login() {
   justify-content: center;
   position: relative;
   overflow: hidden;
-  background: #0f172a;
+  background: var(--bg-primary);
 }
 .login-bg {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse at 20% 50%, rgba(102, 126, 234, 0.15) 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 50%, rgba(118, 75, 162, 0.15) 0%, transparent 50%);
+    radial-gradient(ellipse at 20% 50%, var(--accent-soft) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 50%, var(--ambient-glow) 0%, transparent 50%);
   pointer-events: none;
 }
 .login-card {
   width: 400px;
   padding: 24px;
   border-radius: 24px !important;
-  background: rgba(30, 30, 46, 0.95) !important;
+  background: var(--bg-card) !important;
   backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.06) !important;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5) !important;
+  border: 1px solid var(--border-color) !important;
+  box-shadow: var(--shadow-card-hover) !important;
   position: relative;
   z-index: 1;
 }
@@ -114,8 +114,8 @@ async function login() {
   width: 76px;
   height: 76px;
   border-radius: 22px;
-  background: #111a4f;
-  box-shadow: 0 8px 28px rgba(71, 117, 255, .32);
+  background: var(--accent-soft);
+  box-shadow: 0 8px 28px var(--ambient-glow);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -127,10 +127,10 @@ async function login() {
   font-weight: 700;
   margin: 0 0 8px 0;
 }
-.logo-zero { color: #e2e8f0; }
-.logo-api { color: #6d8cff; }
+.logo-zero { color: var(--text-primary); }
+.logo-api { color: var(--accent-primary); }
 .subtitle {
-  color: #94a3b8;
+  color: var(--text-secondary);
   font-size: 14px;
   margin: 0;
 }

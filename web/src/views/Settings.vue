@@ -62,7 +62,7 @@ async function saveConfig() {
     <NSpace vertical size="large">
       <div class="page-header">
         <h2>
-          <NIcon size="20" color="#667eea" style="vertical-align:-2px;margin-right:6px"><SettingsSharp /></NIcon>
+          <NIcon size="20" color="var(--accent-primary)" style="vertical-align:-2px;margin-right:6px"><SettingsSharp /></NIcon>
           系统设置
         </h2>
       </div>
@@ -81,7 +81,7 @@ async function saveConfig() {
               style="width:200px"
               placeholder="60"
             />
-            <span style="color:#94a3b8;font-size:13px;margin-left:8px">秒（10-300）</span>
+            <span style="color:var(--text-secondary);font-size:13px;margin-left:8px">秒（10-300）</span>
           </NFormItem>
           <NFormItem label="识图超时">
             <NInputNumber
@@ -92,7 +92,7 @@ async function saveConfig() {
               style="width:200px"
               placeholder="60"
             />
-            <span style="color:#94a3b8;font-size:13px;margin-left:8px">
+            <span style="color:var(--text-secondary);font-size:13px;margin-left:8px">
               秒（10-600）。虚拟模型有图请求时识图模型的调用超时，识图模型推理耗时可能达 30-60s
             </span>
           </NFormItem>
@@ -106,7 +106,7 @@ async function saveConfig() {
         <NForm label-placement="left" label-width="120">
           <NFormItem label="全局开关">
             <NSwitch v-model:value="config.failover_enabled" />
-            <span style="color:#94a3b8;font-size:13px;margin-left:8px">
+            <span style="color:var(--text-secondary);font-size:13px;margin-left:8px">
               关闭后所有渠道的熔断回落机制将停止（每个渠道仍可单独控制）
             </span>
           </NFormItem>

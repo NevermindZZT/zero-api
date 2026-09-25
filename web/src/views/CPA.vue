@@ -293,17 +293,17 @@ onUnmounted(() => {
 .paths { display: grid; gap: 10px; }
 .paths > div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 12px; align-items: baseline; }
 .paths span { color: var(--text-secondary); }
-.paths code { overflow-wrap: anywhere; color: #a5b4fc; }
-.quota-account { padding: 16px; border: 1px solid rgba(148,163,184,.18); border-radius: 8px; background: rgba(15,23,42,.28); }
+.paths code { overflow-wrap: anywhere; color: var(--accent-primary); }
+.quota-account { padding: 16px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-card); }
 .quota-account-header, .quota-window-title, .quota-account-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .quota-account-footer { margin-top:14px; color:var(--text-secondary); font-size:12px; flex-wrap:wrap; }
 .quota-group { padding-top:4px; }
-.quota-group + .quota-group { padding-top:16px; border-top:1px solid rgba(148,163,184,.14); }
+.quota-group + .quota-group { padding-top:16px; border-top:1px solid var(--border-color); }
 .quota-group-header { margin-bottom:12px; display:flex; flex-direction:column; gap:3px; }
 .quota-group-header span { color:var(--text-secondary); font-size:12px; }
-.quota-window-title { margin-bottom:8px; color:#cbd5e1; }
+.quota-window-title { margin-bottom:8px; color:var(--text-secondary); }
 .quota-window-title b { font-size:13px; }
-.quota-bar { height:10px; overflow:hidden; border-radius:999px; background:rgba(100,116,139,.25); }
+.quota-bar { height:10px; overflow:hidden; border-radius:999px; background:var(--bg-muted); }
 .quota-bar-fill { height:100%; border-radius:inherit; transition:width .3s ease; }
 .quota-window-meta { margin-top:7px; color:var(--text-secondary); font-size:12px; }
 @media (max-width: 767px) { .quota-account { padding:12px; } }

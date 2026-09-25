@@ -372,7 +372,7 @@ const columns = [
       if (r.channel_status === 'inactive') {
         return h('div', { style: 'display:flex;align-items:center;gap:4px' }, [
           h(NTag, { size: 'tiny', type: 'error', bordered: false }, () => '禁用'),
-          h('span', { style: 'color:#94a3b8;text-decoration:line-through' }, r.channel_name),
+          h('span', { style: 'color:var(--text-secondary);text-decoration:line-through' }, r.channel_name),
         ])
       }
       return r.channel_name
@@ -425,8 +425,8 @@ const columns = [
           hasRules ? h(NTag, { size: 'tiny', type: 'info', bordered: false, style: 'margin-left:6px' }, () => '多段定价') : null,
         ]),
         h('div', {}, `输出 ${fmt(r.pricing_output)}`),
-        h('div', { style: 'color:#888' }, `缓存读 ${fmt(r.pricing_cache_read)}`),
-        h('div', { style: 'color:#888' }, `缓存写 ${fmt(r.pricing_cache_write)}`),
+        h('div', { style: 'color:var(--text-muted)' }, `缓存读 ${fmt(r.pricing_cache_read)}`),
+        h('div', { style: 'color:var(--text-muted)' }, `缓存写 ${fmt(r.pricing_cache_write)}`),
       ])
     },
   },
@@ -560,13 +560,13 @@ async function batchAction(action: string) {
       <div class="page-header">
         <div>
           <h2 style="margin:0">
-            <NIcon size="20" color="#667eea" style="vertical-align:-2px;margin-right:6px"><HardwareChipSharp /></NIcon>
+            <NIcon size="20" color="var(--accent-primary)" style="vertical-align:-2px;margin-right:6px"><HardwareChipSharp /></NIcon>
             模型管理
           </h2>
-          <p style="color:#94a3b8;font-size:13px;margin-top:4px">
-            共 <b style="color:#e2e8f0">{{ totalModels }}</b> 个模型，
+          <p style="color:var(--text-secondary);font-size:13px;margin-top:4px">
+            共 <b style="color:var(--text-primary)">{{ totalModels }}</b> 个模型，
             <span style="color:#22c55e">{{ activeModels }} 启用</span>，
-            <span style="color:#94a3b8">{{ inactiveModels }} 禁用</span>
+            <span style="color:var(--text-secondary)">{{ inactiveModels }} 禁用</span>
           </p>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -579,7 +579,7 @@ async function batchAction(action: string) {
             <template #icon><NIcon size="16"><CloudUploadSharp /></NIcon></template>
             导入
           </NButton>
-          <span style="color:#94a3b8;font-size:13px">状态过滤</span>
+          <span style="color:var(--text-secondary);font-size:13px">状态过滤</span>
           <NSelect
             v-model:value="statusFilter"
             size="small"
@@ -590,7 +590,7 @@ async function batchAction(action: string) {
               { label: '仅禁用', value: 'inactive' },
             ]"
           />
-          <span style="color:#94a3b8;font-size:13px;margin-left:8px">渠道过滤</span>
+          <span style="color:var(--text-secondary);font-size:13px;margin-left:8px">渠道过滤</span>
           <NSelect
             v-model:value="channelFilter"
             size="small"
@@ -604,7 +604,7 @@ async function batchAction(action: string) {
 
       <!-- 批量操作栏 -->
       <div v-if="checkedRowKeys.length > 0" class="batch-bar">
-        <span style="color:#e2e8f0">已选 <b>{{ checkedRowKeys.length }}</b> 个模型</span>
+        <span style="color:var(--text-primary)">已选 <b>{{ checkedRowKeys.length }}</b> 个模型</span>
         <NSpace>
           <NButton size="small" type="success" @click="batchAction('enable')">批量启用</NButton>
           <NButton size="small" @click="batchAction('disable')">批量禁用</NButton>
@@ -688,13 +688,13 @@ async function batchAction(action: string) {
           <NDivider style="margin:8px 0" />
           <NFormItem label="协议 URL 覆盖" style="align-items:flex-start">
             <div style="width:100%">
-              <p style="margin:0 0 8px;color:#94a3b8;font-size:12px;line-height:1.6">
+              <p style="margin:0 0 8px;color:var(--text-secondary);font-size:12px;line-height:1.6">
                 可选：为每个协议指定独立的上游请求 URL（完整地址，含路径）。留空则使用渠道 Base URL 自动拼接。<br>
                 适用于同一模型的不同接口不在同一地址的情况（如 Anthropic 兼容端点在单独路径）。
               </p>
               <NSpace vertical size="small" style="width:100%">
                 <div v-for="opt in protocolOptions" :key="opt.value" style="display:flex;align-items:center;gap:8px">
-                  <span style="width:110px;color:#cbd5e1;font-size:13px;flex-shrink:0">{{ opt.label }}</span>
+                  <span style="width:110px;color:var(--text-secondary);font-size:13px;flex-shrink:0">{{ opt.label }}</span>
                   <NInput
                     v-model:value="form.protocol_urls[opt.value]"
                     :placeholder="`留空 = ${baseURLHint(opt.value)}`"
@@ -725,7 +725,7 @@ async function batchAction(action: string) {
           <NDivider />
           <NFormItem label="高级定价" style="align-items:flex-start">
             <div style="width:100%">
-              <div v-if="getParsedRules().length === 0" style="color:#94a3b8;font-size:13px;padding:8px 0">
+              <div v-if="getParsedRules().length === 0" style="color:var(--text-secondary);font-size:13px;padding:8px 0">
                 未设置定价规则，将使用固定定价
               </div>
               <NAlert v-if="getParsedRules().some((r: any) => r.type === 'time_range')" type="info" size="small" style="margin-bottom:8px">
@@ -734,7 +734,7 @@ async function batchAction(action: string) {
               <NAlert v-if="getParsedRules().some((r: any) => r.type === 'token_tier')" type="info" size="small" style="margin-bottom:8px">
                 Token 分段定价以基础价格为默认价格。输入上下文达到阈值后，启用该规则价格。GPT 系列长上下文定价只需填写一个输入上下文阈值。
               </NAlert>
-              <div v-for="(rule, idx) in getParsedRules()" :key="rule.id" style="background:rgba(30,41,59,0.5);border:1px solid rgba(102,126,234,0.2);border-radius:8px;padding:12px;margin-bottom:8px">
+              <div v-for="(rule, idx) in getParsedRules()" :key="rule.id" style="background:var(--bg-muted);border:1px solid var(--accent-soft);border-radius:8px;padding:12px;margin-bottom:8px">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
                   <div style="display:flex;align-items:center;gap:8px">
                     <NSwitch size="small" :value="rule.enabled" @update:value="v => { rule.enabled = v; updateRule(idx, {...rule}) }" />
@@ -751,14 +751,14 @@ async function batchAction(action: string) {
                 <!-- 时间段条件 -->
                 <div v-if="rule.type === 'time_range'" style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
                   <div style="display:flex;align-items:center;gap:4px">
-                    <span style="color:#94a3b8;font-size:12px">时间</span>
+                    <span style="color:var(--text-secondary);font-size:12px">时间</span>
                     <NInput size="small" style="width:68px" :value="rule.start_time" placeholder="00:00" @update:value="v => { rule.start_time = v; updateRule(idx, {...rule}) }" />
-                    <span style="color:#94a3b8">—</span>
+                    <span style="color:var(--text-secondary)">—</span>
                     <NInput size="small" style="width:68px" :value="rule.end_time" placeholder="08:00" @update:value="v => { rule.end_time = v; updateRule(idx, {...rule}) }" />
                     <span style="color:#22c55e;font-size:11px;margin-left:4px">UTC</span>
                   </div>
                   <div style="display:flex;align-items:center;gap:4px;flex:1">
-                    <span style="color:#94a3b8;font-size:12px">星期</span>
+                    <span style="color:var(--text-secondary);font-size:12px">星期</span>
                     <NSelect size="small" multiple style="min-width:200px;flex:1" :value="rule.days || []" :options="weekDayOptions" @update:value="v => { rule.days = v; updateRule(idx, {...rule}) }" />
                   </div>
                 </div>
@@ -810,7 +810,7 @@ async function batchAction(action: string) {
             <NCheckbox v-model:checked="openRouterOverwriteUserModified">覆盖已手动修改的本地模型</NCheckbox>
           </NSpace>
           <NDivider style="margin:8px 0" />
-          <div v-for="item in openRouterItems" :key="item.local_model_id" style="padding:10px 0;border-bottom:1px solid rgba(148,163,184,.15)">
+          <div v-for="item in openRouterItems" :key="item.local_model_id" style="padding:10px 0;border-bottom:1px solid var(--border-color)">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
               <b>{{ item.model_id }}</b>
               <NTag v-if="item.exact_match_id" size="tiny" type="success">完全匹配</NTag>
@@ -842,7 +842,7 @@ async function batchAction(action: string) {
       </NModal>
       <!-- 批量编辑对话框 -->
       <NModal v-model:show="showBatchEditModal" title="批量编辑" preset="card" style="width:500px">
-        <div style="color:#94a3b8;font-size:13px;margin-bottom:16px">已选 <b style="color:#e2e8f0">{{ checkedRowKeys.length }}</b> 个模型，仅更新设置的字段，留空表示不修改。</div>
+        <div style="color:var(--text-secondary);font-size:13px;margin-bottom:16px">已选 <b style="color:var(--text-primary)">{{ checkedRowKeys.length }}</b> 个模型，仅更新设置的字段，留空表示不修改。</div>
         <NForm label-placement="left" label-width="120">
           <NFormItem label="输入价格 ($/1M)">
             <NInputNumber v-model:value="batchEditForm.pricing_input" :precision="6" :step="0.000001" style="width:100%" placeholder="留空=不修改" :clearable="true" />
@@ -890,27 +890,27 @@ async function batchAction(action: string) {
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  background: rgba(102, 126, 234, 0.1);
-  border: 1px solid rgba(102, 126, 234, 0.3);
+  background: var(--accent-soft);
+  border: 1px solid var(--border-strong);
   border-radius: 12px;
 }
 .tier-thresholds, .tier-prices { display: grid; gap: 8px; margin-bottom: 10px; }
 .tier-field, .tier-price-field { display: grid; grid-template-columns: 125px minmax(0, 1fr) 110px; align-items: center; gap: 8px; }
 .tier-price-field { grid-template-columns: 125px minmax(0, 1fr); }
-.tier-field span, .tier-price-field span { color: #cbd5e1; font-size: 12px; }
-.tier-field small { color: #64748b; font-size: 11px; }
+.tier-field span, .tier-price-field span { color: var(--text-secondary); font-size: 12px; }
+.tier-field small { color: var(--text-muted); font-size: 11px; }
 .model-edit-scroll {
   max-height: calc(100vh - 190px);
   overflow-y: auto;
   overflow-x: hidden;
   padding-right: 8px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.45) #172235;
+  scrollbar-color: var(--scrollbar-thumb-hover) var(--bg-muted);
 }
 .model-edit-scroll::-webkit-scrollbar { width: 8px; }
-.model-edit-scroll::-webkit-scrollbar-track { background: #172235 !important; border-radius: 4px; }
-.model-edit-scroll::-webkit-scrollbar-thumb { background: #64748b !important; border: 2px solid #172235; border-radius: 4px; }
-.model-edit-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8 !important; }
+.model-edit-scroll::-webkit-scrollbar-track { background: var(--bg-muted) !important; border-radius: 4px; }
+.model-edit-scroll::-webkit-scrollbar-thumb { background: var(--text-muted) !important; border: 2px solid var(--bg-muted); border-radius: 4px; }
+.model-edit-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-secondary) !important; }
 @media (max-width: 600px) {
   .tier-field, .tier-price-field { grid-template-columns: 1fr; gap: 4px; }
 }

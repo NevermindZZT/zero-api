@@ -69,7 +69,7 @@ async function saveConfig() {
     <NSpace vertical size="large">
       <div class="page-header">
         <h2>
-          <NIcon size="20" color="#667eea" style="vertical-align:-2px;margin-right:6px"><RocketSharp /></NIcon>
+          <NIcon size="20" color="var(--accent-primary)" style="vertical-align:-2px;margin-right:6px"><RocketSharp /></NIcon>
           出站代理
         </h2>
       </div>
@@ -117,7 +117,7 @@ async function saveConfig() {
               {{ ch.name }}<span v-if="i < proxyChannels.length - 1">、</span>
             </span>
           </p>
-          <p v-else style="color:#94a3b8">暂无启用代理的渠道</p>
+          <p v-else style="color:var(--text-secondary)">暂无启用代理的渠道</p>
         </NAlert>
       </NCard>
     </NSpace>

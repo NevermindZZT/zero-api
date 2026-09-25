@@ -163,8 +163,8 @@ function closeMobile() {
   width: 34px;
   height: 34px;
   border-radius: 10px;
-  background: #111a4f;
-  box-shadow: 0 0 18px rgba(71, 117, 255, .28);
+  background: var(--accent-soft);
+  box-shadow: 0 0 18px var(--ambient-glow);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -209,24 +209,24 @@ function closeMobile() {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: #64748b;
+  color: var(--text-muted);
   text-decoration: none;
   transition: color 0.2s;
 }
 .project-link:hover {
-  color: #667eea;
+  color: var(--accent-primary);
 }
 .project-link-text {
   font-size: 12px;
 }
 .version-text {
-  color: #475569;
+  color: var(--text-muted);
   font-size: 11px;
 }
 .logo-text {
   font-size: 18px;
   font-weight: 700;
-  background: linear-gradient(135deg, #667eea, #764ba2);
+  background: var(--gradient-primary);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }

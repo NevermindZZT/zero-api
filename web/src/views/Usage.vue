@@ -164,13 +164,13 @@ function formatNum(n: number | undefined | null) {
       <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
         <div>
           <h2>
-            <NIcon size="20" color="#667eea" style="vertical-align:-2px;margin-right:6px"><TrendingUpSharp /></NIcon>
+            <NIcon size="20" color="var(--accent-primary)" style="vertical-align:-2px;margin-right:6px"><TrendingUpSharp /></NIcon>
             使用统计
           </h2>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px">
           <div style="display:flex;align-items:center;gap:4px">
-            <NIcon size="14" color="#94a3b8"><KeySharp /></NIcon>
+            <NIcon size="14" color="var(--text-secondary)"><KeySharp /></NIcon>
             <NSelect
               v-model:value="selectedApiKeyId"
               :options="apiKeyOptions"
@@ -181,7 +181,7 @@ function formatNum(n: number | undefined | null) {
               @update:value="onApiKeyChange"
             />
           </div>
-          <span style="font-size:12px;color:#64748b">● 15s 自动刷新</span>
+          <span style="font-size:12px;color:var(--text-muted)">● 15s 自动刷新</span>
           <NButton size="tiny" :loading="refreshing" @click="refresh">
             <template #icon><NIcon size="14"><RefreshSharp /></NIcon></template>
             刷新
@@ -205,13 +205,13 @@ function formatNum(n: number | undefined | null) {
         <NGi>
           <NCard title="今日 Tokens" hoverable>
             <NStatistic :value="overview.today_tokens?.toLocaleString() || '0'" />
-            <p style="margin:4px 0 0;font-size:12px;color:#94a3b8">入 <span style="color:#3b82f6;font-weight:600">{{ formatNum(overview.today_prompt_tokens) }}</span> &nbsp;/&nbsp; 出 <span style="color:#f97316;font-weight:600">{{ formatNum(overview.today_output_tokens) }}</span></p>
+            <p style="margin:4px 0 0;font-size:12px;color:var(--text-secondary)">入 <span style="color:#3b82f6;font-weight:600">{{ formatNum(overview.today_prompt_tokens) }}</span> &nbsp;/&nbsp; 出 <span style="color:#f97316;font-weight:600">{{ formatNum(overview.today_output_tokens) }}</span></p>
           </NCard>
         </NGi>
         <NGi>
           <NCard title="总 Tokens" hoverable>
             <NStatistic :value="overview.total_tokens?.toLocaleString() || '0'" />
-            <p style="margin:4px 0 0;font-size:12px;color:#94a3b8">入 <span style="color:#3b82f6;font-weight:600">{{ formatNum(overview.total_prompt_tokens) }}</span> &nbsp;/&nbsp; 出 <span style="color:#f97316;font-weight:600">{{ formatNum(overview.total_output_tokens) }}</span></p>
+            <p style="margin:4px 0 0;font-size:12px;color:var(--text-secondary)">入 <span style="color:#3b82f6;font-weight:600">{{ formatNum(overview.total_prompt_tokens) }}</span> &nbsp;/&nbsp; 出 <span style="color:#f97316;font-weight:600">{{ formatNum(overview.total_output_tokens) }}</span></p>
           </NCard>
         </NGi>
         <NGi>

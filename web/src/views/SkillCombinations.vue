@@ -187,7 +187,7 @@ async function confirmAddSkill() {
   <div>
       <div class="page-header" style="display:flex;justify-content:space-between;align-items:center">
         <h2>
-          <NIcon size="20" color="#667eea" style="vertical-align:-2px;margin-right:6px"><LayersSharp /></NIcon>
+          <NIcon size="20" color="var(--accent-primary)" style="vertical-align:-2px;margin-right:6px"><LayersSharp /></NIcon>
           技能组合
         </h2>
       <NButton @click="openCreate" type="primary">
@@ -204,7 +204,7 @@ async function confirmAddSkill() {
               <NButton size="tiny" quaternary type="error" @click.stop="confirmDelete(combo)">删除</NButton>
             </NSpace>
           </template>
-          <p style="color:#888;font-size:13px;">{{ combo.description || '暂无描述' }}</p>
+          <p style="color:var(--text-muted);font-size:13px;">{{ combo.description || '暂无描述' }}</p>
           <p style="margin-top:8px;">
             <NTag type="info" size="small">{{ combo.skill_count }} 个技能</NTag>
           </p>
@@ -212,7 +212,7 @@ async function confirmAddSkill() {
       </NGi>
     </NGrid>
 
-    <div v-if="!combinations.length" style="text-align:center;padding:60px 0;color:#666;">暂无技能组合，点击右上角新建</div>
+    <div v-if="!combinations.length" style="text-align:center;padding:60px 0;color:var(--text-muted);">暂无技能组合，点击右上角新建</div>
 
     <!-- 创建 Modal -->
     <NModal v-model:show="showCreateModal" title="新建组合" preset="card" style="width:450px;max-width:calc(100vw - 32px);">
@@ -249,12 +249,12 @@ async function confirmAddSkill() {
             <template #icon><NIcon><AddSharp /></NIcon></template>添加技能
           </NButton>
         </div>
-        <div v-if="!detailSkills.length" style="color:#888;padding:20px;text-align:center;">该组合暂无技能，点击上方按钮添加</div>
+        <div v-if="!detailSkills.length" style="color:var(--text-muted);padding:20px;text-align:center;">该组合暂无技能，点击上方按钮添加</div>
         <NCard v-for="sk in detailSkills" :key="sk.id" size="small" :title="sk.name" style="margin-bottom:8px;">
           <template #header-extra>
             <NButton size="tiny" type="error" quaternary @click="removeSkill(addSkillComboId, sk.id)">移除</NButton>
           </template>
-          <p style="font-size:12px;color:#888;">{{ sk.description }}</p>
+          <p style="font-size:12px;color:var(--text-muted);">{{ sk.description }}</p>
           <div v-if="sk.tags?.length">
             <NTag v-for="t in sk.tags" :key="t" size="small" style="margin-right:4px;">{{ t }}</NTag>
           </div>
