@@ -339,7 +339,8 @@ function renderTrendChart() {
   trendChart = echarts.init(chartContainer.value)
   const textColor = themeColor('--text-secondary')
   const accentColor = themeColor('--accent-primary')
-  const accentHover = themeColor('--accent-hover')
+  const inputColor = themeColor('--chart-input')
+  const outputColor = themeColor('--chart-output')
   const categories = stats.map((s: any) => s.date).reverse()
   const requests = stats.map((s: any) => s.requests).reverse()
   const isCost = trendMetric.value === 'cost'
@@ -349,8 +350,8 @@ function renderTrendChart() {
         { name: '请求数', type: 'line', yAxisIndex: 1, data: requests, smooth: true, lineStyle: { color: '#22c55e' }, itemStyle: { color: '#22c55e' } },
       ]
     : [
-        { name: '输入 Tokens', type: 'bar', stack: 'tokens', data: stats.map((s: any) => s.prompt_tokens).reverse(), itemStyle: { color: accentColor } },
-        { name: '输出 Tokens', type: 'bar', stack: 'tokens', data: stats.map((s: any) => s.completion_tokens).reverse(), itemStyle: { color: accentHover } },
+        { name: '输入 Tokens', type: 'bar', stack: 'tokens', data: stats.map((s: any) => s.prompt_tokens).reverse(), itemStyle: { color: inputColor } },
+        { name: '输出 Tokens', type: 'bar', stack: 'tokens', data: stats.map((s: any) => s.completion_tokens).reverse(), itemStyle: { color: outputColor } },
         { name: '缓存命中', type: 'line', data: stats.map((s: any) => s.cache_hit_tokens).reverse(), smooth: true, lineStyle: { color: '#38bdf8', type: 'dashed' }, itemStyle: { color: '#38bdf8' } },
         { name: '请求数', type: 'line', yAxisIndex: 1, data: requests, smooth: true, lineStyle: { color: '#22c55e' }, itemStyle: { color: '#22c55e' } },
       ]

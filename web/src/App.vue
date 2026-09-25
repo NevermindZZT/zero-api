@@ -165,6 +165,8 @@ html, body, #app { height: 100%; }
   --scrollbar-thumb-hover: rgba(255,255,255,0.32);
   --accent-primary: #9b7cff;
   --accent-hover: #ae97ff;
+  --chart-input: #9b7cff;
+  --chart-output: #fb923c;
   --accent-soft: rgba(155,124,255,0.12);
   --ambient-glow: rgba(155,124,255,0.055);
   --radius-sm: 8px;
@@ -194,6 +196,8 @@ html, body, #app { height: 100%; }
   --scrollbar-thumb-hover: rgba(24,24,27,0.32);
   --accent-primary: #7542d8;
   --accent-hover: #6633ca;
+  --chart-input: #7542d8;
+  --chart-output: #c2410c;
   --accent-soft: rgba(117,66,216,0.09);
   --ambient-glow: rgba(117,66,216,0.035);
   --shadow-card: 0 6px 20px -8px rgba(24,24,27,0.12), 0 0 0 1px rgba(24,24,27,0.025) inset;
