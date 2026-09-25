@@ -54,3 +54,21 @@ func TestGetTPSRejectsUnsupportedParameters(t *testing.T) {
 		}
 	}
 }
+
+func TestGetLatencyStatsRejectsInvalidParameters(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/stats/latency", NewUsageHandler(nil, nil).GetLatencyStats)
+
+	for _, target := range []string{
+		"/stats/latency?start=not-a-date",
+		"/stats/latency?start=2026-08-04&end=2026-08-03",
+		"/stats/latency?granularity=year",
+	} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest("GET", target, nil))
+		if recorder.Code != 400 {
+			t.Errorf("GET %s status = %d, want 400", target, recorder.Code)
+		}
+	}
+}

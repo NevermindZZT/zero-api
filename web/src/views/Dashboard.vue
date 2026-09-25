@@ -27,14 +27,22 @@ const dailyStats = ref<any[]>([])
 const recentRecords = ref<any[]>([])
 const modelStats = ref<any[]>([])
 const tpsStats = ref<any[]>([])
+const latencyStats = ref<any[]>([])
+const trendMetric = ref<'tokens' | 'cost'>('tokens')
+const modelMetric = ref<'tokens' | 'requests' | 'cost'>('tokens')
+const latencyMetric = ref<'first' | 'total'>('first')
 const yearHeatmap = ref<any[]>([])
 const chartContainer = ref<HTMLElement>()
-const pieContainer = ref<HTMLElement>()
+const modelChartContainer = ref<HTMLElement>()
+const tpsChartContainer = ref<HTMLElement>()
+const latencyChartContainer = ref<HTMLElement>()
 const heatmapContainer = ref<HTMLElement>()
 const lastUpdated = ref('')
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 let trendChart: echarts.ECharts | null = null
-let pieChart: echarts.ECharts | null = null
+let modelChart: echarts.ECharts | null = null
+let tpsChart: echarts.ECharts | null = null
+let latencyChart: echarts.ECharts | null = null
 
 // 响应式列数
 const statCols = ref(4)
@@ -53,12 +61,18 @@ const recordColumns = [
   { title: '时间', key: 'created_at', render: (r: any) => formatDateTime(r.created_at) },
 ]
 
-const tpsColumns = [
-  { title: '模型', key: 'model', ellipsis: true },
-  { title: '平均 TPS', key: 'avg_tps', render: (r: any) => `${Number(r.avg_tps || 0).toFixed(1)} tokens/s` },
-  { title: '样本数', key: 'sample_count' },
-  { title: '输出 Tokens', key: 'output_tokens', render: (r: any) => formatTokens(r.output_tokens || 0) },
-  { title: '最近请求', key: 'last_at', render: (r: any) => formatDateTime(r.last_at) },
+const trendMetricOptions = [
+  { label: 'Tokens', value: 'tokens' as const },
+  { label: '费用', value: 'cost' as const },
+]
+const modelMetricOptions = [
+  { label: 'Tokens', value: 'tokens' as const },
+  { label: '请求', value: 'requests' as const },
+  { label: '费用', value: 'cost' as const },
+]
+const latencyMetricOptions = [
+  { label: '首响应延迟', value: 'first' as const },
+  { label: '总耗时', value: 'total' as const },
 ]
 
 const statCards = [
@@ -198,21 +212,23 @@ watch(timeRange, async () => {
   nextTick(renderCharts)
 })
 
-watch(isDarkTheme, () => nextTick(renderCharts))
+watch([isDarkTheme, trendMetric, modelMetric, latencyMetric], () => nextTick(renderCharts))
 
 async function loadData() {
   try {
     const { start, end, granularity } = getRangeParams(timeRange.value)
-    const [overviewRes, dailyRes, recordsRes, modelRes] = await Promise.all([
+    const [overviewRes, dailyRes, recordsRes, modelRes, latencyRes] = await Promise.all([
       usageApi.overview(undefined, start, end, tzOffset),
       usageApi.daily(start, end, undefined, granularity, tzOffset),
       usageApi.records(undefined, start, end, 200, tzOffset),
       usageApi.byModel(start, end, undefined, tzOffset),
+      usageApi.latency(start, end, undefined, granularity, tzOffset),
     ])
     overview.value = overviewRes.data
     dailyStats.value = dailyRes.data
     recentRecords.value = recordsRes.data
     modelStats.value = modelRes.data
+    latencyStats.value = latencyRes.data
     lastUpdated.value = now()
   } catch (e) {
     console.error(e)
@@ -223,6 +239,7 @@ async function loadTPS() {
   try {
     const res = await usageApi.tps('5m', 10)
     tpsStats.value = res.data?.items || []
+    await nextTick(renderTPSChart)
   } catch (e) {
     console.error(e)
   }
@@ -264,6 +281,12 @@ onMounted(async () => {
     const w = window.innerWidth
     statCols.value = w < 480 ? 1 : w < 768 ? 2 : 4
     chartCols.value = w < 768 ? 1 : 2
+    nextTick(() => {
+      trendChart?.resize()
+      modelChart?.resize()
+      tpsChart?.resize()
+      latencyChart?.resize()
+    })
   }
   updateCols()
   window.addEventListener('resize', updateCols)
@@ -286,13 +309,19 @@ onUnmounted(() => {
     clearInterval(refreshTimer)
     refreshTimer = null
   }
+  mqListener?.()
+  mqListener = null
   trendChart?.dispose()
-  pieChart?.dispose()
+  modelChart?.dispose()
+  tpsChart?.dispose()
+  latencyChart?.dispose()
 })
 
 function renderCharts() {
   renderTrendChart()
-  renderPieChart()
+  renderModelChart()
+  renderTPSChart()
+  renderLatencyChart()
 }
 
 function themeColor(token: string) {
@@ -300,69 +329,153 @@ function themeColor(token: string) {
 }
 
 function renderTrendChart() {
-  // 服务端已根据时间范围过滤，直接使用 dailyStats
   const stats = dailyStats.value
   if (trendChart) {
     trendChart.dispose()
     trendChart = null
   }
-  if (!chartContainer.value || !stats || stats.length === 0) return
+  if (!chartContainer.value || stats.length === 0) return
 
   trendChart = echarts.init(chartContainer.value)
   const textColor = themeColor('--text-secondary')
   const accentColor = themeColor('--accent-primary')
   const accentHover = themeColor('--accent-hover')
-  const isHour = stats[0]?.date?.length === 13 // "2025-07-21 08" = 13 chars
-  const dates = stats.map((d: any) => {
-    const raw = d.date
-    if (isHour) return raw.slice(-2) + ':00' // "08" → "08:00"
-    return raw
-  }).reverse()
-  const tokens = stats.map((d: any) => d.total_tokens).reverse()
-  const requests = stats.map((d: any) => d.requests).reverse()
+  const categories = stats.map((s: any) => s.date).reverse()
+  const requests = stats.map((s: any) => s.requests).reverse()
+  const isCost = trendMetric.value === 'cost'
+  const series: any[] = isCost
+    ? [
+        { name: '费用', type: 'bar', data: stats.map((s: any) => s.cost).reverse(), itemStyle: { color: accentColor, borderRadius: [4, 4, 0, 0] } },
+        { name: '请求数', type: 'line', yAxisIndex: 1, data: requests, smooth: true, lineStyle: { color: '#22c55e' }, itemStyle: { color: '#22c55e' } },
+      ]
+    : [
+        { name: '输入 Tokens', type: 'bar', stack: 'tokens', data: stats.map((s: any) => s.prompt_tokens).reverse(), itemStyle: { color: accentColor } },
+        { name: '输出 Tokens', type: 'bar', stack: 'tokens', data: stats.map((s: any) => s.completion_tokens).reverse(), itemStyle: { color: accentHover } },
+        { name: '缓存命中', type: 'line', data: stats.map((s: any) => s.cache_hit_tokens).reverse(), smooth: true, lineStyle: { color: '#38bdf8', type: 'dashed' }, itemStyle: { color: '#38bdf8' } },
+        { name: '请求数', type: 'line', yAxisIndex: 1, data: requests, smooth: true, lineStyle: { color: '#22c55e' }, itemStyle: { color: '#22c55e' } },
+      ]
 
   trendChart.setOption({
     tooltip: { trigger: 'axis' },
-    grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-    xAxis: { type: 'category', data: dates, axisLabel: { color: textColor } },
+    legend: { top: 0, textStyle: { color: textColor } },
+    grid: { left: '3%', right: '5%', top: 40, bottom: '4%', containLabel: true },
+    xAxis: { type: 'category', data: categories, axisLabel: { color: textColor } },
     yAxis: [
-      { type: 'value', name: 'Tokens', nameTextStyle: { color: textColor },
-        axisLabel: { color: textColor, formatter: (v: number) => formatTokens(v) } },
+      {
+        type: 'value',
+        name: isCost ? '费用 ($)' : 'Tokens',
+        nameTextStyle: { color: textColor },
+        axisLabel: { color: textColor, formatter: (v: number) => isCost ? `$${Number(v).toFixed(2)}` : formatTokens(v) },
+      },
       { type: 'value', name: '请求数', nameTextStyle: { color: textColor }, axisLabel: { color: textColor } },
     ],
-    series: [
-      {
-        name: 'Tokens', type: 'bar', data: tokens,
-        itemStyle: { borderRadius: [4, 4, 0, 0], color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: accentColor }, { offset: 1, color: accentHover }] } },
-      },
-      {
-        name: '请求数', type: 'line', yAxisIndex: 1, data: requests,
-        lineStyle: { color: '#22c55e' }, itemStyle: { color: '#22c55e' },
-      },
-    ],
+    series,
   })
 }
 
-function renderPieChart() {
-  // 使用服务端聚合数据，无需前端 groupBy
+function renderModelChart() {
   const stats = modelStats.value
-  if (pieChart) {
-    pieChart.dispose()
-    pieChart = null
+  if (modelChart) {
+    modelChart.dispose()
+    modelChart = null
   }
-  if (!pieContainer.value || !stats || stats.length === 0) return
+  if (!modelChartContainer.value || stats.length === 0) return
 
-  pieChart = echarts.init(pieContainer.value)
-  const textColor = themeColor('--text-primary')
-  const backgroundColor = themeColor('--bg-primary')
-  const data = stats.map((s: any) => ({ name: s.request_model, value: s.total_tokens }))
-  pieChart.setOption({
-    tooltip: { trigger: 'item', formatter: '{b}: {c} tokens ({d}%)' },
+  const field = modelMetric.value === 'tokens' ? 'total_tokens' : modelMetric.value === 'requests' ? 'requests' : 'cost'
+  const label = modelMetric.value === 'tokens' ? 'Tokens' : modelMetric.value === 'requests' ? '请求数' : '费用 ($)'
+  const rows = [...stats]
+    .sort((a: any, b: any) => Number(b[field] || 0) - Number(a[field] || 0))
+    .slice(0, 10)
+    .reverse()
+  const textColor = themeColor('--text-secondary')
+  const accentColor = themeColor('--accent-primary')
+  modelChart = echarts.init(modelChartContainer.value)
+  modelChart.setOption({
+    tooltip: {
+      trigger: 'item',
+      formatter: (item: any) => `${item.name}<br/>${label}: ${modelMetric.value === 'tokens' ? formatTokens(item.value) : modelMetric.value === 'cost' ? `$${Number(item.value).toFixed(4)}` : Number(item.value).toLocaleString()}`,
+    },
+    grid: { left: 8, right: 48, top: 8, bottom: 8, containLabel: true },
+    xAxis: {
+      type: 'value',
+      name: label,
+      nameTextStyle: { color: textColor },
+      axisLabel: { color: textColor, formatter: (v: number) => modelMetric.value === 'tokens' ? formatTokens(v) : modelMetric.value === 'cost' ? `$${Number(v).toFixed(2)}` : Number(v).toLocaleString() },
+      splitLine: { lineStyle: { color: themeColor('--border-color') } },
+    },
+    yAxis: { type: 'category', inverse: true, data: rows.map((r: any) => r.request_model), axisLabel: { color: textColor, width: 130, overflow: 'truncate' } },
     series: [{
-      type: 'pie', radius: ['40%', '70%'],
-      label: { show: true, formatter: '{b}', color: textColor, fontSize: 11 },
-      data, itemStyle: { borderRadius: 6, borderColor: backgroundColor, borderWidth: 2 },
+      type: 'bar',
+      barMaxWidth: 22,
+      data: rows.map((r: any) => r[field] || 0),
+      itemStyle: { color: accentColor, borderRadius: [0, 5, 5, 0] },
+      label: { show: true, position: 'right', color: textColor, formatter: (item: any) => modelMetric.value === 'tokens' ? formatTokens(item.value) : modelMetric.value === 'cost' ? `$${Number(item.value).toFixed(3)}` : Number(item.value).toLocaleString() },
     }],
+  })
+}
+
+function renderTPSChart() {
+  const stats = tpsStats.value
+  if (tpsChart) {
+    tpsChart.dispose()
+    tpsChart = null
+  }
+  if (!tpsChartContainer.value || stats.length === 0) return
+
+  const rows = [...stats].sort((a: any, b: any) => Number(a.avg_tps) - Number(b.avg_tps))
+  const textColor = themeColor('--text-secondary')
+  const accentColor = themeColor('--accent-primary')
+  const mutedColor = themeColor('--text-muted')
+  tpsChart = echarts.init(tpsChartContainer.value)
+  tpsChart.setOption({
+    tooltip: {
+      trigger: 'item',
+      formatter: (item: any) => `${item.name}<br/>平均 TPS: ${Number(item.value).toFixed(1)} tokens/s<br/>有效样本: ${item.data.sampleCount}`,
+    },
+    grid: { left: 8, right: 64, top: 8, bottom: 8, containLabel: true },
+    xAxis: { type: 'value', name: 'tokens/s', nameTextStyle: { color: textColor }, axisLabel: { color: textColor }, splitLine: { lineStyle: { color: themeColor('--border-color') } } },
+    yAxis: { type: 'category', inverse: true, data: rows.map((r: any) => r.model), axisLabel: { color: textColor, width: 130, overflow: 'truncate' } },
+    series: [{
+      type: 'bar',
+      barMaxWidth: 22,
+      data: rows.map((r: any) => ({ value: Number(r.avg_tps) || 0, sampleCount: r.sample_count || 0 })),
+      itemStyle: { color: (item: any) => item.data.sampleCount < 3 ? mutedColor : accentColor, borderRadius: [0, 5, 5, 0] },
+      label: { show: true, position: 'right', color: textColor, formatter: (item: any) => `${Number(item.value).toFixed(1)} · ${item.data.sampleCount}样本` },
+    }],
+  })
+}
+
+function renderLatencyChart() {
+  const stats = latencyStats.value
+  if (latencyChart) {
+    latencyChart.dispose()
+    latencyChart = null
+  }
+  if (!latencyChartContainer.value || stats.length === 0 || !stats.some((s: any) => s.sample_count > 0)) return
+
+  const rows = [...stats].reverse()
+  const textColor = themeColor('--text-secondary')
+  const p50Key = latencyMetric.value === 'first' ? 'latency_p50_ms' : 'total_duration_p50_ms'
+  const p95Key = latencyMetric.value === 'first' ? 'latency_p95_ms' : 'total_duration_p95_ms'
+  const metricName = latencyMetric.value === 'first' ? '首响应延迟' : '总耗时'
+  latencyChart = echarts.init(latencyChartContainer.value)
+  latencyChart.setOption({
+    tooltip: {
+      trigger: 'axis',
+      formatter: (items: any[]) => {
+        const index = items?.[0]?.dataIndex ?? 0
+        const bucket = rows[index]
+        return `${bucket?.date || ''}<br/>样本数: ${bucket?.sample_count || 0}<br/>P50: ${bucket?.[p50Key] || 0} ms<br/>P95: ${bucket?.[p95Key] || 0} ms`
+      },
+    },
+    legend: { top: 0, data: ['P50', 'P95'], textStyle: { color: textColor } },
+    grid: { left: '3%', right: '4%', top: 32, bottom: '4%', containLabel: true },
+    xAxis: { type: 'category', data: rows.map((r: any) => r.date), axisLabel: { color: textColor } },
+    yAxis: { type: 'value', name: `${metricName} (ms)`, nameTextStyle: { color: textColor }, axisLabel: { color: textColor }, splitLine: { lineStyle: { color: themeColor('--border-color') } } },
+    series: [
+      { name: 'P50', type: 'line', smooth: true, showSymbol: true, symbolSize: 8, data: rows.map((r: any) => r.sample_count > 0 ? r[p50Key] : null), lineStyle: { color: themeColor('--accent-primary'), width: 2 }, itemStyle: { color: themeColor('--accent-primary') }, connectNulls: false },
+      { name: 'P95', type: 'line', smooth: true, showSymbol: true, symbolSize: 8, data: rows.map((r: any) => r.sample_count > 0 ? r[p95Key] : null), lineStyle: { color: '#f59e0b', width: 2 }, itemStyle: { color: '#f59e0b' }, connectNulls: false },
+    ],
   })
 }
 
@@ -442,30 +555,6 @@ function formatTokens(n: number) {
         </NGi>
       </NGrid>
 
-      <NCard class="chart-card">
-        <template #header>
-          <div class="card-header-with-icon">
-            <NIcon size="18" color="#38bdf8"><TrendingUpSharp /></NIcon>
-            <span>最近 5 分钟模型平均 TPS</span>
-          </div>
-        </template>
-        <template #header-extra>
-          <span style="font-size:12px;color:var(--text-muted)">近 5 分钟 · 跟随仪表盘刷新</span>
-        </template>
-        <NDataTable
-          v-if="tpsStats.length > 0"
-          :columns="tpsColumns"
-          :data="tpsStats"
-          :bordered="false"
-          :single-line="false"
-          size="small"
-          :scroll-x="620"
-        />
-        <p v-else style="color:var(--text-secondary);text-align:center;padding:28px 12px;margin:0">
-          暂无有效样本；只统计上游返回输出 Token 用量的已完成流式请求。
-        </p>
-      </NCard>
-
       <NGrid :x-gap="16" :y-gap="16" :cols="chartCols">
         <NGi>
           <NCard class="chart-card">
@@ -501,18 +590,17 @@ function formatTokens(n: number) {
           <NCard class="chart-card">
             <template #header>
               <div class="card-header-with-icon">
-                <NIcon size="18" color="#a855f7"><PieChartSharp /></NIcon>
-                <span>模型用量分布</span>
+                <NIcon size="18" color="var(--accent-primary)"><PieChartSharp /></NIcon>
+                <span>模型排行 · Top 10</span>
               </div>
             </template>
-            <div class="chart-card-body" style="flex-direction:column">
-              <div ref="pieContainer" style="height:200px;width:100%"></div>
-              <p v-if="recentRecords.length === 0" style="color:var(--text-secondary);text-align:center;padding:40px">暂无数据</p>
-              <div v-else style="display:flex;gap:16px;font-size:12px;color:var(--text-secondary);padding:4px 0 0">
-                <span>范围: <b style="color:var(--text-primary)">{{ rangeLabel }}</b></span>
-                <span>统计模型: <b style="color:var(--text-primary)">{{ modelStats.length }}</b> 个</span>
-              </div>
-            </div>
+            <template #header-extra>
+              <NButtonGroup size="tiny">
+                <NButton v-for="opt in modelMetricOptions" :key="opt.value" :type="modelMetric === opt.value ? 'primary' : 'default'" @click="modelMetric = opt.value">{{ opt.label }}</NButton>
+              </NButtonGroup>
+            </template>
+            <div v-if="modelStats.length > 0" ref="modelChartContainer" style="height:280px;width:100%"></div>
+            <p v-else style="color:var(--text-secondary);text-align:center;padding:40px">暂无模型统计</p>
           </NCard>
         </NGi>
       </NGrid>
@@ -524,8 +612,48 @@ function formatTokens(n: number) {
             <span>使用趋势</span>
           </div>
         </template>
-        <div ref="chartContainer" style="height:300px"></div>
+        <template #header-extra>
+          <NButtonGroup size="tiny">
+            <NButton v-for="opt in trendMetricOptions" :key="opt.value" :type="trendMetric === opt.value ? 'primary' : 'default'" @click="trendMetric = opt.value">{{ opt.label }}</NButton>
+          </NButtonGroup>
+        </template>
+        <div ref="chartContainer" style="height:330px"></div>
         <p v-if="dailyStats.length === 0" style="color:var(--text-secondary);text-align:center;padding:60px">暂无使用数据</p>
+      </NCard>
+
+      <NCard class="chart-card">
+        <template #header>
+          <div class="card-header-with-icon">
+            <NIcon size="18" color="var(--accent-primary)"><TrendingUpSharp /></NIcon>
+            <span>请求延迟分位数</span>
+          </div>
+        </template>
+        <template #header-extra>
+          <NButtonGroup size="tiny">
+            <NButton v-for="opt in latencyMetricOptions" :key="opt.value" :type="latencyMetric === opt.value ? 'primary' : 'default'" @click="latencyMetric = opt.value">{{ opt.label }}</NButton>
+          </NButtonGroup>
+        </template>
+        <div v-if="latencyStats.some((s: any) => s.sample_count > 0)" ref="latencyChartContainer" style="height:320px;width:100%"></div>
+        <p v-else style="color:var(--text-secondary);text-align:center;padding:44px 12px;margin:0">当前范围暂无有效延迟样本</p>
+        <p style="font-size:12px;color:var(--text-muted);margin:8px 0 0">
+          首响应延迟使用 usage_records.latency_ms（流式首个输出增量/非流式首响应）；总耗时使用 total_duration_ms。仅有样本的时间桶显示数据点，样本数仅包含两项耗时均有效的请求。
+        </p>
+      </NCard>
+
+      <NCard class="chart-card">
+        <template #header>
+          <div class="card-header-with-icon">
+            <NIcon size="18" color="var(--accent-primary)"><TrendingUpSharp /></NIcon>
+            <span>最近 5 分钟模型生成速度</span>
+          </div>
+        </template>
+        <template #header-extra>
+          <span style="font-size:12px;color:var(--text-muted)">浅色条表示样本少于 3 次</span>
+        </template>
+        <div v-if="tpsStats.length > 0" ref="tpsChartContainer" style="height:280px;width:100%"></div>
+        <p v-else style="color:var(--text-secondary);text-align:center;padding:36px 12px;margin:0">
+          暂无有效样本；只统计上游返回输出 Token 用量的已完成流式请求。
+        </p>
       </NCard>
 
       <NCard class="chart-card">

@@ -167,3 +167,48 @@ func TestGetOverview_ExcludeNextDay(t *testing.T) {
 		t.Errorf("客户端 8/2 应为 0，got requests=%d tokens=%d（边界泄漏）", stats.TotalRequests, stats.TotalTokens)
 	}
 }
+
+func TestGetLatencyStats_TZBucketsAndPercentiles(t *testing.T) {
+	db := setupStatsTestDB(t)
+	repo := NewUsageRepo(db)
+
+	latencies := []struct {
+		first int
+		total int
+	}{
+		{100, 500},
+		{200, 600},
+		{300, 700},
+		{400, 800},
+	}
+	for i, sample := range latencies {
+		if _, err := db.Exec(`UPDATE usage_records SET latency_ms = ?, total_duration_ms = ? WHERE id = ?`, sample.first, sample.total, i+1); err != nil {
+			t.Fatalf("更新测试延迟样本失败: %v", err)
+		}
+	}
+
+	stats, err := repo.GetLatencyStats("2026-08-03", "2026-08-03", "", "day", 480)
+	if err != nil {
+		t.Fatalf("GetLatencyStats 失败: %v", err)
+	}
+	if len(stats) != 1 || stats[0].Date != "2026-08-03" {
+		t.Fatalf("日期桶错误: %+v", stats)
+	}
+	got := stats[0]
+	if got.SampleCount != 4 || got.LatencyP50Ms != 250 || got.LatencyP95Ms != 400 || got.TotalDurationP50Ms != 650 || got.TotalDurationP95Ms != 800 {
+		t.Fatalf("分位数聚合错误: %+v", got)
+	}
+}
+
+func TestGetLatencyStatsFillsEmptyBuckets(t *testing.T) {
+	db := setupStatsTestDB(t)
+	repo := NewUsageRepo(db)
+
+	stats, err := repo.GetLatencyStats("2026-08-03", "2026-08-03", "", "day", 480)
+	if err != nil {
+		t.Fatalf("GetLatencyStats 失败: %v", err)
+	}
+	if len(stats) != 1 || stats[0].Date != "2026-08-03" || stats[0].SampleCount != 0 {
+		t.Fatalf("无有效延迟样本时应返回补零日期桶: %+v", stats)
+	}
+}

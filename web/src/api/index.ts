@@ -155,6 +155,8 @@ export const usageApi = {
     api.get('/stats/overview', { params: { api_key_id: apiKeyId || undefined, start, end, tz_offset: tzOffset } }),
   daily: (start?: string, end?: string, apiKeyId?: number, granularity?: string, tzOffset?: number) =>
     api.get('/stats/daily', { params: { start, end, api_key_id: apiKeyId || undefined, granularity, tz_offset: tzOffset } }),
+  latency: (start?: string, end?: string, apiKeyId?: number, granularity?: string, tzOffset?: number) =>
+    api.get('/stats/latency', { params: { start, end, api_key_id: apiKeyId || undefined, granularity, tz_offset: tzOffset } }),
   byModel: (start?: string, end?: string, apiKeyId?: number, tzOffset?: number) =>
     api.get('/stats/by-model', { params: { start, end, api_key_id: apiKeyId || undefined, tz_offset: tzOffset } }),
   yearHeatmap: (tzOffset?: number) => api.get('/stats/year-heatmap', { params: { tz_offset: tzOffset } }),

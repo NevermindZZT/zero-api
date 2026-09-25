@@ -178,6 +178,7 @@ func main() {
 		api.GET("/stats/daily", usageH.GetDailyStats)
 		api.GET("/stats/by-model", usageH.GetModelStats)
 		api.GET("/stats/tps", usageH.GetTPS)
+		api.GET("/stats/latency", usageH.GetLatencyStats)
 		api.GET("/stats/year-heatmap", usageH.GetYearHeatmap)
 		api.GET("/usage/records", usageH.GetRecentRecords)
 

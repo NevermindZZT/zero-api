@@ -62,6 +62,35 @@ func (h *UsageHandler) GetDailyStats(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
+// GetLatencyStats 获取按小时/日/月分桶的延迟分位数统计。
+func (h *UsageHandler) GetLatencyStats(c *gin.Context) {
+	start := c.DefaultQuery("start", time.Now().AddDate(0, 0, -6).Format("2006-01-02"))
+	end := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
+	if _, err := time.Parse("2006-01-02", start); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "start 必须是 YYYY-MM-DD 日期"})
+		return
+	}
+	if _, err := time.Parse("2006-01-02", end); err != nil || start > end {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "end 必须是有效日期且不早于 start"})
+		return
+	}
+	granularity := c.DefaultQuery("granularity", "day")
+	if granularity != "hour" && granularity != "day" && granularity != "month" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "granularity 仅支持 hour、day 或 month"})
+		return
+	}
+
+	stats, err := h.usageRepo.GetLatencyStats(start, end, c.Query("api_key_id"), granularity, parseTzOffset(c))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if stats == nil {
+		stats = []store.LatencyStats{}
+	}
+	c.JSON(http.StatusOK, stats)
+}
+
 // GetRecentRecords 获取最近使用记录
 func (h *UsageHandler) GetRecentRecords(c *gin.Context) {
 	limit := 200
@@ -121,7 +150,7 @@ func (h *UsageHandler) GetTPS(c *gin.Context) {
 	})
 }
 
-// GetModelStats 获取按模型聚合统计（饼图专用）
+// GetModelStats 获取按模型聚合统计
 func (h *UsageHandler) GetModelStats(c *gin.Context) {
 	start := c.DefaultQuery("start", time.Now().AddDate(0, -3, 0).Format("2006-01-02"))
 	end := c.DefaultQuery("end", time.Now().Format("2006-01-02"))

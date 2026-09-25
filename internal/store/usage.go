@@ -173,21 +173,31 @@ type DailyStats struct {
 	Cost             float64 `json:"cost"`
 }
 
+// LatencyStats 按客户端时区时间桶聚合的延迟分位数。
+type LatencyStats struct {
+	Date               string  `json:"date"`
+	SampleCount        int64   `json:"sample_count"`
+	LatencyP50Ms       float64 `json:"latency_p50_ms"`
+	LatencyP95Ms       float64 `json:"latency_p95_ms"`
+	TotalDurationP50Ms float64 `json:"total_duration_p50_ms"`
+	TotalDurationP95Ms float64 `json:"total_duration_p95_ms"`
+}
+
 // OverviewStats 总览统计
 type OverviewStats struct {
-	TotalRequests      int64   `json:"total_requests"`
-	TotalTokens        int64   `json:"total_tokens"`
-	TotalPromptTokens  int64   `json:"total_prompt_tokens"`
-	TotalOutputTokens  int64   `json:"total_output_tokens"`
-	TotalCost          float64 `json:"total_cost"`
-	ActiveChannels     int     `json:"active_channels"`
-	ActiveModels       int     `json:"active_models"`
-	TodayTokens        int64   `json:"today_tokens"`
-	TodayPromptTokens  int64   `json:"today_prompt_tokens"`
-	TodayOutputTokens  int64   `json:"today_output_tokens"`
-	TodayRequests      int64   `json:"today_requests"`
-	TotalCacheHits     int64   `json:"total_cache_hits"`
-	CacheHitRate       float64 `json:"cache_hit_rate"`
+	TotalRequests     int64   `json:"total_requests"`
+	TotalTokens       int64   `json:"total_tokens"`
+	TotalPromptTokens int64   `json:"total_prompt_tokens"`
+	TotalOutputTokens int64   `json:"total_output_tokens"`
+	TotalCost         float64 `json:"total_cost"`
+	ActiveChannels    int     `json:"active_channels"`
+	ActiveModels      int     `json:"active_models"`
+	TodayTokens       int64   `json:"today_tokens"`
+	TodayPromptTokens int64   `json:"today_prompt_tokens"`
+	TodayOutputTokens int64   `json:"today_output_tokens"`
+	TodayRequests     int64   `json:"today_requests"`
+	TotalCacheHits    int64   `json:"total_cache_hits"`
+	CacheHitRate      float64 `json:"cache_hit_rate"`
 }
 
 type UsageRepo struct {
@@ -330,12 +340,91 @@ func (r *UsageRepo) GetOverview(apiKeyID, startDate, endDate string, tzOffsetMin
 // 统一从 usage_records 按客户端时区聚合：
 //   - hour 粒度：getHourlyStats
 //   - day/month 粒度：getDailyStatsFallback（用 date(created_at, 时区) 转客户端日期）
+//
 // 不使用 usage_daily（其 date 为 UTC 日期，客户端非 UTC 时区时日期标签错位且边界多算一天）
 func (r *UsageRepo) GetDailyStats(start, end string, apiKeyID string, granularity string, tzOffsetMinutes int) ([]DailyStats, error) {
 	if granularity == "hour" {
 		return r.getHourlyStats(start, apiKeyID, tzOffsetMinutes)
 	}
 	return r.getDailyStatsFallback(start, end, granularity, apiKeyID, tzOffsetMinutes)
+}
+
+// GetLatencyStats 从 usage_records 计算首响应延迟和总耗时的 P50/P95。
+// P50 偶数样本取中间两值均值，P95 使用 nearest-rank；只统计两种耗时均为正值的记录。
+// 日期标签遵循客户端时区。
+func (r *UsageRepo) GetLatencyStats(start, end, apiKeyID, granularity string, tzOffsetMinutes int) ([]LatencyStats, error) {
+	tzMod := sqlTz(tzOffsetMinutes)
+	var bucketExpr string
+	switch granularity {
+	case "hour":
+		bucketExpr = "strftime('%Y-%m-%d %H', created_at, '" + tzMod + "')"
+	case "month":
+		bucketExpr = "strftime('%Y-%m', created_at, '" + tzMod + "')"
+	default:
+		granularity = "day"
+		bucketExpr = "date(created_at, '" + tzMod + "')"
+	}
+
+	utcStart, _ := localDateToUTCRange(start, tzOffsetMinutes)
+	_, utcEnd := localDateToUTCRange(end, tzOffsetMinutes)
+	where := "created_at >= ? AND created_at < ? AND latency_ms > 0 AND total_duration_ms > 0"
+	args := []interface{}{utcStart, utcEnd}
+	if apiKeyID != "" {
+		where += " AND api_key_id = ?"
+		args = append(args, apiKeyID)
+	}
+
+	query := `WITH filtered AS (
+		SELECT ` + bucketExpr + ` AS bucket, latency_ms, total_duration_ms
+		FROM usage_records WHERE ` + where + `
+	), ranked AS (
+		SELECT bucket, latency_ms, total_duration_ms,
+			ROW_NUMBER() OVER (PARTITION BY bucket ORDER BY latency_ms) AS latency_rank,
+			ROW_NUMBER() OVER (PARTITION BY bucket ORDER BY total_duration_ms) AS duration_rank,
+			COUNT(*) OVER (PARTITION BY bucket) AS sample_count
+		FROM filtered
+	)
+	SELECT bucket, MAX(sample_count),
+		AVG(CASE WHEN latency_rank IN (
+			CAST((sample_count + 1) / 2 AS INTEGER), CAST((sample_count + 2) / 2 AS INTEGER)
+		) THEN latency_ms END),
+		MAX(CASE WHEN latency_rank = CAST((95 * sample_count + 99) / 100 AS INTEGER) THEN latency_ms END),
+		AVG(CASE WHEN duration_rank IN (
+			CAST((sample_count + 1) / 2 AS INTEGER), CAST((sample_count + 2) / 2 AS INTEGER)
+		) THEN total_duration_ms END),
+		MAX(CASE WHEN duration_rank = CAST((95 * sample_count + 99) / 100 AS INTEGER) THEN total_duration_ms END)
+	FROM ranked GROUP BY bucket ORDER BY bucket DESC`
+	rows, err := r.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	dataMap := make(map[string]LatencyStats)
+	for rows.Next() {
+		var stat LatencyStats
+		if err := rows.Scan(&stat.Date, &stat.SampleCount, &stat.LatencyP50Ms, &stat.LatencyP95Ms, &stat.TotalDurationP50Ms, &stat.TotalDurationP95Ms); err != nil {
+			return nil, err
+		}
+		dataMap[stat.Date] = stat
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return fillZeroLatencyStats(start, end, dataMap, granularity), nil
+}
+
+func fillZeroLatencyStats(start, end string, dataMap map[string]LatencyStats, granularity string) []LatencyStats {
+	calendar := fillZeroStats(start, end, map[string]DailyStats{}, granularity)
+	stats := make([]LatencyStats, 0, len(calendar))
+	for _, bucket := range calendar {
+		if stat, ok := dataMap[bucket.Date]; ok {
+			stats = append(stats, stat)
+		} else {
+			stats = append(stats, LatencyStats{Date: bucket.Date})
+		}
+	}
+	return stats
 }
 
 // fillZeroStats 生成完整日期/月份/小时序列，无数据项补 0
@@ -477,7 +566,7 @@ type ModelStats struct {
 	Cost         float64 `json:"cost"`
 }
 
-// GetModelStats 获取按模型聚合统计（饼图专用）
+// GetModelStats 获取按模型聚合统计
 // 从 usage_records 按精确 UTC 边界聚合，不使用 usage_daily（避免 UTC 日期粒度边界误差）
 func (r *UsageRepo) GetModelStats(start, end string, apiKeyID string, tzOffsetMinutes int) ([]ModelStats, error) {
 	return r.getModelStatsFallback(start, end, apiKeyID, tzOffsetMinutes)
