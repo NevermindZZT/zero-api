@@ -22,6 +22,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/never/zero-api/internal/adapter"
+	"github.com/never/zero-api/internal/metrics"
 	"github.com/never/zero-api/internal/store"
 	"github.com/never/zero-api/internal/upstream"
 )
@@ -30,6 +31,7 @@ type ProxyHandler struct {
 	channelRepo      *store.ChannelRepo
 	modelRepo        *store.ModelRepo
 	usageRepo        *store.UsageRepo
+	tpsMonitor       *metrics.TPSMonitor
 	apiKeyRepo       *store.APIKeyRepo
 	proxyConfigRepo  *store.ProxyConfigRepo
 	virtualModelRepo *store.VirtualModelRepo
@@ -43,11 +45,12 @@ type ProxyHandler struct {
 	routers []router.Rule
 }
 
-func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo, proxyConfigRepo *store.ProxyConfigRepo, virtualModelRepo *store.VirtualModelRepo) *ProxyHandler {
+func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, usageRepo *store.UsageRepo, apiKeyRepo *store.APIKeyRepo, proxyConfigRepo *store.ProxyConfigRepo, virtualModelRepo *store.VirtualModelRepo, tpsMonitor *metrics.TPSMonitor) *ProxyHandler {
 	h := &ProxyHandler{
 		channelRepo:      channelRepo,
 		modelRepo:        modelRepo,
 		usageRepo:        usageRepo,
+		tpsMonitor:       tpsMonitor,
 		apiKeyRepo:       apiKeyRepo,
 		proxyConfigRepo:  proxyConfigRepo,
 		virtualModelRepo: virtualModelRepo,
@@ -584,6 +587,7 @@ func (h *ProxyHandler) handleCompletion(c *gin.Context, rawBody []byte, downstre
 		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 model 字段"})
 		return
 	}
+	requestedModel := reqBody.Model
 
 	// 验证并解析 API Key（含额度校验）
 	apiKey, err := h.resolveAndValidateAPIKey(c)
@@ -701,7 +705,7 @@ func (h *ProxyHandler) handleCompletion(c *gin.Context, rawBody []byte, downstre
 			}
 		}
 
-		if err := h.tryForward(c, rawBody, matchedModel, ch, apiKeyID, requestTimeout, proxyConfig, reqBody.Stream, downstream); err == nil {
+		if err := h.tryForward(c, rawBody, matchedModel, ch, apiKeyID, requestTimeout, proxyConfig, reqBody.Stream, downstream, requestedModel); err == nil {
 			// 成功，清除熔断状态
 			h.breaker.RecordSuccess(ch.ID)
 			return
@@ -883,7 +887,7 @@ func (h *ProxyHandler) recordUsage(requestModel string, rawResp, convertedResp [
 
 // tryForward 尝试将请求转发到指定渠道，成功返回 nil，失败返回 error
 // rawBody 为客户端原始请求（下游协议格式），downstream 为下游协议适配器
-func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, requestTimeout time.Duration, proxyConfig *store.ProxyConfigData, isStream bool, downstream adapter.DownstreamAdapter) error {
+func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, requestTimeout time.Duration, proxyConfig *store.ProxyConfigData, isStream bool, downstream adapter.DownstreamAdapter, requestedModel string) error {
 	// 根据渠道类型选择适配器
 	adapt := adapter.NewAdapter(ch.Type)
 
@@ -1015,7 +1019,7 @@ func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *
 
 	if isStream {
 		// 流式转发
-		err = h.streamResponse(c, resp, adapt, matchedModel, ch, apiKeyID, startTime, requestTimeout, downstream)
+		err = h.streamResponse(c, resp, adapt, matchedModel, ch, apiKeyID, startTime, requestTimeout, downstream, requestedModel)
 		if err != nil {
 			log.Printf("[流式] 模型 %s 渠道 %s 流式转发错误: %v", matchedModel.ModelID, ch.Name, err)
 			// 如果已经向客户端写入任何数据（响应头或 body），
@@ -1071,7 +1075,7 @@ func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *
 }
 
 // streamResponse 流式转发上游 SSE 响应
-func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt adapter.Adapter, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, startTime time.Time, requestTimeout time.Duration, downstream adapter.DownstreamAdapter) error {
+func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt adapter.Adapter, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, startTime time.Time, requestTimeout time.Duration, downstream adapter.DownstreamAdapter, requestedModel string) error {
 	// 设置响应头（过滤逐跳头）
 	filteredHeaders := filterHopByHop(resp.Header)
 	for k, vals := range filteredHeaders {
@@ -1129,9 +1133,8 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 
 	// 使用 bufio.Reader 逐行读取
 	reader := bufio.NewReaderSize(resp.Body, 64*1024)
-	var rawBuf bytes.Buffer // 原始上游字节（规范格式，用于用量提取）
-	var firstTokenTime time.Time
-	var gotFirstToken bool
+	var rawBuf bytes.Buffer // 原始上游字节（用量提取及 Responses replay 使用）
+	var tpsObserver metrics.TPSSampleObserver
 
 	for {
 		line, err := reader.ReadBytes('\n')
@@ -1147,13 +1150,9 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 
 		// 成功收到数据，重置空闲计时器
 		safeResetIdle()
+		lineAt := time.Now()
 		rawBuf.Write(line)
-
-		// 记录首 Token 到达时间（TTFT）
-		if !gotFirstToken {
-			firstTokenTime = time.Now()
-			gotFirstToken = true
-		}
+		tpsObserver.ObserveSSELine(line, lineAt)
 
 		// 上游协议 → 规范格式（逐行）
 		var canonicalLines [][]byte
@@ -1200,6 +1199,7 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 		if len(tl) == 0 {
 			continue
 		}
+		tpsObserver.ObserveSSELine(tl, time.Now())
 		if out := downConverter.Convert(tl); out != nil && len(out) > 0 {
 			if _, werr := c.Writer.Write(out); werr != nil {
 				return fmt.Errorf("写入流式收尾事件失败: %w", werr)
@@ -1215,15 +1215,20 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 		flusher.Flush()
 	}
 
-	// 记录使用信息
-	// 流式：latency_ms = 首 Token 延时（TTFT），total_duration_ms = 总耗时
-	var latencyMs int
-	if gotFirstToken {
-		latencyMs = int(firstTokenTime.Sub(startTime).Milliseconds())
-	} else {
-		latencyMs = int(time.Since(startTime).Milliseconds())
+	// 流式：latency_ms = 首个实际输出增量延时（TTFT），total_duration_ms = 总耗时
+	completedAt := time.Now()
+	latencyMs := int(completedAt.Sub(startTime).Milliseconds())
+	if !tpsObserver.FirstOutputAt.IsZero() {
+		latencyMs = int(tpsObserver.FirstOutputAt.Sub(startTime).Milliseconds())
 	}
-	totalDurationMs := int(time.Since(startTime).Milliseconds())
+	totalDurationMs := int(completedAt.Sub(startTime).Milliseconds())
+	if h.tpsMonitor != nil && tpsObserver.OutputTokens > 0 && !tpsObserver.FirstOutputAt.IsZero() {
+		model := requestedModel
+		if model == "" {
+			model = matchedModel.ModelID
+		}
+		h.tpsMonitor.Record(model, tpsObserver.OutputTokens, tpsObserver.FirstOutputAt, completedAt)
+	}
 	fullRespBytes := rawBuf.Bytes()
 	if len(fullRespBytes) > 0 {
 		if downstream.IsPassthrough() && downstream.Protocol() == "responses" {

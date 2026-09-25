@@ -19,6 +19,7 @@ import (
 	"github.com/never/zero-api/internal/cpa"
 	"github.com/never/zero-api/internal/handler"
 	"github.com/never/zero-api/internal/mcp"
+	"github.com/never/zero-api/internal/metrics"
 	"github.com/never/zero-api/internal/middleware"
 	"github.com/never/zero-api/internal/proxy"
 	"github.com/never/zero-api/internal/store"
@@ -110,11 +111,12 @@ func main() {
 	syncer := upstream.NewSyncer(svc.Channel, svc.Model, modelPresets)
 
 	// 初始化处理器
+	tpsMonitor := metrics.NewTPSMonitor()
 	channelH := handler.NewChannelHandler(svc.Channel, svc.Model)
 	modelH := handler.NewModelHandler(svc.Model)
 	openRouterH := handler.NewOpenRouterHandler(svc.Model)
-	usageH := handler.NewUsageHandler(svc.Usage)
-	proxyH := handler.NewProxyHandler(svc.Channel, svc.Model, svc.Usage, svc.APIKey, svc.ProxyConfig, svc.VirtualModel)
+	usageH := handler.NewUsageHandler(svc.Usage, tpsMonitor)
+	proxyH := handler.NewProxyHandler(svc.Channel, svc.Model, svc.Usage, svc.APIKey, svc.ProxyConfig, svc.VirtualModel, tpsMonitor)
 	proxyConfigH := handler.NewProxyConfigHandler(svc.ProxyConfig, "certs")
 	// 代理配置更新后通知 ProxyHandler 刷新缓存
 	proxyConfigH.SetOnUpdate(proxyH.InvalidateProxyConfig)
@@ -175,6 +177,7 @@ func main() {
 		api.GET("/stats/overview", usageH.GetOverview)
 		api.GET("/stats/daily", usageH.GetDailyStats)
 		api.GET("/stats/by-model", usageH.GetModelStats)
+		api.GET("/stats/tps", usageH.GetTPS)
 		api.GET("/stats/year-heatmap", usageH.GetYearHeatmap)
 		api.GET("/usage/records", usageH.GetRecentRecords)
 

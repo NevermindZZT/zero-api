@@ -25,6 +25,7 @@ const overview = ref<any>({})
 const dailyStats = ref<any[]>([])
 const recentRecords = ref<any[]>([])
 const modelStats = ref<any[]>([])
+const tpsStats = ref<any[]>([])
 const yearHeatmap = ref<any[]>([])
 const chartContainer = ref<HTMLElement>()
 const pieContainer = ref<HTMLElement>()
@@ -49,6 +50,14 @@ const recordColumns = [
   { title: '费用 ($)', key: 'cost', render: (r: any) => r.cost?.toFixed(6) },
   { title: '延时/耗时', key: 'latency_ms', render: (r: any) => r.latency_ms != null ? `${r.latency_ms} / ${r.total_duration_ms || r.latency_ms} ms` : '-' },
   { title: '时间', key: 'created_at', render: (r: any) => formatDateTime(r.created_at) },
+]
+
+const tpsColumns = [
+  { title: '模型', key: 'model', ellipsis: true },
+  { title: '平均 TPS', key: 'avg_tps', render: (r: any) => `${Number(r.avg_tps || 0).toFixed(1)} tokens/s` },
+  { title: '样本数', key: 'sample_count' },
+  { title: '输出 Tokens', key: 'output_tokens', render: (r: any) => formatTokens(r.output_tokens || 0) },
+  { title: '最近请求', key: 'last_at', render: (r: any) => formatDateTime(r.last_at) },
 ]
 
 const statCards = [
@@ -207,11 +216,23 @@ async function loadData() {
   }
 }
 
-// 智能轮询：每 15s 检查是否有新数据，有变化则全量刷新（使用当前时间范围）
+async function loadTPS() {
+  try {
+    const res = await usageApi.tps('5m', 10)
+    tpsStats.value = res.data?.items || []
+  } catch (e) {
+    console.error(e)
+  }
+}
+
+// 智能轮询：每 15s 检查用量变化，并同步刷新 TPS 快照
 async function smartPoll() {
   try {
     const { start, end } = getRangeParams(timeRange.value)
-    const res = await usageApi.overview(undefined, start, end, tzOffset)
+    const [res] = await Promise.all([
+      usageApi.overview(undefined, start, end, tzOffset),
+      loadTPS(),
+    ])
     const newTotal = res.data?.total_requests || 0
     const oldTotal = overview.value?.total_requests
     if (oldTotal === undefined || newTotal !== oldTotal) {
@@ -227,7 +248,7 @@ async function smartPoll() {
 async function refresh() {
   if (refreshing.value) return
   refreshing.value = true
-  await loadData()
+  await Promise.all([loadData(), loadTPS()])
   nextTick(() => {
     renderCharts()
     refreshing.value = false
@@ -245,7 +266,7 @@ onMounted(async () => {
   window.addEventListener('resize', updateCols)
   mqListener = () => window.removeEventListener('resize', updateCols)
 
-  await loadData()
+  await Promise.all([loadData(), loadTPS()])
   // 加载年度热力图（不跟随时间范围）
   try {
     const res = await usageApi.yearHeatmap(tzOffset)
@@ -253,7 +274,7 @@ onMounted(async () => {
   } catch (e) { console.error(e) }
   loading.value = false
   nextTick(renderCharts)
-  // 智能轮询：每 15s 检查是否有新数据，有变化才全量刷新
+  // 智能轮询：每 15s 检查用量变化，并同步刷新 TPS
   refreshTimer = setInterval(smartPoll, 15000)
 })
 
@@ -408,6 +429,30 @@ function formatTokens(n: number) {
           </NCard>
         </NGi>
       </NGrid>
+
+      <NCard class="chart-card">
+        <template #header>
+          <div class="card-header-with-icon">
+            <NIcon size="18" color="#38bdf8"><TrendingUpSharp /></NIcon>
+            <span>最近 5 分钟模型平均 TPS</span>
+          </div>
+        </template>
+        <template #header-extra>
+          <span style="font-size:12px;color:#64748b">近 5 分钟 · 跟随仪表盘刷新</span>
+        </template>
+        <NDataTable
+          v-if="tpsStats.length > 0"
+          :columns="tpsColumns"
+          :data="tpsStats"
+          :bordered="false"
+          :single-line="false"
+          size="small"
+          :scroll-x="620"
+        />
+        <p v-else style="color:#94a3b8;text-align:center;padding:28px 12px;margin:0">
+          暂无有效样本；只统计上游返回输出 Token 用量的已完成流式请求。
+        </p>
+      </NCard>
 
       <NGrid :x-gap="16" :y-gap="16" :cols="chartCols">
         <NGi>
