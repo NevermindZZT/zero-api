@@ -46,6 +46,7 @@ const latencyChartContainer = ref<HTMLElement>()
 const heatmapContainer = ref<HTMLElement>()
 const lastUpdated = ref('')
 let refreshTimer: ReturnType<typeof setInterval> | null = null
+let chartResizeTimer: ReturnType<typeof setTimeout> | null = null
 let trendChart: echarts.ECharts | null = null
 let modelChart: echarts.ECharts | null = null
 let tpsChart: echarts.ECharts | null = null
@@ -300,6 +301,8 @@ onMounted(async () => {
       modelChart?.resize()
       tpsChart?.resize()
       latencyChart?.resize()
+      if (chartResizeTimer) clearTimeout(chartResizeTimer)
+      chartResizeTimer = setTimeout(renderCharts, 120)
     })
   }
   updateCols()
@@ -325,6 +328,7 @@ onUnmounted(() => {
   }
   mqListener?.()
   mqListener = null
+  if (chartResizeTimer) clearTimeout(chartResizeTimer)
   trendChart?.dispose()
   modelChart?.dispose()
   tpsChart?.dispose()
@@ -350,6 +354,7 @@ function renderTrendChart() {
   }
   if (!chartContainer.value || stats.length === 0) return
 
+  const compact = chartContainer.value.clientWidth < 620
   trendChart = echarts.init(chartContainer.value)
   const textColor = themeColor('--text-secondary')
   const accentColor = themeColor('--accent-primary')
@@ -372,17 +377,19 @@ function renderTrendChart() {
 
   trendChart.setOption({
     tooltip: { trigger: 'axis' },
-    legend: { top: 0, textStyle: { color: textColor } },
-    grid: { left: '3%', right: '5%', top: 40, bottom: '4%', containLabel: true },
-    xAxis: { type: 'category', data: categories, axisLabel: { color: textColor } },
+    legend: compact
+      ? { type: 'scroll', top: 0, left: 8, right: 8, textStyle: { color: textColor } }
+      : { top: 0, textStyle: { color: textColor } },
+    grid: { left: '3%', right: '5%', top: compact ? 52 : 40, bottom: '4%', containLabel: true },
+    xAxis: { type: 'category', data: categories, axisLabel: { color: textColor, hideOverlap: true, formatter: (value: string) => compact ? value.slice(5) : value } },
     yAxis: [
       {
         type: 'value',
-        name: isCost ? '费用 ($)' : 'Tokens',
+        name: compact ? '' : isCost ? '费用 ($)' : 'Tokens',
         nameTextStyle: { color: textColor },
         axisLabel: { color: textColor, formatter: (v: number) => isCost ? `$${Number(v).toFixed(2)}` : formatTokens(v) },
       },
-      { type: 'value', name: '请求数', nameTextStyle: { color: textColor }, axisLabel: { color: textColor } },
+      { type: 'value', name: compact ? '' : '请求数', nameTextStyle: { color: textColor }, axisLabel: { color: textColor }, splitLine: { show: false } },
     ],
     series,
   })
@@ -396,12 +403,12 @@ function renderModelChart() {
   }
   if (!modelChartContainer.value || stats.length === 0) return
 
+  const compact = modelChartContainer.value.clientWidth < 620
   const field = modelMetric.value === 'tokens' ? 'total_tokens' : modelMetric.value === 'requests' ? 'requests' : 'cost'
   const label = modelMetric.value === 'tokens' ? 'Tokens' : modelMetric.value === 'requests' ? '请求数' : '费用 ($)'
   const rows = [...stats]
     .sort((a: any, b: any) => Number(b[field] || 0) - Number(a[field] || 0))
     .slice(0, 10)
-    .reverse()
   const textColor = themeColor('--text-secondary')
   const accentColor = themeColor('--accent-primary')
   modelChart = echarts.init(modelChartContainer.value)
@@ -410,15 +417,16 @@ function renderModelChart() {
       trigger: 'item',
       formatter: (item: any) => `${item.name}<br/>${label}: ${modelMetric.value === 'tokens' ? formatTokens(item.value) : modelMetric.value === 'cost' ? `$${Number(item.value).toFixed(4)}` : Number(item.value).toLocaleString()}`,
     },
-    grid: { left: 8, right: 48, top: 8, bottom: 8, containLabel: true },
+    grid: { left: 8, right: compact ? 76 : 48, top: 8, bottom: compact ? 12 : 8, containLabel: true },
     xAxis: {
       type: 'value',
-      name: label,
+      name: compact ? '' : label,
       nameTextStyle: { color: textColor },
-      axisLabel: { color: textColor, formatter: (v: number) => modelMetric.value === 'tokens' ? formatTokens(v) : modelMetric.value === 'cost' ? `$${Number(v).toFixed(2)}` : Number(v).toLocaleString() },
-      splitLine: { lineStyle: { color: themeColor('--border-color') } },
+      axisLabel: { show: !compact, color: textColor, formatter: (v: number) => modelMetric.value === 'tokens' ? formatTokens(v) : modelMetric.value === 'cost' ? `$${Number(v).toFixed(2)}` : Number(v).toLocaleString() },
+      axisTick: { show: !compact },
+      splitLine: { show: !compact, lineStyle: { color: themeColor('--border-color') } },
     },
-    yAxis: { type: 'category', inverse: true, data: rows.map((r: any) => r.request_model), axisLabel: { color: textColor, width: 130, overflow: 'truncate' } },
+    yAxis: { type: 'category', inverse: true, data: rows.map((r: any) => r.request_model), axisLabel: { color: textColor, width: compact ? 105 : 130, overflow: 'truncate' } },
     series: [{
       type: 'bar',
       barMaxWidth: 22,
