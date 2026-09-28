@@ -160,7 +160,7 @@ export const usageApi = {
   byModel: (start?: string, end?: string, apiKeyId?: number, tzOffset?: number) =>
     api.get('/stats/by-model', { params: { start, end, api_key_id: apiKeyId || undefined, tz_offset: tzOffset } }),
   yearHeatmap: (tzOffset?: number) => api.get('/stats/year-heatmap', { params: { tz_offset: tzOffset } }),
-  tps: (window: '1m' | '5m' | '15m' = '5m', limit = 10) =>
+  tps: (window: '1m' | '5m' | '10m' | '15m' = '5m', limit = 10) =>
     api.get('/stats/tps', { params: { window, limit } }),
   records: (apiKeyId?: number, start?: string, end?: string, limit?: number, tzOffset?: number) =>
     api.get('/usage/records', { params: { api_key_id: apiKeyId || undefined, start, end, limit, tz_offset: tzOffset } }),

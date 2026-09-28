@@ -27,6 +27,13 @@ const dailyStats = ref<any[]>([])
 const recentRecords = ref<any[]>([])
 const modelStats = ref<any[]>([])
 const tpsStats = ref<any[]>([])
+const tpsWindow = ref<'5m' | '10m' | '15m'>('5m')
+const tpsWindowOptions = [
+  { label: '5 分钟', value: '5m' as const },
+  { label: '10 分钟', value: '10m' as const },
+  { label: '15 分钟', value: '15m' as const },
+]
+let tpsRequestId = 0
 const latencyStats = ref<any[]>([])
 const trendMetric = ref<'tokens' | 'cost'>('tokens')
 const modelMetric = ref<'tokens' | 'requests' | 'cost'>('tokens')
@@ -213,6 +220,11 @@ watch(timeRange, async () => {
 })
 
 watch([isDarkTheme, trendMetric, modelMetric, latencyMetric], () => nextTick(renderCharts))
+watch(tpsWindow, () => {
+  tpsStats.value = []
+  renderTPSChart()
+  void loadTPS()
+})
 
 async function loadData() {
   try {
@@ -236,12 +248,14 @@ async function loadData() {
 }
 
 async function loadTPS() {
+  const requestId = ++tpsRequestId
   try {
-    const res = await usageApi.tps('5m', 10)
+    const res = await usageApi.tps(tpsWindow.value, 10)
+    if (requestId !== tpsRequestId) return
     tpsStats.value = res.data?.items || []
     await nextTick(renderTPSChart)
   } catch (e) {
-    console.error(e)
+    if (requestId === tpsRequestId) console.error(e)
   }
 }
 
@@ -645,16 +659,19 @@ function formatTokens(n: number) {
         <template #header>
           <div class="card-header-with-icon">
             <NIcon size="18" color="var(--accent-primary)"><TrendingUpSharp /></NIcon>
-            <span>最近 5 分钟模型生成速度</span>
+            <span>最近 {{ tpsWindow.slice(0, -1) }} 分钟模型生成速度</span>
           </div>
         </template>
         <template #header-extra>
-          <span style="font-size:12px;color:var(--text-muted)">浅色条表示样本少于 3 次</span>
+          <NButtonGroup size="tiny">
+            <NButton v-for="option in tpsWindowOptions" :key="option.value" :type="tpsWindow === option.value ? 'primary' : 'default'" @click="tpsWindow = option.value">{{ option.label }}</NButton>
+          </NButtonGroup>
         </template>
         <div v-if="tpsStats.length > 0" ref="tpsChartContainer" style="height:280px;width:100%"></div>
         <p v-else style="color:var(--text-secondary);text-align:center;padding:36px 12px;margin:0">
           暂无有效样本；只统计上游返回输出 Token 用量的已完成流式请求。
         </p>
+        <p style="font-size:12px;color:var(--text-muted);margin:8px 0 0">按实际转发模型归并；灰色条表示有效样本少于 3 次。</p>
       </NCard>
 
       <NCard class="chart-card">

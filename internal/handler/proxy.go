@@ -587,8 +587,6 @@ func (h *ProxyHandler) handleCompletion(c *gin.Context, rawBody []byte, downstre
 		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 model 字段"})
 		return
 	}
-	requestedModel := reqBody.Model
-
 	// 验证并解析 API Key（含额度校验）
 	apiKey, err := h.resolveAndValidateAPIKey(c)
 	if err != nil {
@@ -705,7 +703,7 @@ func (h *ProxyHandler) handleCompletion(c *gin.Context, rawBody []byte, downstre
 			}
 		}
 
-		if err := h.tryForward(c, rawBody, matchedModel, ch, apiKeyID, requestTimeout, proxyConfig, reqBody.Stream, downstream, requestedModel); err == nil {
+		if err := h.tryForward(c, rawBody, matchedModel, ch, apiKeyID, requestTimeout, proxyConfig, reqBody.Stream, downstream); err == nil {
 			// 成功，清除熔断状态
 			h.breaker.RecordSuccess(ch.ID)
 			return
@@ -887,7 +885,7 @@ func (h *ProxyHandler) recordUsage(requestModel string, rawResp, convertedResp [
 
 // tryForward 尝试将请求转发到指定渠道，成功返回 nil，失败返回 error
 // rawBody 为客户端原始请求（下游协议格式），downstream 为下游协议适配器
-func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, requestTimeout time.Duration, proxyConfig *store.ProxyConfigData, isStream bool, downstream adapter.DownstreamAdapter, requestedModel string) error {
+func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, requestTimeout time.Duration, proxyConfig *store.ProxyConfigData, isStream bool, downstream adapter.DownstreamAdapter) error {
 	// 根据渠道类型选择适配器
 	adapt := adapter.NewAdapter(ch.Type)
 
@@ -1019,7 +1017,7 @@ func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *
 
 	if isStream {
 		// 流式转发
-		err = h.streamResponse(c, resp, adapt, matchedModel, ch, apiKeyID, startTime, requestTimeout, downstream, requestedModel)
+		err = h.streamResponse(c, resp, adapt, matchedModel, ch, apiKeyID, startTime, requestTimeout, downstream)
 		if err != nil {
 			log.Printf("[流式] 模型 %s 渠道 %s 流式转发错误: %v", matchedModel.ModelID, ch.Name, err)
 			// 如果已经向客户端写入任何数据（响应头或 body），
@@ -1075,7 +1073,7 @@ func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *
 }
 
 // streamResponse 流式转发上游 SSE 响应
-func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt adapter.Adapter, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, startTime time.Time, requestTimeout time.Duration, downstream adapter.DownstreamAdapter, requestedModel string) error {
+func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt adapter.Adapter, matchedModel *store.Model, ch *store.Channel, apiKeyID *int64, startTime time.Time, requestTimeout time.Duration, downstream adapter.DownstreamAdapter) error {
 	// 设置响应头（过滤逐跳头）
 	filteredHeaders := filterHopByHop(resp.Header)
 	for k, vals := range filteredHeaders {
@@ -1222,13 +1220,7 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 		latencyMs = int(tpsObserver.FirstOutputAt.Sub(startTime).Milliseconds())
 	}
 	totalDurationMs := int(completedAt.Sub(startTime).Milliseconds())
-	if h.tpsMonitor != nil && tpsObserver.OutputTokens > 0 && !tpsObserver.FirstOutputAt.IsZero() {
-		model := requestedModel
-		if model == "" {
-			model = matchedModel.ModelID
-		}
-		h.tpsMonitor.Record(model, tpsObserver.OutputTokens, tpsObserver.FirstOutputAt, completedAt)
-	}
+	h.recordStreamTPS(matchedModel, tpsObserver, completedAt)
 	fullRespBytes := rawBuf.Bytes()
 	if len(fullRespBytes) > 0 {
 		if downstream.IsPassthrough() && downstream.Protocol() == "responses" {
@@ -1239,6 +1231,14 @@ func (h *ProxyHandler) streamResponse(c *gin.Context, resp *http.Response, adapt
 		go h.recordUsage(matchedModel.ModelID, fullRespBytes, convertedResp, adapt, usageAdapt, matchedModel, ch.ID, apiKeyID, latencyMs, totalDurationMs)
 	}
 	return nil
+}
+
+func (h *ProxyHandler) recordStreamTPS(matchedModel *store.Model, observer metrics.TPSSampleObserver, completedAt time.Time) {
+	if h.tpsMonitor == nil || matchedModel == nil || observer.OutputTokens <= 0 || observer.FirstOutputAt.IsZero() {
+		return
+	}
+	// 虚拟模型已在路由规则中解析；按实际转发模型归并速度。
+	h.tpsMonitor.Record(matchedModel.ModelID, observer.OutputTokens, observer.FirstOutputAt, completedAt)
 }
 
 // logResponsesRequestShape 在调试模式下记录 Responses input 结构，不记录用户内容或工具参数。

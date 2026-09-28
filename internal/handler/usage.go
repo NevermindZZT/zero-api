@@ -123,10 +123,12 @@ func (h *UsageHandler) GetTPS(c *gin.Context) {
 		window = time.Minute
 	case "5m":
 		window = 5 * time.Minute
+	case "10m":
+		window = 10 * time.Minute
 	case "15m":
 		window = 15 * time.Minute
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "window 仅支持 1m、5m 或 15m"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "window 仅支持 1m、5m、10m 或 15m"})
 		return
 	}
 

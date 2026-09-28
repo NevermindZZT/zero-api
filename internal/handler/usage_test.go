@@ -37,6 +37,51 @@ func TestGetTPSReturnsProcessLocalSnapshot(t *testing.T) {
 	}
 }
 
+func TestGetTPSWindowOptions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	monitor := metrics.NewTPSMonitor()
+	now := time.Now()
+	for _, age := range []time.Duration{7 * time.Minute, 12 * time.Minute} {
+		completedAt := now.Add(-age)
+		monitor.Record("actual-model", 40, completedAt.Add(-time.Second), completedAt)
+	}
+	router := gin.New()
+	router.GET("/stats/tps", NewUsageHandler(nil, monitor).GetTPS)
+
+	for _, test := range []struct {
+		window  string
+		seconds int
+		samples int
+	}{
+		{"5m", 300, 0},
+		{"10m", 600, 1},
+		{"15m", 900, 2},
+	} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest("GET", "/stats/tps?window="+test.window, nil))
+		if recorder.Code != 200 {
+			t.Fatalf("window=%s status=%d body=%s", test.window, recorder.Code, recorder.Body.String())
+		}
+		var response struct {
+			WindowSeconds int                     `json:"window_seconds"`
+			Items         []metrics.TPSModelStats `json:"items"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		if len(response.Items) > 0 {
+			count = response.Items[0].SampleCount
+			if response.Items[0].Model != "actual-model" {
+				t.Fatalf("window=%s model=%q", test.window, response.Items[0].Model)
+			}
+		}
+		if response.WindowSeconds != test.seconds || count != test.samples {
+			t.Errorf("window=%s seconds=%d samples=%d, want seconds=%d samples=%d", test.window, response.WindowSeconds, count, test.seconds, test.samples)
+		}
+	}
+}
+
 func TestGetTPSRejectsUnsupportedParameters(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
