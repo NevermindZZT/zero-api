@@ -283,9 +283,12 @@ func main() {
 		v1.POST("/batches", proxyH.PassthroughEndpoint)
 	}
 
-	// CLIProxyAPI 原生管理面板代理：浏览器访问 zero-api 地址，适配 Docker 中 sidecar 仅绑定容器内地址的场景。
+	// CLIProxyAPI 原生管理面板代理：兼容 v0/v8 API 及 management.html 下的相对路径请求。
 	r.GET("/cpa-native/management.html", cpaH.NativeManagementPanel)
+	r.Any("/cpa-native/v0/management/*path", cpaH.NativeManagementResource)
+	r.Any("/cpa-native/v8/management/*path", cpaH.NativeManagementResource)
 	r.Any("/v0/management/*path", cpaH.NativeManagementResource)
+	r.Any("/v8/management/*path", cpaH.NativeManagementResource)
 
 	// 前端静态文件（SPA 路由兜底）
 	webSubFS, err := fs.Sub(webFS, "web/dist")

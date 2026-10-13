@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -206,9 +207,20 @@ func (h *CPAHandler) NativeManagementResource(c *gin.Context) {
 	baseURL := &url.URL{Scheme: "http", Host: "127.0.0.1:" + fmt.Sprint(cfg.Port)}
 	proxy := httputil.NewSingleHostReverseProxy(baseURL)
 	originalDirector := proxy.Director
+	requestedPath := c.Request.URL.Path
+	upstreamPath := "/v0/management" + c.Param("path")
+	switch {
+	case strings.HasPrefix(requestedPath, "/cpa-native/"):
+		// 新版原生 UI 从 /cpa-native/management.html 发起相对请求，浏览器会
+		// 请求 /cpa-native/v0/... 或 /cpa-native/v8/...；只剥除面板代理前缀。
+		upstreamPath = strings.TrimPrefix(requestedPath, "/cpa-native")
+	case strings.HasPrefix(requestedPath, "/v0/management/") || strings.HasPrefix(requestedPath, "/v8/management/"):
+		// 根路径调用原样保留 API 版本前缀。
+		upstreamPath = requestedPath
+	}
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
-		req.URL.Path = "/v0/management" + c.Param("path")
+		req.URL.Path = upstreamPath
 		req.URL.RawPath = ""
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, proxyErr error) {
