@@ -1023,7 +1023,7 @@ func (pa *ProxyAdapter) tryForwardModelStream(conn net.Conn, headers map[string]
 
 	// 转发
 	startTime := time.Now()
-	client := upstream.NewStreamHTTPClient()
+	client := upstream.NewStreamHTTPClientWithTimeout(pa.requestTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return false, fmt.Errorf("上游请求失败: %w", err)

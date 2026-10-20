@@ -979,10 +979,11 @@ func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *
 	var client *http.Client
 	if ch.UseProxy && proxyConfig.ForwardProxyURL != "" {
 		if isStream {
-			client, err = upstream.NewStreamHTTPClientWithProxy(
+			client, err = upstream.NewStreamHTTPClientWithProxyAndTimeout(
 				proxyConfig.ForwardProxyURL,
 				proxyConfig.ForwardProxyUser,
 				proxyConfig.ForwardProxyPass,
+				requestTimeout,
 			)
 		} else {
 			client, err = upstream.NewHTTPClientWithProxyAndTimeout(
@@ -998,7 +999,7 @@ func (h *ProxyHandler) tryForward(c *gin.Context, rawBody []byte, matchedModel *
 	}
 	if client == nil {
 		if isStream {
-			client = upstream.NewStreamHTTPClient()
+			client = upstream.NewStreamHTTPClientWithTimeout(requestTimeout)
 		} else {
 			client = upstream.NewHTTPClientWithTimeout(requestTimeout)
 		}

@@ -9,11 +9,13 @@ import (
 	"time"
 )
 
+const defaultResponseHeaderTimeout = 60 * time.Second
+
 // defaultTransport 共享的 HTTP 传输层，所有非代理请求复用此连接池
 var defaultTransport = &http.Transport{
 	TLSClientConfig:       &tls.Config{},
 	TLSHandshakeTimeout:   15 * time.Second,
-	ResponseHeaderTimeout: 60 * time.Second,
+	ResponseHeaderTimeout: defaultResponseHeaderTimeout,
 	MaxIdleConns:          100,
 	MaxIdleConnsPerHost:   10,
 	IdleConnTimeout:       90 * time.Second,
@@ -22,13 +24,20 @@ var defaultTransport = &http.Transport{
 
 // proxyTransportCache 代理 Transport 缓存，避免每次请求新建 Transport
 var (
-	proxyTransportMu sync.RWMutex
+	proxyTransportMu    sync.RWMutex
 	proxyTransportCache = make(map[string]*http.Transport)
 )
 
 func getProxyTransport(proxyURL, proxyUser, proxyPass string) (*http.Transport, error) {
-	// 用代理地址作为缓存 key
-	cacheKey := proxyURL + "|" + proxyUser
+	return getProxyTransportWithHeaderTimeout(proxyURL, proxyUser, proxyPass, defaultResponseHeaderTimeout)
+}
+
+func getProxyTransportWithHeaderTimeout(proxyURL, proxyUser, proxyPass string, responseHeaderTimeout time.Duration) (*http.Transport, error) {
+	if responseHeaderTimeout <= 0 {
+		responseHeaderTimeout = defaultResponseHeaderTimeout
+	}
+	// 响应头超时是 Transport 的固定属性，必须纳入缓存键，避免不同请求设置互相覆盖。
+	cacheKey := fmt.Sprintf("%s|%s|%s", proxyURL, proxyUser, responseHeaderTimeout)
 	proxyTransportMu.RLock()
 	if t, ok := proxyTransportCache[cacheKey]; ok {
 		proxyTransportMu.RUnlock()
@@ -46,12 +55,12 @@ func getProxyTransport(proxyURL, proxyUser, proxyPass string) (*http.Transport, 
 
 	t := &http.Transport{
 		Proxy:                 http.ProxyURL(u),
-		TLSClientConfig:      &tls.Config{},
-		TLSHandshakeTimeout:  15 * time.Second,
-		ResponseHeaderTimeout: 60 * time.Second,
+		TLSClientConfig:       &tls.Config{},
+		TLSHandshakeTimeout:   15 * time.Second,
+		ResponseHeaderTimeout: responseHeaderTimeout,
 		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:  10,
-		IdleConnTimeout:      90 * time.Second,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
 	}
 
 	proxyTransportMu.Lock()
@@ -76,15 +85,23 @@ func NewHTTPClientWithTimeout(timeout time.Duration) *http.Client {
 	}
 }
 
-// NewStreamHTTPClient 创建流式专用 HTTP 客户端（无总超时，仅空闲超时）
-// 流式响应的总时长不可预测，http.Client.Timeout 会导致超时截断
+// NewStreamHTTPClient 创建使用默认响应头超时的流式客户端（无总超时）。
 func NewStreamHTTPClient() *http.Client {
+	return NewStreamHTTPClientWithTimeout(defaultResponseHeaderTimeout)
+}
+
+// NewStreamHTTPClientWithTimeout 创建流式专用 HTTP 客户端。
+// timeout 只限制等待上游响应头的时间；流的总时长仍不受 http.Client.Timeout 限制。
+func NewStreamHTTPClientWithTimeout(timeout time.Duration) *http.Client {
+	if timeout <= 0 {
+		timeout = defaultResponseHeaderTimeout
+	}
 	return &http.Client{
 		Timeout: 0,
 		Transport: &http.Transport{
 			TLSClientConfig:       &tls.Config{},
 			TLSHandshakeTimeout:   15 * time.Second,
-			ResponseHeaderTimeout: 60 * time.Second,
+			ResponseHeaderTimeout: timeout,
 			MaxIdleConns:          100,
 			MaxIdleConnsPerHost:   10,
 			IdleConnTimeout:       120 * time.Second,
@@ -93,9 +110,14 @@ func NewStreamHTTPClient() *http.Client {
 	}
 }
 
-// NewStreamHTTPClientWithProxy 创建流式专用带出站代理的 HTTP 客户端
+// NewStreamHTTPClientWithProxy 创建使用默认响应头超时的流式代理客户端。
 func NewStreamHTTPClientWithProxy(proxyURL, proxyUser, proxyPass string) (*http.Client, error) {
-	t, err := getProxyTransport(proxyURL, proxyUser, proxyPass)
+	return NewStreamHTTPClientWithProxyAndTimeout(proxyURL, proxyUser, proxyPass, defaultResponseHeaderTimeout)
+}
+
+// NewStreamHTTPClientWithProxyAndTimeout 创建响应头超时可配置的流式代理客户端。
+func NewStreamHTTPClientWithProxyAndTimeout(proxyURL, proxyUser, proxyPass string, timeout time.Duration) (*http.Client, error) {
+	t, err := getProxyTransportWithHeaderTimeout(proxyURL, proxyUser, proxyPass, timeout)
 	if err != nil {
 		return nil, err
 	}
