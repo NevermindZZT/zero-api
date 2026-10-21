@@ -1,5 +1,6 @@
 # ===== Build Stage 1: 前端 =====
-FROM node:20-alpine AS frontend-builder
+# 前端构建与 CPU 架构无关；固定在 BuildKit 原生平台，避免 arm64 QEMU 下 npm ci 极慢/挂起。
+FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend-builder
 WORKDIR /build/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
@@ -7,13 +8,16 @@ COPY web/ .
 RUN npm run build
 
 # ===== Build Stage 2: Go 后端 =====
-FROM golang:1.26-alpine AS go-builder
+# 在原生构建平台运行 Go 编译器，通过 TARGETOS/TARGETARCH 交叉编译目标镜像。
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS go-builder
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=frontend-builder /build/web/dist ./cmd/server/web/dist
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /build/zero-api ./cmd/server/
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /build/zero-api ./cmd/server/
 
 # ===== Final Stage: 运行镜像 =====
 # CLIProxyAPI 官方 Linux 二进制依赖 glibc（/lib64/ld-linux-x86-64.so.2）。
