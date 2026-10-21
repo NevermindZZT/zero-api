@@ -21,6 +21,15 @@ type ManagementClient struct {
 	HTTP    *http.Client
 }
 
+type managementHTTPError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *managementHTTPError) Error() string {
+	return fmt.Sprintf("CPA Management API 返回 HTTP %d: %s", e.StatusCode, e.Body)
+}
+
 func NewManagementClient(host string, port int, key string) *ManagementClient {
 	if host == "" {
 		host = "127.0.0.1"
@@ -115,6 +124,30 @@ func (m *ManagementClient) GetAuthFiles(ctx context.Context) ([]AuthFile, error)
 	return files, nil
 }
 
+// FetchCredentialQuota asks CPA to query and normalize one credential's quota.
+// Returning RawMessage keeps new quota fields visible without mirroring CPA schemas here.
+func (m *ManagementClient) FetchCredentialQuota(ctx context.Context, auth AuthFile) (json.RawMessage, error) {
+	if strings.TrimSpace(auth.AuthIndex) == "" {
+		return nil, fmt.Errorf("auth_index is required for CPA quota query")
+	}
+	payload := map[string]string{"auth_index": auth.AuthIndex}
+	if provider := strings.TrimSpace(auth.Provider); provider != "" {
+		payload["provider"] = provider
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("序列化 CPA 额度请求失败: %w", err)
+	}
+	var result json.RawMessage
+	if err := m.postJSON(ctx, "/v0/management/quota/fetch", body, &result); err != nil {
+		return nil, err
+	}
+	if len(result) == 0 || !json.Valid(result) {
+		return nil, fmt.Errorf("CPA quota/fetch 返回了无效 JSON")
+	}
+	return append(json.RawMessage(nil), result...), nil
+}
+
 func (m *ManagementClient) CallUpstream(ctx context.Context, authIndex, method, upstreamURL string, headers map[string]string) ([]byte, int, error) {
 	return m.CallUpstreamWithBody(ctx, authIndex, method, upstreamURL, headers, nil)
 }
@@ -184,7 +217,7 @@ func (m *ManagementClient) doJSON(ctx context.Context, method, path string, body
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("CPA Management API 返回 HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return &managementHTTPError{StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(data))}
 	}
 	if err := json.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("解析 CPA Management API 响应失败: %w", err)

@@ -2,6 +2,8 @@ package cpa
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +48,23 @@ func (s *QuotaService) UpdateEndpoint(host string, port int) {
 
 func providerOwnsAuth(provider QuotaProvider, auth AuthFile) bool {
 	return strings.EqualFold(strings.TrimSpace(provider.ID()), strings.TrimSpace(auth.Provider))
+}
+
+func fallbackQuotaProvider(providers []QuotaProvider, auth AuthFile) QuotaProvider {
+	for _, provider := range providers {
+		if providerOwnsAuth(provider, auth) {
+			return provider
+		}
+	}
+	return nil
+}
+
+func nativeQuotaEndpointUnavailable(err error) bool {
+	var apiErr *managementHTTPError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.StatusCode == http.StatusNotFound || apiErr.StatusCode == http.StatusMethodNotAllowed || apiErr.StatusCode == http.StatusNotImplemented
 }
 
 func authUnavailableReason(auth AuthFile) string {
@@ -94,26 +113,53 @@ func (s *QuotaService) Query(ctx context.Context, refresh bool) (*QuotaResponse,
 		return nil, err
 	}
 	result := &QuotaResponse{Provider: "all", Accounts: []*QuotaSnapshot{}, QueriedAt: time.Now().UTC()}
-	for _, provider := range s.providers {
-		for _, auth := range authFiles {
-			if !providerOwnsAuth(provider, auth) {
+	for _, auth := range authFiles {
+		legacyProvider := fallbackQuotaProvider(s.providers, auth)
+		providerID := strings.TrimSpace(auth.Provider)
+		if providerID == "" {
+			continue
+		}
+		if reason := authUnavailableReason(auth); reason != "" {
+			if legacyProvider != nil {
+				result.Accounts = append(result.Accounts, errorQuotaSnapshot(legacyProvider.ID(), auth, reason))
+			}
+			continue
+		}
+		// Keep existing exclusions (for example Codex API keys) when a local legacy provider owns the credential.
+		if legacyProvider != nil && !legacyProvider.Match(auth) {
+			continue
+		}
+
+		quotaResult, queryErr := s.client.FetchCredentialQuota(ctx, auth)
+		if queryErr == nil {
+			result.Accounts = append(result.Accounts, &QuotaSnapshot{
+				Provider: providerID, AuthIndex: auth.AuthIndex, CredentialName: auth.Name,
+				AccountID: auth.AccountID, Email: auth.Email, PlanType: auth.PlanType,
+				Status: "available", QuotaSource: "cpa", CPAResult: quotaResult, QueriedAt: time.Now().UTC(),
+			})
+			continue
+		}
+
+		if nativeQuotaEndpointUnavailable(queryErr) {
+			// Older CPA versions may not expose quota/fetch. Keep the legacy provider
+			// as a compatibility fallback, but do not parse provider payloads on the normal path.
+			if legacyProvider == nil {
 				continue
 			}
-			if reason := authUnavailableReason(auth); reason != "" {
-				result.Accounts = append(result.Accounts, errorQuotaSnapshot(provider.ID(), auth, reason))
-				continue
-			}
-			if !provider.Match(auth) {
-				continue
-			}
-			snapshot, queryErr := provider.Query(ctx, s.client, auth)
-			if queryErr != nil {
-				snapshot = errorQuotaSnapshot(provider.ID(), auth, queryErr.Error())
+			snapshot, legacyErr := legacyProvider.Query(ctx, s.client, auth)
+			if legacyErr != nil {
+				snapshot = errorQuotaSnapshot(legacyProvider.ID(), auth, legacyErr.Error())
 			} else {
 				snapshot.CredentialName = auth.Name
 			}
+			if snapshot.QuotaSource == "" {
+				snapshot.QuotaSource = "legacy"
+			}
 			result.Accounts = append(result.Accounts, snapshot)
+			continue
 		}
+
+		result.Accounts = append(result.Accounts, errorQuotaSnapshot(providerID, auth, queryErr.Error()))
 	}
 
 	s.mu.Lock()

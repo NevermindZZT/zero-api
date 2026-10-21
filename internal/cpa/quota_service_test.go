@@ -32,6 +32,46 @@ func TestQuotaServiceReturnsEmptyWithoutCodexAuth(t *testing.T) {
 	}
 }
 
+func TestQuotaServiceUsesNativeCPAQuotaResultWithoutProviderParser(t *testing.T) {
+	quotaResult := `{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"5h","remainingFraction":0.72,"futureBucketField":"visible"}]}],"futureQuotaShape":{"newField":"preserved"}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v0/management/auth-files":
+			_ = json.NewEncoder(w).Encode(map[string]any{"files": []map[string]any{{"name": "future-provider.json", "provider": "future-provider", "auth_index": "future-auth-1", "status": "active"}}})
+		case "/v0/management/quota/fetch":
+			var request map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			if request["auth_index"] != "future-auth-1" || request["provider"] != "future-provider" {
+				t.Fatalf("unexpected CPA quota request: %#v", request)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(quotaResult))
+		default:
+			t.Fatalf("unexpected management API path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &ManagementClient{BaseURL: server.URL, Key: "management-key", HTTP: server.Client()}
+	service := &QuotaService{client: client, ttl: 5}
+	result, err := service.Query(context.Background(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Accounts) != 1 {
+		t.Fatalf("accounts = %d, want 1: %#v", len(result.Accounts), result.Accounts)
+	}
+	account := result.Accounts[0]
+	if account.Status != "available" || account.QuotaSource != "cpa" || account.Provider != "future-provider" {
+		t.Fatalf("unexpected CPA account result: %#v", account)
+	}
+	if string(account.CPAResult) != quotaResult {
+		t.Fatalf("CPA quota JSON was not preserved: %s", account.CPAResult)
+	}
+}
+
 func TestQuotaServiceKeepsFailedAndUnavailableAccountsVisible(t *testing.T) {
 	authFiles := []map[string]any{
 		{"name": "ok.json", "provider": "fake", "auth_index": "ok", "email": "ok@example.com"},
@@ -40,10 +80,15 @@ func TestQuotaServiceKeepsFailedAndUnavailableAccountsVisible(t *testing.T) {
 		{"name": "missing-index.json", "provider": "fake", "email": "missing@example.com"},
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v0/management/auth-files" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
+		switch r.URL.Path {
+		case "/v0/management/auth-files":
+			_ = json.NewEncoder(w).Encode(map[string]any{"files": authFiles})
+		case "/v0/management/quota/fetch":
+			http.NotFound(w, r) // 模拟旧版 CPA 未实现原生 quota/fetch 接口。
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			http.NotFound(w, r)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"files": authFiles})
 	}))
 	defer server.Close()
 

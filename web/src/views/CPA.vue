@@ -74,6 +74,59 @@ function quotaWindows(account: any): any[] {
   return [account.five_hour, account.weekly].filter(Boolean)
 }
 
+function cpaQuotaGroups(account: any): any[] {
+  const groups = account.cpa_result?.groups
+  return Array.isArray(groups) ? groups : []
+}
+
+function cpaQuotaSummary(account: any): any[] {
+  const summary = account.cpa_result?.summary
+  return Array.isArray(summary) ? summary : []
+}
+
+function cpaQuotaGroupLabel(group: any): string {
+  return group?.displayName || group?.display_name || group?.name || '额度'
+}
+
+function cpaQuotaRemainingPercent(bucket: any): number | null {
+  const raw = bucket?.remainingFraction ?? bucket?.remaining_fraction
+  if (raw == null || raw === '') return null
+  const value = Number(raw)
+  if (!Number.isFinite(value)) return null
+  return value >= 0 && value <= 1 ? value * 100 : value
+}
+
+function cpaQuotaWindowLabel(window: any): string {
+  const value = String(window || '').trim()
+  if (value === '5h') return '5 小时窗口'
+  if (value === 'weekly' || value === '7d') return '周窗口'
+  return value || '额度窗口'
+}
+
+function cpaQuotaResetLabel(bucket: any): string {
+  const resetTime = bucket?.resetTime ?? bucket?.reset_time
+  if (resetTime) {
+    const date = new Date(resetTime)
+    return Number.isNaN(date.getTime()) ? String(resetTime) : date.toLocaleString()
+  }
+  const seconds = bucket?.resetAfterSeconds ?? bucket?.reset_after_seconds
+  return seconds == null ? '未知' : resetLabel({ reset_after_seconds: seconds })
+}
+
+function cpaQuotaMetricValue(metric: any): string {
+  const value = Number(metric?.value)
+  if (!Number.isFinite(value)) return String(metric?.value ?? '-')
+  if (metric?.format === 'currency' && metric?.currency) {
+    try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: metric.currency }).format(value) } catch { /* 显示原始数值 */ }
+  }
+  const formatted = value.toLocaleString()
+  return metric?.unit ? `${formatted} ${metric.unit}` : formatted
+}
+
+function cpaQuotaJSON(account: any): string {
+  return JSON.stringify(account?.cpa_result ?? {}, null, 2)
+}
+
 function nativeManagementURL(): string {
   return `${window.location.origin}/cpa-native/management.html#/login`
 }
@@ -201,6 +254,37 @@ onUnmounted(() => {
               </NTag>
             </div>
             <NAlert v-if="account.error" type="error" style="margin: 12px 0">{{ account.error }}</NAlert>
+            <NSpace v-else-if="account.cpa_result" vertical size="large">
+              <div v-if="account.cpa_result.subscription?.plan || account.cpa_result.subscription?.tierName || account.cpa_result.subscription?.tier_name" class="quota-group-header">
+                <strong>{{ account.cpa_result.subscription.plan || account.cpa_result.subscription.tierName || account.cpa_result.subscription.tier_name }}</strong>
+                <span v-if="account.cpa_result.subscription.tierId || account.cpa_result.subscription.tier_id">{{ account.cpa_result.subscription.tierId || account.cpa_result.subscription.tier_id }}</span>
+              </div>
+              <div v-for="(group, groupIndex) in cpaQuotaGroups(account)" :key="group.id || group.displayName || groupIndex" class="quota-group">
+                <div class="quota-group-header"><strong>{{ cpaQuotaGroupLabel(group) }}</strong></div>
+                <NGrid :cols="2" :x-gap="24" responsive="screen" item-responsive>
+                  <NGi v-for="(bucket, bucketIndex) in group.buckets || []" :key="bucket.id || (groupIndex + '-' + bucketIndex)" span="2 m:1">
+                    <div class="quota-window">
+                      <div class="quota-window-title">
+                        <span>{{ bucket.description || cpaQuotaWindowLabel(bucket.window) }}</span>
+                        <b v-if="cpaQuotaRemainingPercent(bucket) !== null">{{ cpaQuotaRemainingPercent(bucket)?.toFixed(1) }}% 剩余</b>
+                      </div>
+                      <div v-if="cpaQuotaRemainingPercent(bucket) !== null" class="quota-bar"><div class="quota-bar-fill" :style="{ width: `${quotaPercent(cpaQuotaRemainingPercent(bucket) || 0)}%`, background: quotaColor(cpaQuotaRemainingPercent(bucket)) }" /></div>
+                      <div class="quota-window-meta">{{ cpaQuotaWindowLabel(bucket.window) }} · 刷新：{{ cpaQuotaResetLabel(bucket) }}</div>
+                    </div>
+                  </NGi>
+                </NGrid>
+              </div>
+              <div v-if="cpaQuotaSummary(account).length" class="quota-group">
+                <div class="quota-group-header"><strong>额度摘要</strong></div>
+                <div v-for="metric in cpaQuotaSummary(account)" :key="metric.key || metric.label" class="quota-window-title" style="padding:8px 0">
+                  <span>{{ metric.label || metric.key }}</span><b>{{ cpaQuotaMetricValue(metric) }}</b>
+                </div>
+              </div>
+              <details>
+                <summary style="cursor:pointer;color:var(--text-secondary)">CPA 原始额度结果</summary>
+                <pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;padding:12px;border-radius:6px;background:var(--bg-page);font-size:12px">{{ cpaQuotaJSON(account) }}</pre>
+              </details>
+            </NSpace>
             <NSpace v-else-if="account.provider === 'antigravity'" vertical size="large">
               <div v-for="group in account.antigravity_groups || []" :key="group.id" class="quota-group">
                 <div class="quota-group-header">
@@ -228,8 +312,10 @@ onUnmounted(() => {
               </NGi>
             </NGrid>
             <div class="quota-account-footer">
-              <span v-if="account.provider === 'codex'">主动重置次数：{{ account.reset_credits ?? 0 }}</span>
-              <span v-else>数据来源：Antigravity retrieveUserQuotaSummary</span>
+              <span v-if="account.quota_source === 'cpa'">数据来源：CPA 原生 quota/fetch</span>
+              <span v-else-if="account.quota_source === 'cpa-api-call'">数据来源：CPA 原生 Antigravity API-call</span>
+              <span v-else-if="account.provider === 'codex'">主动重置次数：{{ account.reset_credits ?? 0 }}</span>
+              <span v-else>数据来源：Antigravity retrieveUserQuotaSummary（兼容回退）</span>
               <span>查询时间：{{ account.queried_at ? new Date(account.queried_at).toLocaleString() : '-' }}</span>
             </div>
           </div>

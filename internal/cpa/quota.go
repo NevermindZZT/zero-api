@@ -8,7 +8,8 @@ import (
 	"time"
 )
 
-// QuotaProvider 为后续 Claude/Grok/Kimi 等额度 provider 预留统一接口。
+// QuotaProvider 仅供 CPA quota/fetch 对某个凭据不支持时兼容回退。
+// Antigravity 回退复用原生管理面板的 API-call 请求，并将响应 JSON 原样透传。
 type QuotaProvider interface {
 	ID() string
 	Match(AuthFile) bool
@@ -33,6 +34,8 @@ type QuotaSnapshot struct {
 	Email             string                  `json:"email,omitempty"`
 	PlanType          string                  `json:"plan_type,omitempty"`
 	Status            string                  `json:"status"`
+	QuotaSource       string                  `json:"quota_source,omitempty"`
+	CPAResult         json.RawMessage         `json:"cpa_result,omitempty"`
 	FiveHour          *QuotaWindow            `json:"five_hour,omitempty"`
 	Weekly            *QuotaWindow            `json:"weekly,omitempty"`
 	AntigravityGroups []AntigravityQuotaGroup `json:"antigravity_groups,omitempty"`
@@ -98,7 +101,8 @@ func (AntigravityQuotaProvider) Query(ctx context.Context, client *ManagementCli
 	headers := map[string]string{
 		"Authorization": "Bearer $TOKEN$",
 		"Content-Type":  "application/json",
-		"User-Agent":    "antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)",
+		// Match the native CPA management panel; the CLI user agent omits Gemini quota groups.
+		"User-Agent": "antigravity/hub/2.23.0 darwin/arm64",
 	}
 	var lastError error
 	for _, endpoint := range antigravityQuotaURLs {
@@ -111,12 +115,16 @@ func (AntigravityQuotaProvider) Query(ctx context.Context, client *ManagementCli
 			lastError = fmt.Errorf("Antigravity 额度 API 返回 HTTP %d: %s", status, truncateQuotaBody(body))
 			continue
 		}
-		snapshot, parseErr := parseAntigravityQuotaSummary(body, auth)
-		if parseErr != nil {
-			lastError = parseErr
+		if !json.Valid(body) {
+			lastError = fmt.Errorf("Antigravity 额度 API 返回无效 JSON")
 			continue
 		}
-		return snapshot, nil
+		return &QuotaSnapshot{
+			Provider: "antigravity", AuthIndex: auth.AuthIndex, CredentialName: auth.Name,
+			AccountID: auth.AccountID, Email: auth.Email, PlanType: auth.PlanType,
+			Status: "available", QuotaSource: "cpa-api-call",
+			CPAResult: append(json.RawMessage(nil), body...), QueriedAt: time.Now().UTC(),
+		}, nil
 	}
 	if lastError == nil {
 		lastError = fmt.Errorf("Antigravity 额度 API 无可用端点")
