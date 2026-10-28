@@ -14,6 +14,15 @@ const config = ref<any>({
   enabled: true, auto_start: true, host: '127.0.0.1', port: 8317,
   api_keys: [], proxy_url: '', request_retry: 3, debug: false, allow_remote: false,
 })
+const editableFields = ['enabled', 'auto_start', 'host', 'port', 'api_keys', 'proxy_url', 'request_retry', 'debug', 'allow_remote'] as const
+const baseline = ref<Record<string, any>>({})
+const configLoaded = ref(false)
+function applyConfig(value: any) {
+  // proxy_url 为空时后端会省略字段，必须显式清空旧表单值。
+  config.value = { ...value, proxy_url: value.proxy_url || '', api_keys: [...(value.api_keys || [])] }
+  baseline.value = JSON.parse(JSON.stringify(config.value))
+  configLoaded.value = true
+}
 const status = ref<any>({})
 const update = ref<any>({})
 const quota = ref<any>(null)
@@ -25,7 +34,7 @@ let quotaTimer: ReturnType<typeof setInterval> | undefined
 async function load() {
   try {
     const [cfg, state, key] = await Promise.all([cpaApi.getConfig(), cpaApi.status(), cpaApi.managementKey()])
-    config.value = { ...config.value, ...cfg.data }
+    applyConfig(cfg.data)
     status.value = state.data
     managementKey.value = key.data.management_key || ''
   } catch (error: any) {
@@ -148,9 +157,20 @@ function openNativeManagement() {
 }
 
 async function save() {
+  if (!configLoaded.value) return
+  const patch: Record<string, any> = {}
+  for (const field of editableFields) {
+    if (JSON.stringify(config.value[field]) !== JSON.stringify(baseline.value[field])) {
+      patch[field] = config.value[field]
+    }
+  }
+  if (!Object.keys(patch).length) {
+    message.info('配置未变化，无需保存')
+    return
+  }
   busy.value = true
   try {
-    await cpaApi.saveConfig(config.value)
+    applyConfig((await cpaApi.saveConfig(patch)).data)
     message.success('CPA 配置已保存')
     await refreshStatus()
   } catch (error: any) {
@@ -323,6 +343,9 @@ onUnmounted(() => {
       </NCard>
 
       <NCard title="Sidecar 配置">
+        <NAlert type="info" style="margin-bottom: 16px">
+          原生面板配置优先；此处只保存相对于加载时实际修改的字段，不覆盖原生面板的其他设置。启用和自动启动仅由 zero-api 管理。
+        </NAlert>
         <NForm label-placement="left" label-width="130">
           <NGrid :cols="2" :x-gap="24" responsive="screen" item-responsive>
             <NGi span="2 m:1">
@@ -349,7 +372,7 @@ onUnmounted(() => {
               </NFormItem>
             </NGi>
           </NGrid>
-          <NButton type="primary" :loading="busy" @click="save">保存配置</NButton>
+          <NButton type="primary" :loading="busy" :disabled="!configLoaded" @click="save">保存配置</NButton>
         </NForm>
       </NCard>
 

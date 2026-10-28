@@ -98,7 +98,8 @@ func normalizeAssetName(name string) string {
 // InstallBinary 下载并安装 CLIProxyAPI 二进制
 // 返回安装的版本号
 func (m *Manager) InstallBinary(force bool) (string, error) {
-	rel, err := FetchLatestRelease(m.proxyURL)
+	proxyURL := m.proxyURLSnapshot()
+	rel, err := FetchLatestRelease(proxyURL)
 	if err != nil {
 		return "", err
 	}
@@ -121,7 +122,7 @@ func (m *Manager) InstallBinary(force bool) (string, error) {
 
 	// 下载到临时文件
 	tmpPath := m.binPath + ".tmp"
-	if err := downloadFile(asset.BrowserDownloadURL, tmpPath, asset.Size, m.proxyURL); err != nil {
+	if err := downloadFile(asset.BrowserDownloadURL, tmpPath, asset.Size, proxyURL); err != nil {
 		return "", fmt.Errorf("下载失败: %w", err)
 	}
 
@@ -431,7 +432,7 @@ func writeFileFromReader(dst string, r io.Reader, size int64) error {
 
 // CheckUpdate 检查是否有新版本（对比本地二进制版本）
 func (m *Manager) CheckUpdate() (latest string, hasUpdate bool, err error) {
-	rel, err := FetchLatestRelease(m.proxyURL)
+	rel, err := FetchLatestRelease(m.proxyURLSnapshot())
 	if err != nil {
 		return "", false, err
 	}

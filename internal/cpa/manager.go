@@ -10,11 +10,13 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -67,9 +69,7 @@ func (m *Manager) BinPath() string { return m.binPath }
 func (m *Manager) UpdateEndpoint(host string, port int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if host != "" {
-		m.host = host
-	}
+	m.host = host
 	if port > 0 {
 		m.port = port
 	}
@@ -80,6 +80,12 @@ func (m *Manager) SetProxyURL(proxyURL string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.proxyURL = proxyURL
+}
+
+func (m *Manager) proxyURLSnapshot() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.proxyURL
 }
 
 // ConfigPath 返回配置路径
@@ -157,9 +163,10 @@ func (m *Manager) Start() error {
 	m.running = true
 	m.stopCh = make(chan struct{})
 	m.doneCh = make(chan struct{})
+	port := m.port
 	m.mu.Unlock()
 
-	log.Printf("[CPA] CLIProxyAPI 已启动 (pid=%d, 端口=%d)", cmd.Process.Pid, m.port)
+	log.Printf("[CPA] CLIProxyAPI 已启动 (pid=%d, 端口=%d)", cmd.Process.Pid, port)
 
 	// 监控 goroutine：等待进程退出 → 决定崩溃重启还是正常停止
 	go m.watch(cmd, logFile)
@@ -239,7 +246,13 @@ func (m *Manager) Restart() error {
 
 // Health 健康检查（HTTP GET /healthz）
 func (m *Manager) Health() (bool, string) {
-	url := fmt.Sprintf("http://%s:%d/healthz", m.host, m.port)
+	m.mu.Lock()
+	host, port := m.host, m.port
+	m.mu.Unlock()
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
+		host = "127.0.0.1"
+	}
+	url := "http://" + net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port)) + "/healthz"
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -254,14 +267,17 @@ func (m *Manager) Health() (bool, string) {
 
 // Status 汇总状态
 func (m *Manager) Status() map[string]interface{} {
+	m.mu.Lock()
+	host, port, running := m.host, m.port, m.running
+	m.mu.Unlock()
 	status := map[string]interface{}{
-		"running":     m.IsRunning(),
+		"running":     running,
 		"bin_exists":  m.BinExists(),
 		"bin_path":    m.binPath,
 		"config_path": m.ConfigPath(),
 		"auth_dir":    m.AuthDir(),
-		"port":        m.port,
-		"host":        m.host,
+		"port":        port,
+		"host":        host,
 		"log_path":    m.LogPath(),
 	}
 	if m.IsRunning() {

@@ -1,10 +1,14 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -100,7 +104,7 @@ func clearLongRunningResponseDeadline(w http.ResponseWriter) {
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 }
 
-// PrepareConfig 将数据库配置写入 CLIProxyAPI 配置文件。
+// PrepareConfig 只初始化缺失的配置文件，并以现存 YAML 为共享配置的权威来源。
 func (h *CPAHandler) PrepareConfig() error {
 	cfg, err := h.cfgRepo.Get()
 	if err != nil {
@@ -112,42 +116,41 @@ func (h *CPAHandler) PrepareConfig() error {
 			return err
 		}
 	}
-	return cfgToCPAConfig(cfg).WriteConfig(cfg.DataDir)
+	if err := cfgToCPAConfig(cfg).WriteConfig(cfg.DataDir); err != nil {
+		return err
+	}
+	if err := readCPAFileConfig(cfg); err != nil {
+		return err
+	}
+	if err := h.cfgRepo.Save(cfg); err != nil {
+		return err
+	}
+	h.updateEndpoints(cfg)
+	return nil
 }
 
-// GetConfig 获取配置
-func (h *CPAHandler) GetConfig(c *gin.Context) {
-	cfg, err := h.cfgRepo.Get()
+// readCPAFileConfig 合并共享字段，生命周期、只读元数据和 Management Key 始终来自 DB。
+// 文件不存在时仅使用 DB 默认值；读取操作绝不创建或改写 YAML。
+func readCPAFileConfig(cfg *store.CPAConfig) error {
+	effective, err := cpa.ReadConfig(cfg.DataDir, cfgToCPAConfig(cfg))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
-		// 首次使用，返回默认值
-		_ = h.cfgRepo.Init(h.manager.BinPath())
-		cfg, _ = h.cfgRepo.Get()
+		return err
 	}
-	if cfg == nil {
-		c.JSON(http.StatusOK, map[string]interface{}{"enabled": false})
-		return
-	}
-	c.JSON(http.StatusOK, cfg)
+	cfg.Host = effective.Host
+	cfg.Port = effective.Port
+	cfg.APIKeys = effective.APIKeys
+	cfg.ProxyURL = effective.ProxyURL
+	cfg.RequestRetry = effective.RequestRetry
+	cfg.Debug = effective.Debug
+	cfg.AllowRemote = effective.AllowRemote
+	return nil
 }
 
-// SaveConfig 保存配置
-func (h *CPAHandler) SaveConfig(c *gin.Context) {
-	var cfg store.CPAConfig
-	if err := c.ShouldBindJSON(&cfg); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	existing, err := h.cfgRepo.Get()
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "配置不存在"})
-		return
-	}
-	cfg.ID = existing.ID
-	cfg.DataDir = existing.DataDir
-	if err := h.cfgRepo.Save(&cfg); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+func (h *CPAHandler) updateEndpoints(cfg *store.CPAConfig) {
+	h.manager.SetProxyURL(cfg.ProxyURL)
 	h.manager.UpdateEndpoint(cfg.Host, cfg.Port)
 	if h.quota != nil {
 		h.quota.UpdateEndpoint(cfg.Host, cfg.Port)
@@ -155,11 +158,95 @@ func (h *CPAHandler) SaveConfig(c *gin.Context) {
 	if h.management != nil {
 		h.management.UpdateEndpoint(cfg.Host, cfg.Port)
 	}
-	// 写入 CLIProxyAPI config.yaml
-	if err := h.PrepareConfig(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "写入 sidecar 配置失败: " + err.Error()})
+}
+
+// GetConfig 返回 file + DB 合并后的有效配置，不改写磁盘。
+func (h *CPAHandler) GetConfig(c *gin.Context) {
+	cfg, err := h.cfgRepo.Get()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取 CPA 配置失败: " + err.Error()})
 		return
 	}
+	if err := readCPAFileConfig(cfg); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取 sidecar 配置失败: " + err.Error()})
+		return
+	}
+	h.updateEndpoints(cfg)
+	c.JSON(http.StatusOK, cfg)
+}
+
+// SaveConfig 支持部分 PUT：仅 patch 请求中显式出现的共享字段。
+func (h *CPAHandler) SaveConfig(c *gin.Context) {
+	var fields map[string]json.RawMessage
+	if err := c.ShouldBindJSON(&fields); err != nil || fields == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "配置必须是 JSON 对象"})
+		return
+	}
+	cfg, err := h.cfgRepo.Get()
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "配置不存在"})
+		return
+	}
+	// 在修改 DB 或文件之前校验现存 YAML，包括只修改生命周期字段的请求。
+	if err := readCPAFileConfig(cfg); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取 sidecar 配置失败: " + err.Error()})
+		return
+	}
+	shared := []string{"host", "port", "api_keys", "proxy_url", "request_retry", "debug", "allow_remote"}
+	destinations := map[string]interface{}{
+		"host": &cfg.Host, "port": &cfg.Port, "api_keys": &cfg.APIKeys,
+		"proxy_url": &cfg.ProxyURL, "request_retry": &cfg.RequestRetry,
+		"debug": &cfg.Debug, "allow_remote": &cfg.AllowRemote,
+		"enabled": &cfg.Enabled, "auto_start": &cfg.AutoStart,
+	}
+	changed := false
+	for name, destination := range destinations {
+		if raw, present := fields[name]; present {
+			if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": name + " 不可为 null"})
+				return
+			}
+			if err := json.Unmarshal(raw, destination); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": name + ": " + err.Error()})
+				return
+			}
+			changed = true
+		}
+	}
+	if cfg.Port < 1 || cfg.Port > 65535 || cfg.RequestRetry < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "port 必须为 1..65535，request_retry 不可为负数"})
+		return
+	}
+	var patchFields []string
+	for _, name := range shared {
+		if _, present := fields[name]; present {
+			patchFields = append(patchFields, name)
+		}
+	}
+	if len(patchFields) > 0 {
+		if err := cfgToCPAConfig(cfg).PatchConfig(cfg.DataDir, patchFields); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "写入 sidecar 配置失败: " + err.Error()})
+			return
+		}
+		if err := readCPAFileConfig(cfg); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "读取 sidecar 配置失败: " + err.Error()})
+			return
+		}
+	}
+	// readonly 字段（id/data_dir/timestamps/management_key 等）被忽略，兼容旧全量客户端。
+	// 空请求不写 DB 或文件；生命周期字段只写 DB，不调用 PrepareConfig。
+	if changed {
+		if err := h.cfgRepo.Save(cfg); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		cfg, err = h.cfgRepo.Get()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	h.updateEndpoints(cfg)
 	c.JSON(http.StatusOK, cfg)
 }
 
@@ -179,7 +266,14 @@ func (h *CPAHandler) ManagementKey(c *gin.Context) {
 // 浏览器只访问 zero-api 暴露的同源路径，避免 Docker 场景下直接访问 sidecar 内网地址。
 func (h *CPAHandler) NativeManagementPanel(c *gin.Context) {
 	cfg, err := h.cfgRepo.Get()
-	if err != nil || cfg == nil || cfg.Port <= 0 {
+	if err == nil && cfg != nil {
+		err = readCPAFileConfig(cfg)
+	}
+	if err != nil {
+		c.String(http.StatusServiceUnavailable, "CPA 配置不可用: %v", err)
+		return
+	}
+	if cfg == nil || cfg.Port <= 0 {
 		c.String(http.StatusServiceUnavailable, "CPA 配置不可用")
 		return
 	}
@@ -200,7 +294,14 @@ func (h *CPAHandler) NativeManagementPanel(c *gin.Context) {
 // NativeManagementResource 代理原生管理面板的 API 和静态资源。
 func (h *CPAHandler) NativeManagementResource(c *gin.Context) {
 	cfg, err := h.cfgRepo.Get()
-	if err != nil || cfg == nil || cfg.Port <= 0 {
+	if err == nil && cfg != nil {
+		err = readCPAFileConfig(cfg)
+	}
+	if err != nil {
+		c.String(http.StatusServiceUnavailable, "CPA 配置不可用: %v", err)
+		return
+	}
+	if cfg == nil || cfg.Port <= 0 {
 		c.String(http.StatusServiceUnavailable, "CPA 配置不可用")
 		return
 	}
@@ -273,6 +374,10 @@ func (h *CPAHandler) Stop(c *gin.Context) {
 
 // Restart 重启 sidecar
 func (h *CPAHandler) Restart(c *gin.Context) {
+	if err := h.PrepareConfig(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "准备配置失败: " + err.Error()})
+		return
+	}
 	if err := h.manager.Restart(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -286,9 +391,10 @@ func (h *CPAHandler) InstallBinary(c *gin.Context) {
 	// 但后台实际已经完成安装的假失败。
 	clearLongRunningResponseDeadline(c.Writer)
 
-	// 从配置中读取出站代理，传给下载器
-	if cfg, err := h.cfgRepo.Get(); err == nil {
-		h.manager.SetProxyURL(cfg.ProxyURL)
+	// 下载始终读取原生配置中的有效代理，不使用可能过期的 DB cache。
+	if err := h.prepareDownloadProxy(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取 sidecar 配置失败: " + err.Error()})
+		return
 	}
 	version, err := h.manager.InstallBinary(c.Query("force") == "true")
 	if err != nil {
@@ -304,9 +410,25 @@ func (h *CPAHandler) InstallBinary(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"version": installedVersion, "release_version": version, "status": "installed", "running": h.manager.IsRunning()})
 }
 
+func (h *CPAHandler) prepareDownloadProxy() error {
+	cfg, err := h.cfgRepo.Get()
+	if err != nil {
+		return err
+	}
+	if err := readCPAFileConfig(cfg); err != nil {
+		return err
+	}
+	h.manager.SetProxyURL(cfg.ProxyURL)
+	return nil
+}
+
 // CheckUpdate 检查更新
 func (h *CPAHandler) CheckUpdate(c *gin.Context) {
 	clearLongRunningResponseDeadline(c.Writer)
+	if err := h.prepareDownloadProxy(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取 sidecar 配置失败: " + err.Error()})
+		return
+	}
 	latest, hasUpdate, err := h.manager.CheckUpdate()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

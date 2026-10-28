@@ -92,18 +92,19 @@ func main() {
 	}
 	cpaManager := cpa.NewManager(cpaDataDir, cpaHost, cpaPort)
 	cpaH := handler.NewCPAHandler(svc.CPAConfig, cpaManager)
-	// Management API 使用独立密钥，既用于额度查询，也用于无命令行的 OAuth 登录。
-	if managementKey, keyErr := svc.CPAConfig.EnsureManagementKey(); keyErr != nil {
-		log.Printf("[CPA] 初始化 Management Key 失败: %v", keyErr)
+	// 先确保文件存在并读取原生面板的有效配置，再初始化客户端和自动启动。
+	// Prepare 失败（例如 YAML 损坏）时不能用 DB 默认值自动启动 sidecar。
+	if err := cpaH.PrepareConfig(); err != nil {
+		log.Printf("[CPA] 准备配置失败，跳过自动启动: %v", err)
+	} else if effectiveCfg, readErr := svc.CPAConfig.Get(); readErr != nil {
+		log.Printf("[CPA] 重读有效配置失败，跳过自动启动: %v", readErr)
 	} else {
-		managementClient := cpa.NewManagementClient(cpaHost, cpaPort, managementKey)
+		cpaCfg = effectiveCfg
+		cpaHost, cpaPort = cpaCfg.Host, cpaCfg.Port
+		// Management API 使用独立且持久化的 DB 密钥，不改写文件中的原生密钥。
+		managementClient := cpa.NewManagementClient(cpaHost, cpaPort, cpaCfg.ManagementKey)
 		cpaH.SetManagementClient(managementClient)
 		cpaH.SetQuotaService(cpa.NewQuotaService(managementClient))
-	}
-	if cpaCfg != nil {
-		if err := cpaH.PrepareConfig(); err != nil {
-			log.Printf("[CPA] 生成配置失败: %v", err)
-		}
 		if cpaCfg.Enabled && cpaCfg.AutoStart && cpaManager.BinExists() {
 			if err := cpaManager.Start(); err != nil {
 				log.Printf("[CPA] 自动启动失败: %v", err)

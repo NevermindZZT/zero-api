@@ -1,13 +1,6 @@
 package cpa
 
-import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
-
-	"gopkg.in/yaml.v3"
-)
+import "gopkg.in/yaml.v3"
 
 // Config CLIProxyAPI 配置（管理面板可编辑字段的映射）
 type Config struct {
@@ -100,23 +93,4 @@ type oauthAlias struct {
 	Name        string `yaml:"name"`
 	Alias       string `yaml:"alias"`
 	DisplayName string `yaml:"display-name,omitempty"`
-}
-
-// WriteConfig 将配置写入文件
-func (c *Config) WriteConfig(dataDir string) error {
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		return fmt.Errorf("创建配置目录失败: %w", err)
-	}
-	content, err := c.Render()
-	if err != nil {
-		return fmt.Errorf("生成配置失败: %w", err)
-	}
-	// 简化：auth-dir 用绝对路径（CLIProxyAPI 相对 config 文件目录解析相对路径）
-	// 直接写绝对路径更稳妥
-	absAuth := filepath.Join(dataDir, "auths")
-	content = []byte(strings.Replace(string(content), `auth-dir: auths`, `auth-dir: `+absAuth, 1))
-	if err := os.WriteFile(filepath.Join(dataDir, "config.yaml"), content, 0644); err != nil {
-		return fmt.Errorf("写入配置失败: %w", err)
-	}
-	return nil
 }
