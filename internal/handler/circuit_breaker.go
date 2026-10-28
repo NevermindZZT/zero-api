@@ -1,82 +1,60 @@
 package handler
 
 import (
+	"bufio"
 	"bytes"
-	"crypto/tls"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
-	"net/url"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/never/zero-api/internal/adapter"
 	"github.com/never/zero-api/internal/store"
+	"github.com/never/zero-api/internal/upstream"
 )
 
-// breakerState 渠道熔断状态
 type breakerState int
 
 const (
-	breakerNormal   breakerState = iota // 正常
-	breakerCooldown                     // 冷却中：完全跳过
-	breakerProbing                      // 需探测：冷却到期，需测试通过才能恢复
+	breakerNormal breakerState = iota
+	breakerCooldown
+	breakerProbing
 )
 
-// channelEntry 单个渠道的熔断记录
 type channelEntry struct {
 	state   breakerState
-	expiry  time.Time // 冷却到期时间
-	retries int       // 连续失败次数
+	expiry  time.Time
+	retries int
 }
 
-// CircuitBreaker 渠道熔断器
-//
-// 工作流程：
-//  1. 请求失败 → 冷却 5 分钟（cooldown 状态）
-//  2. 冷却到期 → 转为 probing 状态
-//  3. 命中 probing 渠道 → 先发轻量探测请求验证健康
-//  4a. 探测通过 → 恢复正常（normal 状态），继续当前请求
-//  4b. 探测失败 → 重新冷却
-//
-// 连续失败次数递增冷却时长：5min → 10min → 20min → 40min（上限 40min）
+// CircuitBreaker maintains channel cooldowns and allows only one half-open probe.
+// A request observing a cooldown must never silently mark the channel healthy.
 type CircuitBreaker struct {
 	mu       sync.RWMutex
 	entries  map[int64]*channelEntry
 	baseWait time.Duration
 	maxWait  time.Duration
-	client   *http.Client
 }
 
-// NewCircuitBreaker 创建熔断器
 func NewCircuitBreaker() *CircuitBreaker {
-	return &CircuitBreaker{
-		entries:  make(map[int64]*channelEntry),
-		baseWait: 5 * time.Minute,
-		maxWait:  40 * time.Minute,
-		client: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig:     &tls.Config{},
-				TLSHandshakeTimeout: 10 * time.Second,
-			},
-		},
-	}
+	return &CircuitBreaker{entries: make(map[int64]*channelEntry), baseWait: 5 * time.Minute, maxWait: 40 * time.Minute}
 }
 
-// RecordFailure 记录渠道失败，进入冷却（指数退避）
 func (cb *CircuitBreaker) RecordFailure(channelID int64) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
-
-	entry, ok := cb.entries[channelID]
-	if !ok {
+	entry := cb.entries[channelID]
+	if entry == nil {
 		entry = &channelEntry{}
 		cb.entries[channelID] = entry
 	}
-
 	entry.retries++
-	// 指数退避：baseWait * 2^(retries-1)，上限 maxWait
 	wait := cb.baseWait
 	for i := 1; i < entry.retries && wait < cb.maxWait; i++ {
 		wait *= 2
@@ -84,128 +62,256 @@ func (cb *CircuitBreaker) RecordFailure(channelID int64) {
 	if wait > cb.maxWait {
 		wait = cb.maxWait
 	}
-
-	entry.state = breakerCooldown
-	entry.expiry = time.Now().Add(wait)
-	log.Printf("[熔断] 渠道 %d 请求失败，冷却 %v (连续失败 %d 次)", channelID, wait, entry.retries)
+	entry.state, entry.expiry = breakerCooldown, time.Now().Add(wait)
+	log.Printf("[熔断] 渠道 %d 失败，冷却 %v (连续失败 %d 次)", channelID, wait, entry.retries)
 }
 
-// RecordSuccess 记录渠道成功，立即恢复正常
 func (cb *CircuitBreaker) RecordSuccess(channelID int64) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
-	delete(cb.entries, channelID)
-	log.Printf("[熔断] 渠道 %d 请求成功，已恢复正常", channelID)
+	if _, exists := cb.entries[channelID]; exists {
+		delete(cb.entries, channelID)
+		log.Printf("[熔断] 渠道 %d 已恢复正常", channelID)
+	}
 }
 
-// MayProceed 检查渠道是否允许请求
-// 返回值：allow=true 可继续，probe=true 需先探测
-func (cb *CircuitBreaker) MayProceed(channelID int64) (allow bool, probe bool) {
-	cb.mu.RLock()
-	defer cb.mu.RUnlock()
-
-	entry, ok := cb.entries[channelID]
-	if !ok {
+// MayProceed atomically reserves a half-open probe when its cooldown expires.
+func (cb *CircuitBreaker) MayProceed(channelID int64) (allow, probe bool) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	entry := cb.entries[channelID]
+	if entry == nil {
 		return true, false
 	}
-
 	switch entry.state {
 	case breakerCooldown:
 		if time.Now().Before(entry.expiry) {
-			return false, false // 冷却中，跳过
+			return false, false
 		}
-		return false, true // 冷却到期，需要探测
+		entry.state = breakerProbing
+		return false, true
 	case breakerProbing:
-		return false, true // 需要探测
+		return false, false
 	default:
 		return true, false
 	}
 }
 
-// EnterProbing 将渠道转为探测状态
+// EnterProbing is retained for callers that already hold the MayProceed reservation.
 func (cb *CircuitBreaker) EnterProbing(channelID int64) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
-
-	entry, ok := cb.entries[channelID]
-	if !ok {
-		entry = &channelEntry{}
-		cb.entries[channelID] = entry
+	if entry := cb.entries[channelID]; entry != nil {
+		entry.state = breakerProbing
 	}
-	entry.state = breakerProbing
 }
 
-// ProbeChannel 探测渠道健康状态
-// 发真实 chat/completions 请求，验证端到端可用
-func (cb *CircuitBreaker) ProbeChannel(ch *store.Channel, testModel, probeAPIKey, proxyURL, proxyUser, proxyPass string, timeout time.Duration) error {
-	payload := map[string]interface{}{
-		"model": testModel,
-		"messages": []map[string]string{
-			{"role": "user", "content": "hi"},
-		},
-		"max_tokens": 1,
+// CancelProbe releases a probe cancelled by its caller without penalizing the upstream.
+func (cb *CircuitBreaker) CancelProbe(channelID int64) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	if entry := cb.entries[channelID]; entry != nil && entry.state == breakerProbing {
+		entry.state, entry.expiry = breakerCooldown, time.Now()
 	}
-	body, _ := json.Marshal(payload)
+}
 
-	adapt := adapter.NewAdapter(ch.Type)
-	upstreamURL := adapt.GetChatURL(ch.BaseURL)
+func (cb *CircuitBreaker) RetryAfter(channelID int64) time.Duration {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+	if entry := cb.entries[channelID]; entry != nil {
+		if wait := time.Until(entry.expiry); wait > 0 {
+			return wait
+		}
+		return time.Second
+	}
+	return 0
+}
 
-	req, err := http.NewRequest("POST", upstreamURL, bytes.NewReader(body))
+// Probe errors intentionally omit upstream URLs, credentials, and response bodies.
+type channelProbeError struct {
+	reason string
+	cause  error
+}
+
+func (e *channelProbeError) Error() string { return e.reason }
+func (e *channelProbeError) Unwrap() error { return e.cause }
+
+func (cb *CircuitBreaker) ProbeChannel(ch *store.Channel, testModel, probeAPIKey, proxyURL, proxyUser, proxyPass string, timeout time.Duration) error {
+	return cb.probeChannel(context.Background(), ch, testModel, ch.Type, "", probeAPIKey, proxyURL, proxyUser, proxyPass, timeout)
+}
+
+func (cb *CircuitBreaker) probeChannel(ctx context.Context, ch *store.Channel, testModel, protocol, overrideURL, probeAPIKey, proxyURL, proxyUser, proxyPass string, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	// Responses/Codex endpoints may be streaming-only. Validate their terminal event,
+	// rather than accepting a 200 or a keepalive as evidence of a healthy inference.
+	payload := map[string]interface{}{"model": testModel, "messages": []map[string]string{{"role": "user", "content": "hi"}}, "max_tokens": 16, "stream": protocol == "responses"}
+	canonical, _ := json.Marshal(payload)
+	adapt := adapter.NewAdapter(protocol)
+	body, err := adapt.ConvertRequest(testModel, canonical)
 	if err != nil {
-		return fmt.Errorf("构造探测请求失败: %w", err)
+		return &channelProbeError{reason: "探测请求转换失败", cause: err}
+	}
+	endpoint := adapt.GetChatURL(ch.BaseURL)
+	if overrideURL != "" {
+		endpoint = overrideURL
+	}
+	if protocol == "gemini" {
+		endpoint = fmt.Sprintf("%s/%s:generateContent", endpoint, testModel)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return &channelProbeError{reason: "探测请求地址无效", cause: err}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+probeAPIKey)
-
-	// 构建带可选代理的客户端
-	var transport *http.Transport
+	key := ch.APIKey
+	if key == "" {
+		key = probeAPIKey
+	}
+	switch protocol {
+	case "anthropic":
+		req.Header.Set("anthropic-version", "2023-06-01")
+		if key != "" {
+			req.Header.Set("x-api-key", key)
+		}
+	case "gemini":
+		if key != "" {
+			req.Header.Set("x-goog-api-key", key)
+		}
+	default:
+		if key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
+	}
+	client := upstream.NewHTTPClientWithTimeout(timeout)
 	if proxyURL != "" {
-		u, err := url.Parse(proxyURL)
-		if err == nil {
-			if proxyUser != "" {
-				u.User = url.UserPassword(proxyUser, proxyPass)
-			}
-			transport = &http.Transport{
-				Proxy:               http.ProxyURL(u),
-				TLSClientConfig:     &tls.Config{},
-				TLSHandshakeTimeout: 10 * time.Second,
-			}
+		client, err = upstream.NewHTTPClientWithProxyAndTimeout(proxyURL, proxyUser, proxyPass, timeout)
+		if err != nil {
+			return &channelProbeError{reason: "探测代理配置无效", cause: err}
 		}
-	}
-	if transport == nil {
-		transport = &http.Transport{
-			TLSClientConfig:     &tls.Config{},
-			TLSHandshakeTimeout: 10 * time.Second,
-		}
-	}
-
-	client := &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("探测请求失败: %w", err)
+		return &channelProbeError{reason: "探测上游连接失败", cause: err}
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode >= 500 {
-		return fmt.Errorf("探测返回服务端错误: %d", resp.StatusCode)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return &channelProbeError{reason: fmt.Sprintf("探测上游 HTTP %d", resp.StatusCode)}
+	}
+	if !validProbeResponse(resp.Body, resp.Header.Get("Content-Type"), protocol) {
+		if ctx.Err() != nil {
+			return &channelProbeError{reason: "探测读取已取消或超时", cause: ctx.Err()}
+		}
+		return &channelProbeError{reason: "探测未返回有效推理结果"}
 	}
 	return nil
 }
 
-// ProbeAndRecover 探测渠道并恢复
-// 成功 → 恢复正常；失败 → 重新冷却
+func validProbeResponse(body io.Reader, contentType, protocol string) bool {
+	const limit = 1 << 20
+	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
+		scanner := bufio.NewScanner(io.LimitReader(body, limit))
+		scanner.Buffer(make([]byte, 4096), limit)
+		sawOutput := false
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data == "[DONE]" {
+				return sawOutput
+			}
+			var event map[string]json.RawMessage
+			if json.Unmarshal([]byte(data), &event) != nil {
+				continue
+			}
+			if _, ok := event["error"]; ok {
+				return false
+			}
+			var typ string
+			_ = json.Unmarshal(event["type"], &typ)
+			switch typ {
+			case "response.failed", "error":
+				return false
+			case "response.completed", "response.incomplete":
+				return validProbeJSON(event["response"], "responses")
+			case "message_start":
+				sawOutput = true
+			case "message_stop":
+				return sawOutput
+			}
+			if choices := event["choices"]; len(choices) > 0 {
+				sawOutput = true
+			}
+		}
+		return false
+	}
+	data, err := io.ReadAll(io.LimitReader(body, limit+1))
+	return err == nil && len(data) <= limit && validProbeJSON(data, protocol)
+}
+
+func validProbeJSON(data []byte, protocol string) bool {
+	var root map[string]json.RawMessage
+	if json.Unmarshal(data, &root) != nil || len(root) == 0 || len(root["error"]) > 0 {
+		return false
+	}
+	switch protocol {
+	case "responses":
+		var status string
+		_ = json.Unmarshal(root["status"], &status)
+		var output []json.RawMessage
+		return (status == "completed" || status == "incomplete") && json.Unmarshal(root["output"], &output) == nil && output != nil
+	case "anthropic":
+		var typ string
+		_ = json.Unmarshal(root["type"], &typ)
+		return typ == "message" && len(root["content"]) > 0
+	case "gemini":
+		var candidates []json.RawMessage
+		return json.Unmarshal(root["candidates"], &candidates) == nil && len(candidates) > 0
+	default:
+		var choices []json.RawMessage
+		return json.Unmarshal(root["choices"], &choices) == nil && len(choices) > 0
+	}
+}
+
 func (cb *CircuitBreaker) ProbeAndRecover(channelID int64, ch *store.Channel, testModel, probeAPIKey, proxyURL, proxyUser, proxyPass string, timeout time.Duration) error {
-	err := cb.ProbeChannel(ch, testModel, probeAPIKey, proxyURL, proxyUser, proxyPass, timeout)
+	return cb.ProbeAndRecoverContext(context.Background(), channelID, ch, testModel, probeAPIKey, proxyURL, proxyUser, proxyPass, timeout)
+}
+
+func (cb *CircuitBreaker) ProbeAndRecoverContext(ctx context.Context, channelID int64, ch *store.Channel, testModel, probeAPIKey, proxyURL, proxyUser, proxyPass string, timeout time.Duration) error {
+	err := cb.probeChannel(ctx, ch, testModel, ch.Type, "", probeAPIKey, proxyURL, proxyUser, proxyPass, timeout)
+	return cb.finishProbe(ctx, channelID, err)
+}
+
+func (cb *CircuitBreaker) ProbeModelAndRecoverContext(ctx context.Context, ch *store.Channel, model *store.Model, downstreamProtocol, probeAPIKey, proxyURL, proxyUser, proxyPass string, timeout time.Duration) error {
+	protocol := ch.Type
+	endpoint := ""
+	if ch.Type != "gemini" && adapter.CanPassthrough(ch.Type, downstreamProtocol, ch.SupportsProtocol(downstreamProtocol), model.SupportsProtocol(downstreamProtocol, ch.Type)) {
+		protocol = downstreamProtocol
+		endpoint = model.ProtocolURL(protocol, ch.BaseURL)
+	}
+	testModel := ch.TestModel
+	if testModel == "" {
+		testModel = model.ModelID
+	}
+	err := cb.probeChannel(ctx, ch, testModel, protocol, endpoint, probeAPIKey, proxyURL, proxyUser, proxyPass, timeout)
+	return cb.finishProbe(ctx, ch.ID, err)
+}
+
+func (cb *CircuitBreaker) finishProbe(ctx context.Context, channelID int64, err error) error {
 	if err == nil {
 		cb.RecordSuccess(channelID)
-		log.Printf("[熔断] 渠道 %s (%d) 探测通过，恢复正常", ch.Name, channelID)
 		return nil
 	}
-
-	log.Printf("[熔断] 渠道 %s (%d) 探测失败: %v，重新冷却", ch.Name, channelID, err)
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+		cb.CancelProbe(channelID)
+		return err
+	}
 	cb.RecordFailure(channelID)
+	log.Printf("[熔断] 渠道 %d 探测失败", channelID)
 	return err
 }

@@ -51,6 +51,8 @@ func (a *ResponsesAdapter) ConvertRequest(modelID string, body []byte) ([]byte, 
 		Stop        json.RawMessage `json:"stop"`
 		Stream      bool            `json:"stream"`
 		Tools       []openAITool    `json:"tools"`
+		ToolChoice  json.RawMessage `json:"tool_choice"`
+		Reasoning   json.RawMessage `json:"reasoning"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		return body, nil // 透传
@@ -60,6 +62,12 @@ func (a *ResponsesAdapter) ConvertRequest(modelID string, body []byte) ([]byte, 
 	respReq := map[string]interface{}{
 		"model":  modelID,
 		"stream": req.Stream,
+	}
+	if len(req.ToolChoice) > 0 {
+		respReq["tool_choice"] = canonicalToolChoiceToResponses(req.ToolChoice)
+	}
+	if len(req.Reasoning) > 0 {
+		respReq["reasoning"] = req.Reasoning
 	}
 	if req.PreviousResponseID != "" {
 		respReq["previous_response_id"] = req.PreviousResponseID
@@ -171,6 +179,7 @@ func (a *ResponsesAdapter) ConvertResponse(body []byte) ([]byte, error) {
 		ID     string            `json:"id"`
 		Model  string            `json:"model"`
 		Status string            `json:"status"`
+		Error  json.RawMessage   `json:"error"`
 		Output []responsesOutput `json:"output"`
 		Usage  struct {
 			InputTokens        int `json:"input_tokens"`
@@ -183,6 +192,13 @@ func (a *ResponsesAdapter) ConvertResponse(body []byte) ([]byte, error) {
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return body, nil
+	}
+	if len(resp.Error) > 0 && !bytes.Equal(bytes.TrimSpace(resp.Error), []byte("null")) {
+		return nil, fmt.Errorf("Responses upstream returned an error")
+	}
+	switch resp.Status {
+	case "failed", "error", "cancelled":
+		return nil, fmt.Errorf("Responses upstream returned status %q", resp.Status)
 	}
 
 	msg := OpenAIMessage{Role: "assistant", Content: ""}
@@ -214,7 +230,7 @@ func (a *ResponsesAdapter) ConvertResponse(body []byte) ([]byte, error) {
 		msg.ToolCalls = toolCalls
 		finishReason = "tool_calls"
 	}
-	if resp.Status == "incomplete" || resp.Status == "failed" {
+	if resp.Status == "incomplete" {
 		finishReason = "length"
 	}
 
@@ -339,147 +355,6 @@ func (a *ResponsesAdapter) NewStreamConverter() StreamConverter {
 //	       response.output_text.delta / response.output_text.done /
 //	       response.function_call_arguments.delta / response.completed ...
 //	data: {"type":"response.output_text.delta","delta":"text", ...}
-type responsesUpstreamStreamConverter struct {
-	started      bool
-	finished     bool
-	model        string
-	responseID   string
-	promptTokens int
-	outputTokens int
-	finishReason string
-	toolSeq      int // function_call 序号
-	toolStarted  map[string]bool
-}
-
-func (c *responsesUpstreamStreamConverter) Convert(line []byte) []byte {
-	trimmed := bytes.TrimSpace(line)
-	if !bytes.HasPrefix(trimmed, []byte("data: ")) {
-		return nil
-	}
-	payload := bytes.TrimSpace(trimmed[len("data: "):])
-	if len(payload) == 0 {
-		return nil
-	}
-
-	var evt struct {
-		Type     string          `json:"type"`
-		Delta    string          `json:"delta"`
-		Item     json.RawMessage `json:"item"`
-		Response json.RawMessage `json:"response"`
-	}
-	if err := json.Unmarshal(payload, &evt); err != nil {
-		return nil
-	}
-
-	var out bytes.Buffer
-
-	switch evt.Type {
-	case "response.created":
-		var r struct {
-			ID    string `json:"id"`
-			Model string `json:"model"`
-		}
-		_ = json.Unmarshal(evt.Response, &r)
-		c.responseID = r.ID
-		c.model = r.Model
-
-	case "response.output_item.added":
-		var item struct {
-			Type   string `json:"type"`
-			ID     string `json:"id"`
-			Name   string `json:"name"`
-			CallID string `json:"call_id"`
-		}
-		_ = json.Unmarshal(evt.Item, &item)
-		if item.Type == "function_call" {
-			if c.toolStarted == nil {
-				c.toolStarted = make(map[string]bool)
-			}
-			if !c.toolStarted[item.ID] {
-				c.toolStarted[item.ID] = true
-				if c.started {
-					c.emitToolCallStartChunk(&out, c.toolSeq, item.ID, item.Name)
-				}
-				c.toolSeq++
-			}
-		}
-
-	case "response.output_text.delta":
-		if !c.started {
-			c.emitRoleChunk(&out)
-			c.started = true
-		}
-		if evt.Delta != "" {
-			c.emitContentChunk(&out, evt.Delta)
-		}
-
-	case "response.function_call_arguments.delta":
-		if !c.started {
-			c.emitRoleChunk(&out)
-			c.started = true
-		}
-		if evt.Delta != "" {
-			c.emitToolCallArgsChunk(&out, c.toolSeq-1, evt.Delta)
-		}
-
-	case "response.completed":
-		var r struct {
-			Status string `json:"status"`
-			Usage  struct {
-				InputTokens  int `json:"input_tokens"`
-				OutputTokens int `json:"output_tokens"`
-			} `json:"usage"`
-		}
-		_ = json.Unmarshal(evt.Response, &r)
-		if r.Status == "completed" {
-			c.finishReason = "stop"
-		} else {
-			c.finishReason = "length"
-		}
-		c.promptTokens = r.Usage.InputTokens
-		c.outputTokens = r.Usage.OutputTokens
-	}
-
-	if out.Len() > 0 {
-		return out.Bytes()
-	}
-	return nil
-}
-
-func (c *responsesUpstreamStreamConverter) Finish() []byte {
-	if c.finished {
-		return nil
-	}
-	c.finished = true
-	var out bytes.Buffer
-	if !c.started {
-		c.emitRoleChunk(&out)
-	}
-	reason := c.finishReason
-	if reason == "" {
-		reason = "stop"
-	}
-	finish := map[string]interface{}{
-		"id":     "chatcmpl-" + c.responseID,
-		"object": "chat.completion.chunk",
-		"model":  c.model,
-		"choices": []interface{}{map[string]interface{}{
-			"index":         0,
-			"delta":         map[string]interface{}{},
-			"finish_reason": reason,
-		}},
-		"usage": map[string]interface{}{
-			"prompt_tokens":     c.promptTokens,
-			"completion_tokens": c.outputTokens,
-			"total_tokens":      c.promptTokens + c.outputTokens,
-		},
-	}
-	data, _ := json.Marshal(finish)
-	out.WriteString("data: " + string(data) + "\n\n")
-	out.WriteString("data: [DONE]\n\n")
-	return out.Bytes()
-}
-
 func (c *responsesUpstreamStreamConverter) emitRoleChunk(out *bytes.Buffer) {
 	c.started = true
 	chunk := map[string]interface{}{

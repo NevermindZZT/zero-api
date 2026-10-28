@@ -92,6 +92,8 @@ type openAICanonicalRequest struct {
 	Stop               interface{}              `json:"stop,omitempty"`
 	Stream             bool                     `json:"stream,omitempty"`
 	Tools              []openAITool             `json:"tools,omitempty"`
+	ToolChoice         json.RawMessage          `json:"tool_choice,omitempty"`
+	Reasoning          json.RawMessage          `json:"reasoning,omitempty"`
 }
 
 func (a *AnthropicDownstreamAdapter) RequestToCanonical(body []byte) ([]byte, error) {

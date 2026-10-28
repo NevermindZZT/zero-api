@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { buildChatRequest, streamChatRequest } from './chatTest'
 
 const api = axios.create({
   baseURL: '/api',
@@ -81,72 +82,7 @@ export const chatTestApi = {
       timeout: 120000,
     })
   },
-  chatStream: (apiKey: string, model: string, content: string, protocol: string, onData: (text: string) => void, onDone: () => void, onError: (err: string) => void): AbortController => {
-    const { url, body } = buildChatRequest(model, content, protocol, true)
-    const controller = new AbortController()
-    fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    }).then(async (response) => {
-      if (!response.ok) {
-        const errBody = await response.text()
-        onError(`HTTP ${response.status}: ${errBody}`)
-        return
-      }
-      const reader = response.body!.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          const payload = line.slice(6).trim()
-          if (payload === '[DONE]') continue
-          try {
-            const parsed = JSON.parse(payload)
-            // OpenAI SSE: choices[0].delta.content
-            const delta = parsed?.choices?.[0]?.delta?.content
-            // Anthropic / Responses SSE: delta.text
-            const text = parsed?.delta?.text
-            const content = delta || text || ''
-            if (content) onData(content)
-          } catch { /* skip malformed SSE */ }
-        }
-      }
-      onDone()
-    }).catch((err) => {
-      if (err.name !== 'AbortError') onError(err.message || '流式请求失败')
-    })
-    return controller
-  },
-}
-
-// 根据协议构建 Chat 测试请求（URL + Body）
-function buildChatRequest(model: string, content: string, protocol: string, stream: boolean): { url: string; body: any } {
-  const base = { model }
-  switch (protocol) {
-    case 'anthropic':
-      return {
-        url: '/v1/messages',
-        body: { ...base, max_tokens: 4096, messages: [{ role: 'user', content }], ...(stream ? { stream: true } : {}) },
-      }
-    case 'responses':
-      return {
-        url: '/v1/responses',
-        body: { ...base, input: [{ role: 'user', content }], ...(stream ? { stream: true } : {}) },
-      }
-    default: // openai
-      return {
-        url: '/v1/chat/completions',
-        body: { ...base, messages: [{ role: 'user', content }], ...(stream ? { stream: true } : {}) },
-      }
-  }
+  chatStream: streamChatRequest,
 }
 
 // ===== Usage API =====

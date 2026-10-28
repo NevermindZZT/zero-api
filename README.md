@@ -160,6 +160,26 @@ log_level: "info"
 
 可通过环境变量 `ZERO_API_CONFIG` 指定配置文件路径。
 
+### 脱敏请求异常日志（默认开启）
+
+`/v1` 请求每次由服务生成新的 `X-Request-Id` 响应头（不信任客户端传入的 ID）。发生异常时可用该 ID 关联 `stage=request` 的请求结果与 `stage=attempt` 的渠道尝试；流已返回 HTTP 200 后中途失败时，以 attempt 的 `category` 为准，不能仅看 HTTP 状态码。请求成功不写异常日志。
+
+默认文件是**数据库同目录**的 `logs/request-errors.jsonl`，例如默认数据库 `data/zero-api.db` 对应 `data/logs/request-errors.jsonl`；Docker 中位于挂载的 data 卷内。文件采用 JSONL，每行仅保存固定字段：服务生成的 request ID、受限的 upstream request ID、静态 API 路径、协议/模型标识、渠道/尝试、受控错误分类、状态码、耗时、是否开始响应及输出字节数。不记录请求/响应 body、Authorization/API Key/OAuth token、session ID、previous_response_id、query、完整 URL、任意 `err.Error()` 或上游错误 message。模型名最多 80 字节并限制为标识符；不符合约束时省略。
+
+```yaml
+request_log:
+  enabled: true
+  path: ""           # 空 = 数据库同目录 logs/request-errors.jsonl
+  max_size_mb: 10     # MiB；活动文件达到上限前轮转
+  max_backups: 5      # .1 最新，.5 最旧；不包含活动文件
+  max_age_days: 14
+```
+
+- 默认最多约 **60 MiB**（10 MiB 活动文件 + 5 份备份）；每条事件最多 2 KiB。大小和留存任一先到即清理，因此不保证保存完整 14 天。零值使用默认值；负数非法；安全上限分别为 1024 MiB、100 份、3650 天。
+- 重启以追加方式打开，不截断已有文件；运行中自动轮转，备份在启动、写入和每小时维护时清理，活动文件也按最早事件时间到期轮转。日志目录权限 0700，活动与备份文件 0600；旧文件权限会收紧，符号链接/非普通文件拒绝打开；自定义路径应使用专用日志目录，既有不私有且含无关文件的共享目录会拒绝使用，不会擅自 chmod。同一日志路径只应由一个 zero-api 进程拥有。
+- `enabled: false` 可禁用持久化，仍返回请求 ID。日志初始化/写入失败不使推理失败，但 stderr 会出现明显的 `[request-log] WARNING`；运行写入告警限频为每分钟一次。应同时监控该告警和目录空间。Windows 上权限位的有效性受系统 ACL 约束。
+- 获取日志时只需提供相关 ID 附近的 JSONL 行与发生时间；无需开启会泄露 body 的调试日志。日志类别是定位线索，不包含上游原始错误正文。`upstream_error_code` 只允许固定分类（例如 `context_length_exceeded`、`rate_limit_exceeded`、`insufficient_quota`、`previous_response_not_found`、`tool_call_mismatch`），不认识的原始 code 直接省略，绝不当作自由文本保存；进一步核对 CPA 时请自行脱敏 CPA 的日志。
+
 ---
 
 ## 🔐 默认登录

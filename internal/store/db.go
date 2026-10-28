@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -27,6 +28,7 @@ func Open(dbPath string) (*DB, error) {
 		"PRAGMA foreign_keys=ON",
 	} {
 		if _, err := db.Exec(pragma); err != nil {
+			_ = db.Close()
 			return nil, fmt.Errorf("设置 PRAGMA 失败: %w", err)
 		}
 	}
@@ -36,11 +38,13 @@ func Open(dbPath string) (*DB, error) {
 	db.SetMaxIdleConns(4)
 
 	if err := db.Ping(); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("连接数据库失败: %w", err)
 	}
 
 	d := &DB{db}
 	if err := d.migrate(); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("数据库迁移失败: %w", err)
 	}
 
@@ -241,93 +245,111 @@ func (d *DB) migrate() error {
 		)`,
 	}
 
+	// 先建基础表，再执行增量迁移。旧实现顺序相反，首次启动的 ALTER 全部失败。
+	for _, q := range queries {
+		if _, err := d.Exec(q); err != nil {
+			return fmt.Errorf("创建基础表失败: %w", err)
+		}
+	}
+
+	var migrationErr error
+	migrate := func(q string) {
+		if migrationErr != nil {
+			return
+		}
+		if _, err := d.Exec(q); err != nil {
+			// ADD COLUMN 幂等时只忽略“列已存在”，锁冲突/损坏/语法错误必须中止启动。
+			if strings.HasPrefix(q, "ALTER TABLE ") && strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") {
+				return
+			}
+			migrationErr = fmt.Errorf("执行增量迁移失败: %w", err)
+		}
+	}
+
 	// 迁移：添加 cache_hit_tokens 列（如果不存在）
-	d.Exec(`ALTER TABLE usage_records ADD COLUMN cache_hit_tokens INTEGER DEFAULT 0`)
+	migrate(`ALTER TABLE usage_records ADD COLUMN cache_hit_tokens INTEGER DEFAULT 0`)
 	// 迁移：添加 api_key_id 列（如果不存在）
-	d.Exec(`ALTER TABLE usage_records ADD COLUMN api_key_id INTEGER DEFAULT NULL`)
+	migrate(`ALTER TABLE usage_records ADD COLUMN api_key_id INTEGER DEFAULT NULL`)
 	// 迁移：添加 total_duration_ms 列（如果不存在）
 	// 注意：旧数据库的 usage_records 表没有该列，INSERT 语句包含该列会导致写入失败、
 	// 用量数据无法进入统计，必须通过 ALTER TABLE 补齐。
-	d.Exec(`ALTER TABLE usage_records ADD COLUMN total_duration_ms INTEGER DEFAULT 0`)
+	migrate(`ALTER TABLE usage_records ADD COLUMN total_duration_ms INTEGER DEFAULT 0`)
 	// 迁移：清理旧记录的 api_key_id=0（迁移默认值遗留下的无效数据，0 不对应任何有效密钥）
-	d.Exec(`UPDATE usage_records SET api_key_id = NULL WHERE api_key_id = 0`)
+	migrate(`UPDATE usage_records SET api_key_id = NULL WHERE api_key_id = 0`)
 	// 迁移：添加缓存读取/写入价格列（如果不存在）
-	d.Exec(`ALTER TABLE models ADD COLUMN pricing_cache_read REAL DEFAULT 0`)
-	d.Exec(`ALTER TABLE models ADD COLUMN pricing_cache_write REAL DEFAULT 0`)
+	migrate(`ALTER TABLE models ADD COLUMN pricing_cache_read REAL DEFAULT 0`)
+	migrate(`ALTER TABLE models ADD COLUMN pricing_cache_write REAL DEFAULT 0`)
 	// 迁移：添加模型映射字段（如果不存在）
-	d.Exec(`ALTER TABLE proxy_config ADD COLUMN model_mappings TEXT DEFAULT '{}'`)
+	migrate(`ALTER TABLE proxy_config ADD COLUMN model_mappings TEXT DEFAULT '{}'`)
 	// 迁移：添加全 MITM 和代理认证字段
-	d.Exec(`ALTER TABLE proxy_config ADD COLUMN mitm_all INTEGER DEFAULT 0`)
-	d.Exec(`ALTER TABLE proxy_config ADD COLUMN proxy_username TEXT DEFAULT ''`)
-	d.Exec(`ALTER TABLE proxy_config ADD COLUMN proxy_password TEXT DEFAULT ''`)
+	migrate(`ALTER TABLE proxy_config ADD COLUMN mitm_all INTEGER DEFAULT 0`)
+	migrate(`ALTER TABLE proxy_config ADD COLUMN proxy_username TEXT DEFAULT ''`)
+	migrate(`ALTER TABLE proxy_config ADD COLUMN proxy_password TEXT DEFAULT ''`)
 	// 迁移：添加 user_modified 字段到 models 表
-	d.Exec(`ALTER TABLE models ADD COLUMN user_modified INTEGER DEFAULT 0`)
+	migrate(`ALTER TABLE models ADD COLUMN user_modified INTEGER DEFAULT 0`)
 	// 迁移：添加 pricing_rules 字段到 models 表
-	d.Exec(`ALTER TABLE models ADD COLUMN pricing_rules TEXT DEFAULT '[]'`)
+	migrate(`ALTER TABLE models ADD COLUMN pricing_rules TEXT DEFAULT '[]'`)
 	// 迁移：添加 protocols 字段到 models 表（JSON 数组，空 = 继承渠道 type）
-	d.Exec(`ALTER TABLE models ADD COLUMN protocols TEXT DEFAULT '[]'`)
+	migrate(`ALTER TABLE models ADD COLUMN protocols TEXT DEFAULT '[]'`)
 	// 迁移：添加 protocol_urls 字段到 models 表（JSON 对象，各协议独立的上游 URL）
-	d.Exec(`ALTER TABLE models ADD COLUMN protocol_urls TEXT DEFAULT '{}'`)
+	migrate(`ALTER TABLE models ADD COLUMN protocol_urls TEXT DEFAULT '{}'`)
 	// 统一模型能力和输入/输出模态（旧字段继续保留兼容）
-	d.Exec(`ALTER TABLE models ADD COLUMN capabilities TEXT DEFAULT '[]'`)
-	d.Exec(`ALTER TABLE models ADD COLUMN input_modalities TEXT DEFAULT '[]'`)
-	d.Exec(`ALTER TABLE models ADD COLUMN output_modalities TEXT DEFAULT '[]'`)
+	migrate(`ALTER TABLE models ADD COLUMN capabilities TEXT DEFAULT '[]'`)
+	migrate(`ALTER TABLE models ADD COLUMN input_modalities TEXT DEFAULT '[]'`)
+	migrate(`ALTER TABLE models ADD COLUMN output_modalities TEXT DEFAULT '[]'`)
 	// 迁移：添加 priority 字段到 channels 表（0=最高优先级，越大优先级越低）
-	d.Exec(`ALTER TABLE channels ADD COLUMN priority INTEGER DEFAULT 99`)
+	migrate(`ALTER TABLE channels ADD COLUMN priority INTEGER DEFAULT 99`)
 	// 迁移：添加渠道支持的协议列表（空值自动继承 type）
-	d.Exec(`ALTER TABLE channels ADD COLUMN protocols TEXT DEFAULT '[]'`)
+	migrate(`ALTER TABLE channels ADD COLUMN protocols TEXT DEFAULT '[]'`)
 	// 将历史渠道的默认 type 转为协议列表
-	d.Exec(`UPDATE channels SET protocols = json_array(type) WHERE protocols IS NULL OR protocols = '' OR protocols = '[]'`)
-	d.Exec(`ALTER TABLE channels ADD COLUMN use_proxy INTEGER DEFAULT 0`)
+	migrate(`UPDATE channels SET protocols = json_array(type) WHERE protocols IS NULL OR protocols = '' OR protocols = '[]'`)
+	migrate(`ALTER TABLE channels ADD COLUMN use_proxy INTEGER DEFAULT 0`)
 	// 迁移：添加全局出站代理配置到 proxy_config 表
-	d.Exec(`ALTER TABLE proxy_config ADD COLUMN forward_proxy_url TEXT DEFAULT ''`)
-	d.Exec(`ALTER TABLE proxy_config ADD COLUMN forward_proxy_user TEXT DEFAULT ''`)
-	d.Exec(`ALTER TABLE proxy_config ADD COLUMN forward_proxy_pass TEXT DEFAULT ''`)
+	migrate(`ALTER TABLE proxy_config ADD COLUMN forward_proxy_url TEXT DEFAULT ''`)
+	migrate(`ALTER TABLE proxy_config ADD COLUMN forward_proxy_user TEXT DEFAULT ''`)
+	migrate(`ALTER TABLE proxy_config ADD COLUMN forward_proxy_pass TEXT DEFAULT ''`)
 	// 迁移：添加渠道熔断相关字段
-	d.Exec(`ALTER TABLE channels ADD COLUMN failover_enabled INTEGER DEFAULT 1`)
-	d.Exec(`ALTER TABLE channels ADD COLUMN test_model TEXT DEFAULT ''`)
+	migrate(`ALTER TABLE channels ADD COLUMN failover_enabled INTEGER DEFAULT 1`)
+	migrate(`ALTER TABLE channels ADD COLUMN test_model TEXT DEFAULT ''`)
 	// 迁移：添加余额查询方式字段到 channels 表（auto=按域名推断 / 具体适配器名 / none=不查询）
-	d.Exec(`ALTER TABLE channels ADD COLUMN balance_api TEXT DEFAULT 'auto'`)
+	migrate(`ALTER TABLE channels ADD COLUMN balance_api TEXT DEFAULT 'auto'`)
 	// 迁移：添加 API Key 额度管理字段（quota_enabled=启用额度限制，quota_balance=剩余额度，
 	// quota_used=累计已用，allowed_models=允许模型列表 JSON，空=全部允许）
-	d.Exec(`ALTER TABLE api_keys ADD COLUMN quota_enabled INTEGER DEFAULT 0`)
-	d.Exec(`ALTER TABLE api_keys ADD COLUMN quota_balance REAL DEFAULT 0`)
-	d.Exec(`ALTER TABLE api_keys ADD COLUMN quota_used REAL DEFAULT 0`)
-	d.Exec(`ALTER TABLE api_keys ADD COLUMN allowed_models TEXT DEFAULT '[]'`)
+	migrate(`ALTER TABLE api_keys ADD COLUMN quota_enabled INTEGER DEFAULT 0`)
+	migrate(`ALTER TABLE api_keys ADD COLUMN quota_balance REAL DEFAULT 0`)
+	migrate(`ALTER TABLE api_keys ADD COLUMN quota_used REAL DEFAULT 0`)
+	migrate(`ALTER TABLE api_keys ADD COLUMN allowed_models TEXT DEFAULT '[]'`)
 	// 迁移：添加系统配置字段到 proxy_config（熔断探针 + 请求超时）
-	d.Exec(`ALTER TABLE proxy_config ADD COLUMN probe_api_key TEXT DEFAULT ''`)
-	d.Exec(`ALTER TABLE proxy_config ADD COLUMN request_timeout_seconds INTEGER DEFAULT 60`)
-	d.Exec(`ALTER TABLE proxy_config ADD COLUMN vision_timeout_seconds INTEGER DEFAULT 60`)
+	migrate(`ALTER TABLE proxy_config ADD COLUMN probe_api_key TEXT DEFAULT ''`)
+	migrate(`ALTER TABLE proxy_config ADD COLUMN request_timeout_seconds INTEGER DEFAULT 60`)
+	migrate(`ALTER TABLE proxy_config ADD COLUMN vision_timeout_seconds INTEGER DEFAULT 60`)
 	// 迁移：添加全局熔断开关（默认启用）
-	d.Exec(`ALTER TABLE proxy_config ADD COLUMN failover_enabled INTEGER DEFAULT 1`)
+	migrate(`ALTER TABLE proxy_config ADD COLUMN failover_enabled INTEGER DEFAULT 1`)
 	// 索引：加速 API Key 验证查询
-	d.Exec(`CREATE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(key)`)
+	migrate(`CREATE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(key)`)
 	// 索引：加速按 API Key 过滤的统计查询
-	d.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_api_key ON usage_records(api_key_id)`)
+	migrate(`CREATE INDEX IF NOT EXISTS idx_usage_api_key ON usage_records(api_key_id)`)
 	// 迁移：添加 github_token 字段到 proxy_config（用于 MCP GitHub 导入认证）
-	d.Exec(`ALTER TABLE proxy_config ADD COLUMN github_token TEXT DEFAULT ''`)
+	migrate(`ALTER TABLE proxy_config ADD COLUMN github_token TEXT DEFAULT ''`)
 	// 迁移：添加 CLIProxyAPI Management Key
-	d.Exec(`ALTER TABLE cpa_config ADD COLUMN management_key TEXT DEFAULT ''`)
+	migrate(`ALTER TABLE cpa_config ADD COLUMN management_key TEXT DEFAULT ''`)
 	// 迁移：添加 CLIProxyAPI Management API 远程访问开关
-	d.Exec(`ALTER TABLE cpa_config ADD COLUMN allow_remote INTEGER DEFAULT 0`)
+	migrate(`ALTER TABLE cpa_config ADD COLUMN allow_remote INTEGER DEFAULT 0`)
 	// 迁移：添加 commit_sha 字段到 skills 表（用于 GitHub 更新追踪）
-	d.Exec(`ALTER TABLE skills ADD COLUMN commit_sha TEXT DEFAULT ''`)
+	migrate(`ALTER TABLE skills ADD COLUMN commit_sha TEXT DEFAULT ''`)
 	// 迁移：渠道类型规范化 — openrouter 与 openai 同为 OpenAI 兼容协议，统一并入 openai
-	d.Exec(`UPDATE channels SET type = 'openai' WHERE type = 'openrouter'`)
+	migrate(`UPDATE channels SET type = 'openai' WHERE type = 'openrouter'`)
 	// 索引：Skill 标签查询
-	d.Exec(`CREATE INDEX IF NOT EXISTS idx_skill_tags_skill ON skill_tags(skill_id)`)
-	d.Exec(`CREATE INDEX IF NOT EXISTS idx_skill_tags_tag ON skill_tags(tag)`)
+	migrate(`CREATE INDEX IF NOT EXISTS idx_skill_tags_skill ON skill_tags(skill_id)`)
+	migrate(`CREATE INDEX IF NOT EXISTS idx_skill_tags_tag ON skill_tags(tag)`)
 	// 索引：Skill 文件查询
-	d.Exec(`CREATE INDEX IF NOT EXISTS idx_skill_files_skill ON skill_files(skill_id)`)
+	migrate(`CREATE INDEX IF NOT EXISTS idx_skill_files_skill ON skill_files(skill_id)`)
 	// 索引：组合关联查询
-	d.Exec(`CREATE INDEX IF NOT EXISTS idx_combo_items_combo ON skill_combination_items(combination_id)`)
-	d.Exec(`CREATE INDEX IF NOT EXISTS idx_combo_items_skill ON skill_combination_items(skill_id)`)
+	migrate(`CREATE INDEX IF NOT EXISTS idx_combo_items_combo ON skill_combination_items(combination_id)`)
+	migrate(`CREATE INDEX IF NOT EXISTS idx_combo_items_skill ON skill_combination_items(skill_id)`)
 
-	for _, q := range queries {
-		if _, err := d.Exec(q); err != nil {
-			log.Printf("[DB] 迁移查询失败: %v\n%s", err, q)
-			return fmt.Errorf("迁移失败: %w", err)
-		}
+	if migrationErr != nil {
+		return migrationErr
 	}
 
 	// 迁移：修复 usage_daily 日期为 0001-01-01 的错误数据（CreatedAt 为零值导致的 BUG）

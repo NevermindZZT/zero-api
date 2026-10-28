@@ -234,6 +234,16 @@ zero-api 内部统一使用 **OpenAI Chat Completions 格式**作为规范格式
 
 前端产物必须复制到 `cmd/server/web/dist/` 才会被 `//go:embed` 打包（**编译时文件必须存在**，缺失会导致构建失败）。
 
+## 本地人工验收服务（用户约定）
+
+- 每次完成代码改动后，重新构建并更新测试服务，确认登录和页面可访问，保持最新实例运行后再交付；不要仅跑测试却留下旧服务。
+- 测试实例使用 `data/dev/config.yaml`，数据库为 `data/dev/zero-api.db`，二进制为 `data/dev/zero-api`，API 默认端口 8080；这些文件被 `data/` 忽略，不提交凭据或数据库。
+- 当前测试实例关闭 MITM，避免无意劫持流量；需要测试 MITM 时再显式启用。CPA 登录/渠道数据由用户在该测试实例配置，重建时必须保留测试数据库与账号文件。
+- 后端使用本机 Go 工具链构建：`/home/zander/.local/go/bin/go build -o data/dev/zero-api ./cmd/server/`；如修改前端，先在 `web` 执行 `npm run build`，再编译后端嵌入产物。不要并发写同一个运行二进制。
+- 服务应由托管后台任务启动，设置 `ZERO_API_CONFIG` 为测试配置绝对路径；运行输出追加到 `data/dev/server.log`，PID 记录于 `data/dev/server.pid`。重启前核对 PID 对应的可执行文件和工作目录，只停止本项目测试实例，不使用宽泛 `pkill`。
+- 测试管理员使用用户指定的本地凭据；签名密钥随机生成并只留在私有配置中，不回显、不存长期记忆。默认账号仅供可信本机/局域网验证，不应暴露公网。
+- 健康检查至少确认首页、登录成功、受保护 API 未登录拒绝、登录后可访问，以及异常日志可写；没有配置 CPA/模型时不能声称真实上游推理已验证。
+
 ## ⚠️ 关键陷阱与约定
 
 1. **SQL NULL Scan**：`LEFT JOIN` 联表查询必须用 `COALESCE` 兜底 NULL 列（如 `COALESCE(c.name, '')`）

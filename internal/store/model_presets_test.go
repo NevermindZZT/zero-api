@@ -16,12 +16,6 @@ func TestApplyPresetsOnlyUpdatesUnmodifiedModels(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO channels (name, type, base_url) VALUES ('test', 'openai', 'http://example.test')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`ALTER TABLE models ADD COLUMN user_modified INTEGER DEFAULT 0`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`ALTER TABLE models ADD COLUMN pricing_rules TEXT DEFAULT '[]'`); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := db.Exec(`INSERT INTO models (channel_id, model_id, pricing_input, pricing_output, user_modified) VALUES (1, 'gpt-5.4', 0, 0, 0), (1, 'manual-model', 9, 9, 1)`); err != nil {
 		t.Fatal(err)
 	}

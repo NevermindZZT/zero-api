@@ -17,6 +17,7 @@ import (
 	"github.com/never/zero-api/internal/balance"
 	"github.com/never/zero-api/internal/config"
 	"github.com/never/zero-api/internal/cpa"
+	"github.com/never/zero-api/internal/diagnostics"
 	"github.com/never/zero-api/internal/handler"
 	"github.com/never/zero-api/internal/mcp"
 	"github.com/never/zero-api/internal/metrics"
@@ -44,6 +45,23 @@ func main() {
 	os.MkdirAll(filepath.Dir(cfg.Database.Path), 0755)
 	os.MkdirAll("certs", 0755)
 	os.MkdirAll(cfg.MCP.SkillsDir, 0755)
+
+	// Diagnostics are fail-open: logging must not make inference unavailable.
+	var diagnosticRecorder diagnostics.Recorder
+	if cfg.RequestLog.IsEnabled() {
+		requestLogger, logErr := diagnostics.New(diagnostics.Options{
+			Path: cfg.RequestLog.Path, MaxSizeBytes: int64(cfg.RequestLog.MaxSizeMB) * 1024 * 1024,
+			MaxBackups: cfg.RequestLog.MaxBackups, MaxAgeDays: cfg.RequestLog.MaxAgeDays,
+		})
+		if logErr != nil {
+			// Deliberately do not interpolate filesystem errors or sensitive paths.
+			log.Print("[request-log] WARNING: initialization failed; request failure diagnostics unavailable; check private log directory permissions and request_log configuration")
+		} else {
+			diagnosticRecorder = requestLogger
+			defer requestLogger.Close()
+			log.Print("[request-log] redacted request failure diagnostics enabled")
+		}
+	}
 
 	// 初始化数据库
 	db, err := store.Open(cfg.Database.Path)
@@ -117,6 +135,7 @@ func main() {
 	openRouterH := handler.NewOpenRouterHandler(svc.Model)
 	usageH := handler.NewUsageHandler(svc.Usage, tpsMonitor)
 	proxyH := handler.NewProxyHandler(svc.Channel, svc.Model, svc.Usage, svc.APIKey, svc.ProxyConfig, svc.VirtualModel, tpsMonitor)
+	proxyH.SetDiagnosticRecorder(diagnosticRecorder)
 	proxyConfigH := handler.NewProxyConfigHandler(svc.ProxyConfig, "certs")
 	// 代理配置更新后通知 ProxyHandler 刷新缓存
 	proxyConfigH.SetOnUpdate(proxyH.InvalidateProxyConfig)
@@ -143,7 +162,7 @@ func main() {
 	// --- API 路由 ---
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
-	r.Use(gin.Recovery(), middleware.CORS(), middleware.AuthMiddleware(cfg.Auth.Enabled, cfg.Auth.Secret))
+	r.Use(diagnostics.RequestMiddleware(diagnosticRecorder), gin.Recovery(), middleware.CORS(), middleware.AuthMiddleware(cfg.Auth.Enabled, cfg.Auth.Secret))
 
 	api := r.Group("/api")
 	{

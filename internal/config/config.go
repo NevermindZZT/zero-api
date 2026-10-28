@@ -61,6 +61,29 @@ type Config struct {
 	MCP           MCPConfig               `yaml:"mcp"`
 	ModelDefaults map[string]ModelDefault `yaml:"model_defaults"`
 	LogLevel      string                  `yaml:"log_level"`
+	RequestLog    RequestLogConfig        `yaml:"request_log"`
+}
+
+// RequestLogConfig controls metadata-only request failure diagnostics. A pointer
+// distinguishes an omitted enabled key (true) from an explicit false.
+type RequestLogConfig struct {
+	Enabled    *bool  `yaml:"enabled"`
+	Path       string `yaml:"path"`
+	MaxSizeMB  int    `yaml:"max_size_mb"`
+	MaxBackups int    `yaml:"max_backups"`
+	MaxAgeDays int    `yaml:"max_age_days"`
+}
+
+func (c RequestLogConfig) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }
+
+func (c RequestLogConfig) validate() error {
+	if c.MaxSizeMB < 0 || c.MaxBackups < 0 || c.MaxAgeDays < 0 {
+		return fmt.Errorf("request_log 的大小、备份数与保留天数不可为负数")
+	}
+	if c.MaxSizeMB > 1024 || c.MaxBackups > 100 || c.MaxAgeDays > 3650 {
+		return fmt.Errorf("request_log 超出安全上限（1024 MiB、100 份备份、3650 天）")
+	}
+	return nil
 }
 
 // ===== 模型预设文件管理 =====
@@ -210,6 +233,9 @@ func Load(path string) (*Config, error) {
 
 	// 应用默认值
 	cfg.applyDefaults()
+	if err := cfg.RequestLog.validate(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 
@@ -255,6 +281,22 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Database.Path == "" {
 		c.Database.Path = "data/zero-api.db"
+	}
+	if c.RequestLog.Enabled == nil {
+		enabled := true
+		c.RequestLog.Enabled = &enabled
+	}
+	if c.RequestLog.Path == "" {
+		c.RequestLog.Path = filepath.Join(filepath.Dir(c.Database.Path), "logs", "request-errors.jsonl")
+	}
+	if c.RequestLog.MaxSizeMB == 0 {
+		c.RequestLog.MaxSizeMB = 10
+	}
+	if c.RequestLog.MaxBackups == 0 {
+		c.RequestLog.MaxBackups = 5
+	}
+	if c.RequestLog.MaxAgeDays == 0 {
+		c.RequestLog.MaxAgeDays = 14
 	}
 	if c.LogLevel == "" {
 		c.LogLevel = "info"

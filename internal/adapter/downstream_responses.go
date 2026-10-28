@@ -1,7 +1,6 @@
 package adapter
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -30,18 +29,18 @@ type responsesDownInput struct {
 }
 
 type responsesDownRequest struct {
-	Model              string                 `json:"model"`
-	PreviousResponseID string                 `json:"previous_response_id"`
-	Instructions       string                 `json:"instructions"`
-	Input              json.RawMessage        `json:"input"`
-	Stream             bool                   `json:"stream"`
-	MaxOutputTokens    int                    `json:"max_output_tokens"`
-	Temperature        *float64               `json:"temperature"`
-	TopP               *float64               `json:"top_p"`
-	Stop               []string               `json:"stop"`
-	Tools              []responsesDownTool    `json:"tools"`
-	ToolChoice         string                 `json:"tool_choice"`
-	Reasoning          map[string]interface{} `json:"reasoning"`
+	Model              string              `json:"model"`
+	PreviousResponseID string              `json:"previous_response_id"`
+	Instructions       string              `json:"instructions"`
+	Input              json.RawMessage     `json:"input"`
+	Stream             bool                `json:"stream"`
+	MaxOutputTokens    int                 `json:"max_output_tokens"`
+	Temperature        *float64            `json:"temperature"`
+	TopP               *float64            `json:"top_p"`
+	Stop               []string            `json:"stop"`
+	Tools              []responsesDownTool `json:"tools"`
+	ToolChoice         json.RawMessage     `json:"tool_choice"`
+	Reasoning          json.RawMessage     `json:"reasoning"`
 }
 
 type responsesDownTool struct {
@@ -66,6 +65,8 @@ func (a *ResponsesDownstreamAdapter) RequestToCanonical(body []byte) ([]byte, er
 		Stream:             req.Stream,
 		Temperature:        req.Temperature,
 		TopP:               req.TopP,
+		ToolChoice:         responsesToolChoiceToCanonical(req.ToolChoice),
+		Reasoning:          req.Reasoning,
 	}
 
 	// max_output_tokens → max_tokens
@@ -301,237 +302,4 @@ func (a *ResponsesDownstreamAdapter) ResponseToDownstream(body []byte) ([]byte, 
 
 	outResp["output"] = output
 	return json.Marshal(outResp)
-}
-
-// ===== 流式转换：OpenAI 规范 SSE → Responses SSE =====
-
-type responsesDownStreamConverter struct {
-	started      bool
-	finished     bool
-	model        string
-	responseID   string
-	itemSeq      int
-	textItemSent bool
-	toolItems    map[int]bool
-	toolSeq      int
-	inputTokens  int
-	outputTokens int
-}
-
-func (a *ResponsesDownstreamAdapter) NewStreamConverter() StreamConverter {
-	return &responsesDownStreamConverter{
-		toolItems: make(map[int]bool),
-	}
-}
-
-func (c *responsesDownStreamConverter) Convert(line []byte) []byte {
-	trimmed := bytes.TrimSpace(line)
-	if !bytes.HasPrefix(trimmed, []byte("data: ")) {
-		return nil
-	}
-	payload := bytes.TrimSpace(trimmed[len("data: "):])
-	if bytes.Equal(payload, []byte("[DONE]")) {
-		return nil // 收尾在 Finish
-	}
-
-	var chunk openAICanonicalChunk
-	if err := json.Unmarshal(payload, &chunk); err != nil {
-		return nil
-	}
-	if chunk.Usage != nil {
-		c.inputTokens = chunk.Usage.PromptTokens
-		c.outputTokens = chunk.Usage.CompletionTokens
-	}
-
-	var out bytes.Buffer
-
-	// response.created（首个事件）
-	if !c.started {
-		if chunk.ID != "" {
-			c.responseID = "resp_" + strings.TrimPrefix(chunk.ID, "chatcmpl-")
-		} else {
-			c.responseID = "resp_stream"
-		}
-		c.model = chunk.Model
-		writeResponsesEvent(&out, "response.created", map[string]interface{}{
-			"type": "response.created",
-			"response": map[string]interface{}{
-				"id":     c.responseID,
-				"object": "response",
-				"status": "in_progress",
-				"model":  c.model,
-				"output": []interface{}{},
-				"usage":  nil,
-			},
-		})
-		c.started = true
-	}
-
-	if len(chunk.Choices) == 0 {
-		if out.Len() > 0 {
-			return out.Bytes()
-		}
-		return nil
-	}
-
-	choice := chunk.Choices[0]
-	delta := choice.Delta
-
-	// 文本增量
-	if delta.Content != "" {
-		if !c.textItemSent {
-			// response.output_item.added + content_part.added
-			c.itemSeq++
-			itemID := fmt.Sprintf("msg_%s_%d", c.responseID, c.itemSeq)
-			writeResponsesEvent(&out, "response.output_item.added", map[string]interface{}{
-				"type":         "response.output_item.added",
-				"output_index": c.itemSeq - 1,
-				"item": map[string]interface{}{
-					"id":      itemID,
-					"type":    "message",
-					"role":    "assistant",
-					"status":  "in_progress",
-					"content": []interface{}{},
-				},
-			})
-			writeResponsesEvent(&out, "response.content_part.added", map[string]interface{}{
-				"type":          "response.content_part.added",
-				"item_id":       itemID,
-				"output_index":  c.itemSeq - 1,
-				"content_index": 0,
-				"part": map[string]interface{}{
-					"type": "output_text",
-					"text": "",
-				},
-			})
-			c.textItemSent = true
-		}
-		writeResponsesEvent(&out, "response.output_text.delta", map[string]interface{}{
-			"type":          "response.output_text.delta",
-			"item_id":       fmt.Sprintf("msg_%s_%d", c.responseID, c.itemSeq),
-			"output_index":  c.itemSeq - 1,
-			"content_index": 0,
-			"delta":         delta.Content,
-		})
-	}
-
-	// 工具调用增量
-	for _, tc := range delta.ToolCalls {
-		if !c.toolItems[tc.Index] {
-			c.itemSeq++
-			c.toolSeq++
-			itemID := fmt.Sprintf("fc_%s_%d", c.responseID, c.toolSeq)
-			callID := tc.ID
-			if callID == "" {
-				callID = fmt.Sprintf("call_%d", c.toolSeq)
-			}
-			c.toolItems[tc.Index] = true
-			writeResponsesEvent(&out, "response.output_item.added", map[string]interface{}{
-				"type":         "response.output_item.added",
-				"output_index": c.itemSeq - 1,
-				"item": map[string]interface{}{
-					"id":        itemID,
-					"type":      "function_call",
-					"call_id":   callID,
-					"name":      tc.Function.Name,
-					"arguments": "",
-					"status":    "in_progress",
-				},
-			})
-		}
-		if tc.Function.Arguments != "" {
-			writeResponsesEvent(&out, "response.function_call_arguments.delta", map[string]interface{}{
-				"type":         "response.function_call_arguments.delta",
-				"item_id":      fmt.Sprintf("fc_%s_%d", c.responseID, c.toolSeq),
-				"output_index": c.itemSeq - 1,
-				"delta":        tc.Function.Arguments,
-			})
-		}
-	}
-
-	if out.Len() > 0 {
-		return out.Bytes()
-	}
-	return nil
-}
-
-func (c *responsesDownStreamConverter) Finish() []byte {
-	if c.finished {
-		return nil
-	}
-	c.finished = true
-	var out bytes.Buffer
-	if !c.started {
-		c.responseID = "resp_stream"
-		writeResponsesEvent(&out, "response.created", map[string]interface{}{
-			"type": "response.created",
-			"response": map[string]interface{}{
-				"id":     c.responseID,
-				"object": "response",
-				"status": "in_progress",
-				"model":  "",
-				"output": []interface{}{},
-				"usage":  nil,
-			},
-		})
-		c.started = true
-	}
-
-	// 结束已开始的条目
-	if c.textItemSent {
-		itemID := fmt.Sprintf("msg_%s_%d", c.responseID, c.itemSeq)
-		writeResponsesEvent(&out, "response.output_text.done", map[string]interface{}{
-			"type":          "response.output_text.done",
-			"item_id":       itemID,
-			"output_index":  c.itemSeq - 1,
-			"content_index": 0,
-			"text":          "",
-		})
-		writeResponsesEvent(&out, "response.content_part.done", map[string]interface{}{
-			"type":          "response.content_part.done",
-			"item_id":       itemID,
-			"output_index":  c.itemSeq - 1,
-			"content_index": 0,
-			"part": map[string]interface{}{
-				"type": "output_text",
-				"text": "",
-			},
-		})
-		writeResponsesEvent(&out, "response.output_item.done", map[string]interface{}{
-			"type":         "response.output_item.done",
-			"output_index": c.itemSeq - 1,
-			"item": map[string]interface{}{
-				"id":      itemID,
-				"type":    "message",
-				"role":    "assistant",
-				"status":  "completed",
-				"content": []interface{}{},
-			},
-		})
-	}
-
-	writeResponsesEvent(&out, "response.completed", map[string]interface{}{
-		"type": "response.completed",
-		"response": map[string]interface{}{
-			"id":     c.responseID,
-			"object": "response",
-			"status": "completed",
-			"model":  c.model,
-			"output": []interface{}{},
-			"usage": map[string]interface{}{
-				"input_tokens":  c.inputTokens,
-				"output_tokens": c.outputTokens,
-				"total_tokens":  c.inputTokens + c.outputTokens,
-			},
-		},
-	})
-
-	return out.Bytes()
-}
-
-// writeResponsesEvent 写出 Responses SSE 事件（event: + data:）
-func writeResponsesEvent(buf *bytes.Buffer, event string, payload map[string]interface{}) {
-	data, _ := json.Marshal(payload)
-	buf.WriteString("event: " + event + "\n")
-	buf.WriteString("data: " + string(data) + "\n\n")
 }

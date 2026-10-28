@@ -19,8 +19,10 @@ func CopyResponsesSessionHeaders(src map[string][]string, dst func(string, strin
 // IsResponsesSessionHeader 判断是否为 Responses Agent 会话关联头。
 func IsResponsesSessionHeader(name string) bool {
 	switch strings.ToLower(name) {
-	case "openai-conversation-id", "openai-organization", "openai-project",
-		"x-codex-session-id", "x-openai-client-user-agent",
+	case "openai-conversation-id", "openai-organization", "openai-project", "openai-beta",
+		"session_id", "session-id", "conversation_id", "originator",
+		"x-codex-session-id", "x-codex-turn-metadata", "x-codex-window-id",
+		"x-codex-turn-state", "x-openai-client-user-agent",
 		"x-stainless-lang", "x-stainless-package-version":
 		return true
 	default:

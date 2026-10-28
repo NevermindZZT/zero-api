@@ -9,12 +9,13 @@ import (
 
 // anthropicUpstreamStreamConverter 将 Anthropic 上游 SSE 事件转换为 OpenAI 规范格式 SSE chunk
 // Anthropic 事件流：
-//   event: message_start / content_block_start / content_block_delta / content_block_stop /
-//          message_delta / message_stop / ping
-//   data: {...}
+//
+//	event: message_start / content_block_start / content_block_delta / content_block_stop /
+//	       message_delta / message_stop / ping
+//	data: {...}
 type anthropicUpstreamStreamConverter struct {
-	started       bool   // 已发出首 chunk（role）
-	finished      bool   // 已发出 [DONE]
+	started       bool // 已发出首 chunk（role）
+	finished      bool // 已发出 [DONE]
 	model         string
 	messageID     string
 	promptTokens  int
@@ -39,12 +40,12 @@ func (c *anthropicUpstreamStreamConverter) Convert(line []byte) []byte {
 	}
 
 	var evt struct {
-		Type        string          `json:"type"`
-		Index       int             `json:"index"`
-		Message     json.RawMessage `json:"message"`
+		Type         string          `json:"type"`
+		Index        int             `json:"index"`
+		Message      json.RawMessage `json:"message"`
 		ContentBlock json.RawMessage `json:"content_block"`
-		Delta       json.RawMessage `json:"delta"`
-		Usage       json.RawMessage `json:"usage"`
+		Delta        json.RawMessage `json:"delta"`
+		Usage        json.RawMessage `json:"usage"`
 	}
 	if err := json.Unmarshal(payload, &evt); err != nil {
 		return nil
@@ -141,13 +142,20 @@ func (c *anthropicUpstreamStreamConverter) Finish() []byte {
 	}
 	// finish chunk（含 usage）
 	reason := c.stopReason
-	if reason == "" {
+	switch reason {
+	case "", "end_turn", "stop_sequence":
 		reason = "stop"
+	case "max_tokens":
+		reason = "length"
+	case "tool_use":
+		reason = "tool_calls"
+	case "refusal":
+		reason = "content_filter"
 	}
 	finish := map[string]interface{}{
-		"id":      "chatcmpl-" + c.messageID,
-		"object":  "chat.completion.chunk",
-		"model":   c.model,
+		"id":     "chatcmpl-" + c.messageID,
+		"object": "chat.completion.chunk",
+		"model":  c.model,
 		"choices": []interface{}{map[string]interface{}{
 			"index":         0,
 			"delta":         map[string]interface{}{},
@@ -168,12 +176,12 @@ func (c *anthropicUpstreamStreamConverter) Finish() []byte {
 func (c *anthropicUpstreamStreamConverter) emitRoleChunk(out *bytes.Buffer) {
 	c.started = true
 	chunk := map[string]interface{}{
-		"id":      "chatcmpl-" + c.messageID,
-		"object":  "chat.completion.chunk",
-		"model":   c.model,
+		"id":     "chatcmpl-" + c.messageID,
+		"object": "chat.completion.chunk",
+		"model":  c.model,
 		"choices": []interface{}{map[string]interface{}{
-			"index": 0,
-			"delta": map[string]interface{}{"role": "assistant"},
+			"index":         0,
+			"delta":         map[string]interface{}{"role": "assistant"},
 			"finish_reason": nil,
 		}},
 	}
@@ -183,12 +191,12 @@ func (c *anthropicUpstreamStreamConverter) emitRoleChunk(out *bytes.Buffer) {
 
 func (c *anthropicUpstreamStreamConverter) emitContentChunk(out *bytes.Buffer, text string) {
 	chunk := map[string]interface{}{
-		"id":      "chatcmpl-" + c.messageID,
-		"object":  "chat.completion.chunk",
-		"model":   c.model,
+		"id":     "chatcmpl-" + c.messageID,
+		"object": "chat.completion.chunk",
+		"model":  c.model,
 		"choices": []interface{}{map[string]interface{}{
-			"index": 0,
-			"delta": map[string]interface{}{"content": text},
+			"index":         0,
+			"delta":         map[string]interface{}{"content": text},
 			"finish_reason": nil,
 		}},
 	}
@@ -198,15 +206,15 @@ func (c *anthropicUpstreamStreamConverter) emitContentChunk(out *bytes.Buffer, t
 
 func (c *anthropicUpstreamStreamConverter) emitToolCallStartChunk(out *bytes.Buffer, index int, id, name string) {
 	chunk := map[string]interface{}{
-		"id":      "chatcmpl-" + c.messageID,
-		"object":  "chat.completion.chunk",
-		"model":   c.model,
+		"id":     "chatcmpl-" + c.messageID,
+		"object": "chat.completion.chunk",
+		"model":  c.model,
 		"choices": []interface{}{map[string]interface{}{
 			"index": 0,
 			"delta": map[string]interface{}{"tool_calls": []interface{}{map[string]interface{}{
-				"index": index,
-				"id":    id,
-				"type":  "function",
+				"index":    index,
+				"id":       id,
+				"type":     "function",
 				"function": map[string]interface{}{"name": name, "arguments": ""},
 			}}},
 			"finish_reason": nil,
@@ -218,9 +226,9 @@ func (c *anthropicUpstreamStreamConverter) emitToolCallStartChunk(out *bytes.Buf
 
 func (c *anthropicUpstreamStreamConverter) emitToolCallArgsChunk(out *bytes.Buffer, index int, args string) {
 	chunk := map[string]interface{}{
-		"id":      "chatcmpl-" + c.messageID,
-		"object":  "chat.completion.chunk",
-		"model":   c.model,
+		"id":     "chatcmpl-" + c.messageID,
+		"object": "chat.completion.chunk",
+		"model":  c.model,
 		"choices": []interface{}{map[string]interface{}{
 			"index": 0,
 			"delta": map[string]interface{}{"tool_calls": []interface{}{map[string]interface{}{
@@ -238,8 +246,9 @@ func (c *anthropicUpstreamStreamConverter) emitToolCallArgsChunk(out *bytes.Buff
 
 // geminiUpstreamStreamConverter 将 Gemini 上游 SSE 流转换为 OpenAI 规范格式 SSE
 // Gemini 流式响应格式（无 event: 行）：
-//   data: {"candidates":[{"content":{"parts":[{"text":"..."}]},"finishReason":"STOP"}],
-//          "usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}}
+//
+//	data: {"candidates":[{"content":{"parts":[{"text":"..."}]},"finishReason":"STOP"}],
+//	       "usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}}
 type geminiUpstreamStreamConverter struct {
 	started      bool
 	finished     bool
@@ -286,12 +295,12 @@ func (c *geminiUpstreamStreamConverter) Convert(line []byte) []byte {
 	if !c.started {
 		c.started = true
 		roleChunk := map[string]interface{}{
-			"id":      "chatcmpl-gemini",
-			"object":  "chat.completion.chunk",
-			"model":   "gemini",
+			"id":     "chatcmpl-gemini",
+			"object": "chat.completion.chunk",
+			"model":  "gemini",
 			"choices": []interface{}{map[string]interface{}{
-				"index": 0,
-				"delta": map[string]interface{}{"role": "assistant"},
+				"index":         0,
+				"delta":         map[string]interface{}{"role": "assistant"},
 				"finish_reason": nil,
 			}},
 		}
@@ -300,12 +309,12 @@ func (c *geminiUpstreamStreamConverter) Convert(line []byte) []byte {
 	}
 
 	contentChunk := map[string]interface{}{
-		"id":      "chatcmpl-gemini",
-		"object":  "chat.completion.chunk",
-		"model":   "gemini",
+		"id":     "chatcmpl-gemini",
+		"object": "chat.completion.chunk",
+		"model":  "gemini",
 		"choices": []interface{}{map[string]interface{}{
-			"index": 0,
-			"delta": map[string]interface{}{"content": content},
+			"index":         0,
+			"delta":         map[string]interface{}{"content": content},
 			"finish_reason": nil,
 		}},
 	}
@@ -324,12 +333,12 @@ func (c *geminiUpstreamStreamConverter) Finish() []byte {
 	if !c.started {
 		c.started = true
 		roleChunk := map[string]interface{}{
-			"id":      "chatcmpl-gemini",
-			"object":  "chat.completion.chunk",
-			"model":   "gemini",
+			"id":     "chatcmpl-gemini",
+			"object": "chat.completion.chunk",
+			"model":  "gemini",
 			"choices": []interface{}{map[string]interface{}{
-				"index": 0,
-				"delta": map[string]interface{}{"role": "assistant"},
+				"index":         0,
+				"delta":         map[string]interface{}{"role": "assistant"},
 				"finish_reason": nil,
 			}},
 		}
@@ -343,14 +352,18 @@ func (c *geminiUpstreamStreamConverter) Finish() []byte {
 		reason = "stop"
 	case "MAX_TOKENS":
 		reason = "length"
+	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY":
+		reason = "content_filter"
 	case "":
 		reason = "stop"
+	default:
+		reason = "error"
 	}
 
 	finish := map[string]interface{}{
-		"id":      "chatcmpl-gemini",
-		"object":  "chat.completion.chunk",
-		"model":   "gemini",
+		"id":     "chatcmpl-gemini",
+		"object": "chat.completion.chunk",
+		"model":  "gemini",
 		"choices": []interface{}{map[string]interface{}{
 			"index":         0,
 			"delta":         map[string]interface{}{},

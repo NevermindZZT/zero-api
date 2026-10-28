@@ -1,8 +1,10 @@
 package upstream
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"sync"
@@ -14,6 +16,7 @@ const defaultResponseHeaderTimeout = 60 * time.Second
 // defaultTransport 共享的 HTTP 传输层，所有非代理请求复用此连接池
 var defaultTransport = &http.Transport{
 	TLSClientConfig:       &tls.Config{},
+	DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 	TLSHandshakeTimeout:   15 * time.Second,
 	ResponseHeaderTimeout: defaultResponseHeaderTimeout,
 	MaxIdleConns:          100,
@@ -22,9 +25,9 @@ var defaultTransport = &http.Transport{
 	DisableCompression:    false,
 }
 
-// proxyTransportCache 代理 Transport 缓存，避免每次请求新建 Transport
+// Transport 缓存同时用于直连和代理；凭据只以摘要参与键，变更密码后不会复用旧凭据。
 var (
-	proxyTransportMu    sync.RWMutex
+	proxyTransportMu    sync.Mutex
 	proxyTransportCache = make(map[string]*http.Transport)
 )
 
@@ -36,37 +39,44 @@ func getProxyTransportWithHeaderTimeout(proxyURL, proxyUser, proxyPass string, r
 	if responseHeaderTimeout <= 0 {
 		responseHeaderTimeout = defaultResponseHeaderTimeout
 	}
-	// 响应头超时是 Transport 的固定属性，必须纳入缓存键，避免不同请求设置互相覆盖。
-	cacheKey := fmt.Sprintf("%s|%s|%s", proxyURL, proxyUser, responseHeaderTimeout)
-	proxyTransportMu.RLock()
+	var u *url.URL
+	if proxyURL != "" {
+		var err error
+		u, err = url.Parse(proxyURL)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "socks5" && u.Scheme != "socks5h") {
+			return nil, fmt.Errorf("代理 URL 无效或协议不受支持")
+		}
+		if proxyUser != "" {
+			u.User = url.UserPassword(proxyUser, proxyPass)
+		}
+	}
+	digest := sha256.Sum256([]byte(proxyURL + "\x00" + proxyUser + "\x00" + proxyPass))
+	cacheKey := fmt.Sprintf("%x|%d", digest, responseHeaderTimeout)
+	proxyTransportMu.Lock()
+	defer proxyTransportMu.Unlock()
 	if t, ok := proxyTransportCache[cacheKey]; ok {
-		proxyTransportMu.RUnlock()
 		return t, nil
 	}
-	proxyTransportMu.RUnlock()
-
-	u, err := url.Parse(proxyURL)
-	if err != nil {
-		return nil, fmt.Errorf("代理 URL 解析失败: %w", err)
+	t := defaultTransport.Clone()
+	t.ResponseHeaderTimeout = responseHeaderTimeout
+	if u != nil {
+		t.Proxy = http.ProxyURL(u)
 	}
-	if proxyUser != "" {
-		u.User = url.UserPassword(proxyUser, proxyPass)
+	// 配置热更不能无限积累连接池；CloseIdleConnections 不影响正在运行的请求。
+	if len(proxyTransportCache) >= 64 {
+		for key, old := range proxyTransportCache {
+			old.CloseIdleConnections()
+			delete(proxyTransportCache, key)
+			break
+		}
 	}
-
-	t := &http.Transport{
-		Proxy:                 http.ProxyURL(u),
-		TLSClientConfig:       &tls.Config{},
-		TLSHandshakeTimeout:   15 * time.Second,
-		ResponseHeaderTimeout: responseHeaderTimeout,
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   10,
-		IdleConnTimeout:       90 * time.Second,
-	}
-
-	proxyTransportMu.Lock()
 	proxyTransportCache[cacheKey] = t
-	proxyTransportMu.Unlock()
 	return t, nil
+}
+
+func directTransport(timeout time.Duration) *http.Transport {
+	t, _ := getProxyTransportWithHeaderTimeout("", "", "", timeout)
+	return t
 }
 
 // NewHTTPClient 创建兼容性更好的 HTTP 客户端（非代理）
@@ -81,7 +91,7 @@ func NewHTTPClient() *http.Client {
 func NewHTTPClientWithTimeout(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout:   timeout,
-		Transport: defaultTransport,
+		Transport: directTransport(timeout),
 	}
 }
 
@@ -97,16 +107,8 @@ func NewStreamHTTPClientWithTimeout(timeout time.Duration) *http.Client {
 		timeout = defaultResponseHeaderTimeout
 	}
 	return &http.Client{
-		Timeout: 0,
-		Transport: &http.Transport{
-			TLSClientConfig:       &tls.Config{},
-			TLSHandshakeTimeout:   15 * time.Second,
-			ResponseHeaderTimeout: timeout,
-			MaxIdleConns:          100,
-			MaxIdleConnsPerHost:   10,
-			IdleConnTimeout:       120 * time.Second,
-			DisableCompression:    false,
-		},
+		Timeout:   0,
+		Transport: directTransport(timeout),
 	}
 }
 
@@ -141,7 +143,7 @@ func NewHTTPClientWithProxy(proxyURL, proxyUser, proxyPass string) (*http.Client
 
 // NewHTTPClientWithProxyAndTimeout 创建支持代理且带超时的 HTTP 客户端
 func NewHTTPClientWithProxyAndTimeout(proxyURL, proxyUser, proxyPass string, timeout time.Duration) (*http.Client, error) {
-	t, err := getProxyTransport(proxyURL, proxyUser, proxyPass)
+	t, err := getProxyTransportWithHeaderTimeout(proxyURL, proxyUser, proxyPass, timeout)
 	if err != nil {
 		return nil, err
 	}

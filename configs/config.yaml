@@ -23,6 +23,15 @@ upstream:
 database:
   path: "data/zero-api.db"
 
+# 仅记录脱敏异常元数据；不保存 body、凭据、会话 ID、上游错误正文或完整 URL。
+request_log:
+  enabled: true
+  # 空值 = 数据库同目录下 logs/request-errors.jsonl
+  path: ""
+  max_size_mb: 10
+  max_backups: 5
+  max_age_days: 14
+
 mcp:
   enabled: true
   token: ""
