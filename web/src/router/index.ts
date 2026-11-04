@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { auth, safeAuthRedirect } from '../auth'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -108,14 +109,25 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach((to, _from, next) => {
-  const token = localStorage.getItem('token')
-  if (to.meta.requiresAuth && !token) {
-    next('/login')
-  } else if (to.path === '/login' && token) {
-    next('/dashboard')
-  } else {
-    next()
+auth.onUnauthorized(() => {
+  const current = router.currentRoute.value
+  if (current.path !== '/login') {
+    void router.replace({ path: '/login', query: { redirect: current.fullPath } })
+  }
+})
+
+router.beforeEach(async (to) => {
+  if (!to.meta.requiresAuth && to.path !== '/login') return true
+  try {
+    const authenticated = await auth.ensureSession()
+    if (authenticated) {
+      return to.path === '/login' ? safeAuthRedirect(to.query.redirect) : true
+    }
+    return to.meta.requiresAuth ? { path: '/login', query: { redirect: to.fullPath } } : true
+  } catch {
+    // Render a real, retryable screen on first-load/network/database failures.
+    // Do not call a transient outage an expired session, or loop redirects.
+    return to.path === '/login' ? true : { path: '/login', query: { redirect: to.fullPath } }
   }
 })
 

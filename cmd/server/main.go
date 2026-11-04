@@ -141,7 +141,7 @@ func main() {
 	// 代理配置更新后通知 ProxyHandler 刷新缓存
 	proxyConfigH.SetOnUpdate(proxyH.InvalidateProxyConfig)
 	syncH := handler.NewSyncHandler(syncer, svc.Model, presetsPath)
-	authH := handler.NewAuthHandler(cfg.Auth.Username, cfg.Auth.Password, cfg.Auth.Secret)
+	authH := handler.NewAuthHandler(cfg.Auth.Username, cfg.Auth.Password, cfg.Auth.Secret, svc.Session, cfg.Auth.Enabled)
 	apiKeyH := handler.NewAPIKeyHandler(svc.APIKey)
 	dbH := handler.NewDatabaseHandler(db, cfg.Database.Path)
 
@@ -163,12 +163,14 @@ func main() {
 	// --- API 路由 ---
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
-	r.Use(diagnostics.RequestMiddleware(diagnosticRecorder), gin.Recovery(), middleware.CORS(), middleware.AuthMiddleware(cfg.Auth.Enabled, cfg.Auth.Secret))
+	r.Use(diagnostics.RequestMiddleware(diagnosticRecorder), middleware.SafeRecovery(), middleware.AuthMiddleware(cfg.Auth.Enabled, svc.Session, cfg.Auth.Username, middleware.AccountVersion(cfg.Auth.Username, cfg.Auth.Password, cfg.Auth.Secret)), middleware.CORS())
 
 	api := r.Group("/api")
 	{
 		// 认证
 		api.POST("/auth/login", authH.Login)
+		api.GET("/auth/session", authH.Session)
+		api.POST("/auth/logout", authH.Logout)
 
 		// 渠道管理
 		api.GET("/channels", channelH.ListChannels)

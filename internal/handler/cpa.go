@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/never/zero-api/internal/cpa"
+	"github.com/never/zero-api/internal/middleware"
 	"github.com/never/zero-api/internal/store"
 )
 
@@ -282,6 +283,7 @@ func (h *CPAHandler) NativeManagementPanel(c *gin.Context) {
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
+		middleware.StripSessionCookie(req)
 		req.URL.Path = "/management.html"
 		req.URL.RawPath = ""
 	}
@@ -321,6 +323,7 @@ func (h *CPAHandler) NativeManagementResource(c *gin.Context) {
 	}
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
+		middleware.StripSessionCookie(req)
 		req.URL.Path = upstreamPath
 		req.URL.RawPath = ""
 	}

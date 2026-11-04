@@ -12,6 +12,7 @@ type Service struct {
 	ChannelBalance   *ChannelBalanceRepo
 	VirtualModel     *VirtualModelRepo
 	CPAConfig        *CPAConfigRepo
+	Session          *SessionRepo
 
 	DB *DB
 }
@@ -28,6 +29,7 @@ func NewService(db *DB) *Service {
 		ChannelBalance:   NewChannelBalanceRepo(db),
 		VirtualModel:     NewVirtualModelRepo(db),
 		CPAConfig:        NewCPAConfigRepo(db),
+		Session:          NewSessionRepo(db),
 		DB:               db,
 	}
 }

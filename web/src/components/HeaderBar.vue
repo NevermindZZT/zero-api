@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { h, computed } from 'vue'
+import { h, computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, NBreadcrumb, NBreadcrumbItem, NIcon, NDropdown } from 'naive-ui'
+import { NButton, NBreadcrumb, NBreadcrumbItem, NIcon, NDropdown, useMessage } from 'naive-ui'
+import { auth, authState, authErrorMessage } from '@/auth'
 import {
   HomeSharp,
   PersonCircleSharp,
@@ -24,7 +25,9 @@ const route = useRoute()
 const router = useRouter()
 const { isDarkTheme, setThemePreference, themePreference } = useTheme()
 
-const username = localStorage.getItem('user') || '管理员'
+const username = computed(() => authState.user || '管理员')
+const message = useMessage()
+const loggingOut = ref(false)
 
 const breadcrumbMap: Record<string, string> = {
   '/dashboard': '仪表盘',
@@ -63,28 +66,29 @@ function handleThemeSelect(key: string | number) {
   }
 }
 
-const userMenuOptions = [
-  {
-    label: '管理员',
-    key: 'profile',
-    disabled: true,
-  },
-  {
-    type: 'divider' as const,
-    key: 'd1',
-  },
-  {
-    label: '退出登录',
-    key: 'logout',
-    icon: () => h(NIcon, { size: 16 }, { default: () => h(LogOutSharp) }),
-  },
-]
+const userMenuOptions = computed(() => [
+  { label: username.value, key: 'profile', disabled: true },
+  ...(authState.authEnabled ? [
+    { type: 'divider' as const, key: 'd1' },
+    {
+      label: '退出登录', key: 'logout', disabled: loggingOut.value,
+      icon: () => h(NIcon, { size: 16 }, { default: () => h(LogOutSharp) }),
+    },
+  ] : []),
+])
 
-function handleUserMenuAction(key: string) {
-  if (key === 'logout') {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    router.push('/login')
+async function handleUserMenuAction(key: string) {
+  if (key !== 'logout' || loggingOut.value || !authState.authEnabled) return
+  loggingOut.value = true
+  try {
+    await auth.logout()
+    message.success('已退出登录')
+    await router.replace('/login')
+  } catch (error: any) {
+    const detail = error.response?.status === 401 ? '服务器未确认撤销会话，请重试' : authErrorMessage(error, '退出登录')
+    message.error(`${detail}；未确认退出成功`)
+  } finally {
+    loggingOut.value = false
   }
 }
 </script>
@@ -178,8 +182,4 @@ function handleUserMenuAction(key: string) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-</style><｜end▁of▁thinking｜>
-
-<｜｜DSML｜｜tool_calls>
-<｜｜DSML｜｜invoke name="manage_todo_list">
-<｜｜DSML｜｜parameter name="todoList" string="false">[{"id":1,"title":"替换 emoji 为 ionicons 图标","status":"completed"},{"id":2,"title":"添加页面过渡动画","status":"completed"},{"id":3,"title":"优化统计卡片样式","status":"in-progress"},{"id":4,"title":"添加顶部 Header 栏","status":"completed"},{"id":5,"title":"Sidebar 菜单分组优化","status":"not-started"},{"id":6,"title":"表格样式优化","status":"not-started"},{"id":7,"title":"全局布局与细节打磨","status":"not-started"}]
+</style>

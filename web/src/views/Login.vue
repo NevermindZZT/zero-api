@@ -1,32 +1,47 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { NButton, NInput, NCard, NForm, NFormItem, useMessage } from 'naive-ui'
-import api from '@/api'
+import { useRoute, useRouter } from 'vue-router'
+import { NAlert, NButton, NInput, NCard, NForm, NFormItem, useMessage } from 'naive-ui'
+import { auth, authState, authErrorMessage, safeAuthRedirect } from '@/auth'
 
+const route = useRoute()
 const router = useRouter()
 const message = useMessage()
 const username = ref('')
 const password = ref('')
 const loading = ref(false)
+const retrying = ref(false)
+
+async function retrySession() {
+  if (retrying.value) return
+  retrying.value = true
+  try {
+    if (await auth.ensureSession(true)) {
+      await router.replace(safeAuthRedirect(route.query.redirect))
+    } else {
+      message.info('当前没有可用登录会话，请登录')
+    }
+  } catch (error) {
+    message.error(authErrorMessage(error))
+  } finally {
+    retrying.value = false
+  }
+}
 
 async function login() {
+  if (loading.value) return
   if (!username.value || !password.value) {
     message.warning('请输入用户名和密码')
     return
   }
   loading.value = true
   try {
-    const res = await api.post('/auth/login', {
-      username: username.value,
-      password: password.value,
-    })
-    localStorage.setItem('token', res.data.token)
-    localStorage.setItem('user', res.data.user)
+    await auth.login(username.value, password.value)
+    password.value = ''
     message.success('登录成功')
-    router.push('/dashboard')
-  } catch (e: any) {
-    message.error(e.response?.data?.error || '登录失败')
+    await router.replace(safeAuthRedirect(route.query.redirect))
+  } catch (error: any) {
+    message.error(error.response?.status === 401 ? '用户名或密码错误' : authErrorMessage(error, '登录'))
   } finally {
     loading.value = false
   }
@@ -44,6 +59,10 @@ async function login() {
         <h1><span class="logo-zero">zero</span><span class="logo-api">-api</span></h1>
         <p class="subtitle">大模型 API 中转站</p>
       </div>
+      <NAlert v-if="authState.error" type="warning" title="暂时无法确认登录状态" style="margin-bottom: 20px">
+        {{ authState.error }}。现有会话未被判定失效。
+        <NButton size="small" :loading="retrying" @click="retrySession">重试会话验证</NButton>
+      </NAlert>
       <NForm @submit.prevent="login">
         <NFormItem label="用户名">
           <NInput

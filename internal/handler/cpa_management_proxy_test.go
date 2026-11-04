@@ -25,6 +25,12 @@ func TestNativeManagementResourceProxiesLegacyAndPanelRelativePaths(t *testing.T
 	upstreamPaths := make(chan string, 4)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamPaths <- r.URL.Path
+		if _, err := r.Cookie("zero_api_session"); err != http.ErrNoCookie {
+			t.Error("zero-api administrator cookie leaked to CPA")
+		}
+		if cookie, err := r.Cookie("native-cookie"); err != nil || cookie.Value != "keep-native" {
+			t.Error("CPA native cookie was not preserved")
+		}
 		w.Header().Set("Content-Type", "application/yaml")
 		_, _ = io.WriteString(w, "port: 8317\n")
 	}))
@@ -75,7 +81,10 @@ func TestNativeManagementResourceProxiesLegacyAndPanelRelativePaths(t *testing.T
 		{"/cpa-native/v8/management/config.yaml", "/v8/management/config.yaml"},
 	} {
 		recorder := &closeNotifyingRecorder{ResponseRecorder: httptest.NewRecorder(), closeNotify: make(chan bool)}
-		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, test.requestPath, nil))
+		request := httptest.NewRequest(http.MethodGet, test.requestPath, nil)
+		request.AddCookie(&http.Cookie{Name: "zero_api_session", Value: "synthetic-administrator-cookie"})
+		request.AddCookie(&http.Cookie{Name: "native-cookie", Value: "keep-native"})
+		router.ServeHTTP(recorder, request)
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("GET %s returned status %d: %s", test.requestPath, recorder.Code, recorder.Body.String())
 		}

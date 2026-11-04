@@ -1,28 +1,26 @@
 import axios from 'axios'
 import { buildChatRequest, streamChatRequest } from './chatTest'
+import { auth } from '../auth'
 
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000,
+  withCredentials: true,
 })
 
-// 请求拦截器：自动添加 token
+type SessionRequest = { authRevision?: number }
+
+// Capture identity generation only; admin credentials live in an HttpOnly cookie.
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token')
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
-  }
+  ;(config as typeof config & SessionRequest).authRevision = auth.getRevision()
   return config
 })
 
-// 响应拦截器：处理 401
 api.interceptors.response.use(
   (res) => res,
   (err) => {
     if (err.response?.status === 401) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
-      window.location.href = '/login'
+      auth.handleUnauthorized(err.config?.url, (err.config as SessionRequest | undefined)?.authRevision)
     }
     const msg = err.response?.data?.error || err.message
     console.error('[API Error]', msg)
