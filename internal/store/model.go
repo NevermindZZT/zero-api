@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -13,9 +14,10 @@ import (
 
 // 模型列表缓存
 var (
-	modelCacheMu     sync.RWMutex
-	modelCache       []Model
-	modelCacheExpiry time.Time
+	modelCacheMu         sync.RWMutex
+	modelCache           []Model
+	modelCacheExpiry     time.Time
+	modelCacheGeneration uint64
 )
 
 // InvalidateModelCache 清除模型列表缓存（同步/编辑模型时调用）
@@ -24,6 +26,7 @@ func (r *ModelRepo) InvalidateModelCache() {
 	defer modelCacheMu.Unlock()
 	modelCache = nil
 	modelCacheExpiry = time.Time{}
+	modelCacheGeneration++
 }
 
 // Model 模型
@@ -142,9 +145,11 @@ func NewModelRepo(db *DB) *ModelRepo {
 }
 
 func (r *ModelRepo) List(channelID int64) ([]Model, error) {
+	var generation uint64
 	// 无筛选条件时使用缓存
 	if channelID == 0 {
 		modelCacheMu.RLock()
+		generation = modelCacheGeneration
 		if modelCache != nil && time.Now().Before(modelCacheExpiry) {
 			result := make([]Model, len(modelCache))
 			copy(result, modelCache)
@@ -222,11 +227,17 @@ func (r *ModelRepo) List(channelID int64) ([]Model, error) {
 		models = append(models, m)
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
 	// channelID == 0 时写入缓存（5 分钟 TTL）
 	if channelID == 0 && err == nil {
 		modelCacheMu.Lock()
-		modelCache = models
-		modelCacheExpiry = time.Now().Add(5 * time.Minute)
+		if generation == modelCacheGeneration {
+			modelCache = models
+			modelCacheExpiry = time.Now().Add(5 * time.Minute)
+		}
 		modelCacheMu.Unlock()
 	}
 
@@ -325,12 +336,20 @@ func parseStringList(s string) []string {
 // 其他字段（context_window / pricing / supports_*）保护手动编辑不被同步覆盖
 // 如需刷新元信息，请删除模型后重新同步
 func (r *ModelRepo) Upsert(m *Model) (int64, error) {
+	return upsertModel(r.db, m)
+}
+
+type modelExecer interface {
+	Exec(string, ...interface{}) (sql.Result, error)
+}
+
+func upsertModel(exec modelExecer, m *Model) (int64, error) {
 	protocolsJSON, _ := json.Marshal(m.Protocols)
 	protocolURLsJSON, _ := json.Marshal(m.ProtocolURLs)
 	capabilitiesJSON, _ := json.Marshal(m.Capabilities)
 	inputModalitiesJSON, _ := json.Marshal(m.InputModalities)
 	outputModalitiesJSON, _ := json.Marshal(m.OutputModalities)
-	result, err := r.db.Exec(
+	result, err := exec.Exec(
 		`INSERT INTO models (channel_id, model_id, display_name, context_window, max_output_tokens,
 		                     supports_vision, supports_thinking, supports_tools,
 		                     pricing_input, pricing_output, pricing_cache_read, pricing_cache_write, pricing_rules,

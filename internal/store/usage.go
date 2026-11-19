@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"sync"
@@ -74,17 +75,22 @@ func flushUsageLoop(db *DB) {
 	}
 }
 
+// Resolve the model in the INSERT statement itself so a deleted model becomes
+// NULL without a race between an existence check and the foreign-key insert.
+const insertUsageRecordSQL = `INSERT INTO usage_records
+	(channel_id, model_id, api_key_id, request_model,
+	 prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens,
+	 latency_ms, total_duration_ms, cost)
+	VALUES (?, (SELECT id FROM models WHERE id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
 func flushUsageBatch(db *DB, batch []*UsageRecord) {
 	tx, err := db.Begin()
 	if err != nil {
 		log.Printf("[Usage] 批量写入开始事务失败: %v", err)
 		return
 	}
-	stmt, err := tx.Prepare(`INSERT INTO usage_records
-		(channel_id, model_id, api_key_id, request_model,
-		 prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens,
-		 latency_ms, total_duration_ms, cost)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(insertUsageRecordSQL)
 	if err != nil {
 		tx.Rollback()
 		log.Printf("[Usage] 批量写入预编译失败: %v", err)
@@ -92,42 +98,39 @@ func flushUsageBatch(db *DB, batch []*UsageRecord) {
 	}
 	defer stmt.Close()
 
+	inserted := make([]*UsageRecord, 0, len(batch))
 	for _, u := range batch {
-		if _, err := stmt.Exec(u.ChannelID, u.ModelID, u.APIKeyID, u.RequestModel,
+		result, err := stmt.Exec(u.ChannelID, u.ModelID, u.APIKeyID, u.RequestModel,
 			u.PromptTokens, u.CompletionTokens, u.CacheHitTokens, u.TotalTokens,
-			u.LatencyMs, u.TotalDurationMs, u.Cost); err != nil {
+			u.LatencyMs, u.TotalDurationMs, u.Cost)
+		if err != nil {
 			log.Printf("[Usage] 批量写入单条失败: %v", err)
+			continue
 		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			log.Printf("[Usage] 查询批量写入结果失败: %v", err)
+			return
+		}
+		if affected == 0 {
+			log.Printf("[Usage] 批量写入未插入记录")
+			continue
+		}
+		if affected != 1 {
+			log.Printf("[Usage] 批量写入影响行数异常: %d", affected)
+			return
+		}
+		inserted = append(inserted, u)
 	}
 
-	// 更新预聚合表 usage_daily
-	aggStmt, err := tx.Prepare(`INSERT INTO usage_daily
-		(date, api_key_id, request_model, prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens, requests, cost)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
-		ON CONFLICT(date, api_key_id, request_model) DO UPDATE SET
-			prompt_tokens = prompt_tokens + excluded.prompt_tokens,
-			completion_tokens = completion_tokens + excluded.completion_tokens,
-			cache_hit_tokens = cache_hit_tokens + excluded.cache_hit_tokens,
-			total_tokens = total_tokens + excluded.total_tokens,
-			requests = requests + 1,
-			cost = cost + excluded.cost`)
-	if err != nil {
-		tx.Rollback()
-		log.Printf("[Usage] 预聚合插入预编译失败: %v", err)
-		return
-	}
-	defer aggStmt.Close()
-
-	for _, u := range batch {
-		date := aggDate(u)
-		apiKeyID := interface{}(nil)
-		if u.APIKeyID != nil {
-			apiKeyID = *u.APIKeyID
+	// Usage records are authoritative. If daily aggregation fails, keep the
+	// successfully inserted records and roll back only this batch's aggregates.
+	if safe, err := aggregateUsage(tx, inserted); err != nil {
+		if !safe {
+			log.Printf("[Usage] 聚合回滚失败，无法安全提交批次: %v", err)
+			return // Savepoint rollback failed; do not commit partial aggregates.
 		}
-		if _, err := aggStmt.Exec(date, apiKeyID, u.RequestModel,
-			u.PromptTokens, u.CompletionTokens, u.CacheHitTokens, u.TotalTokens, u.Cost); err != nil {
-			log.Printf("[Usage] 预聚合更新失败 (date=%s, model=%s): %v", date, u.RequestModel, err)
-		}
+		log.Printf("[Usage] 预聚合更新失败，保留用量明细: %v", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -222,30 +225,57 @@ func (r *UsageRepo) Insert(u *UsageRecord) (int64, error) {
 
 // insertDirect 直接写入（绕过缓冲区）
 func (r *UsageRepo) insertDirect(u *UsageRecord) (int64, error) {
-	result, err := r.db.Exec(
-		`INSERT INTO usage_records (channel_id, model_id, api_key_id, request_model, prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens, latency_ms, total_duration_ms, cost)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	tx, err := r.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(insertUsageRecordSQL,
 		u.ChannelID, u.ModelID, u.APIKeyID, u.RequestModel, u.PromptTokens, u.CompletionTokens, u.CacheHitTokens, u.TotalTokens, u.LatencyMs, u.TotalDurationMs, u.Cost,
 	)
 	if err != nil {
 		return 0, err
 	}
-
-	// 同步更新预聚合表
-	r.updateDailyAgg(u)
-
-	return result.LastInsertId()
+	if affected, err := result.RowsAffected(); err != nil {
+		return 0, err
+	} else if affected != 1 {
+		return 0, fmt.Errorf("usage insert affected %d rows", affected)
+	}
+	if safe, err := aggregateUsage(tx, []*UsageRecord{u}); err != nil {
+		if !safe {
+			return 0, err
+		}
+		log.Printf("[Usage] 直接写入预聚合失败，保留用量明细: %v", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
-// updateDailyAgg 更新 usage_daily 预聚合（单条记录）
-func (r *UsageRepo) updateDailyAgg(u *UsageRecord) {
-	date := aggDate(u)
-	apiKeyID := interface{}(nil)
-	if u.APIKeyID != nil {
-		apiKeyID = *u.APIKeyID
+// aggregateUsage uses a savepoint so a failed aggregate cannot leave partially
+// updated rows. safe reports whether committing the surrounding transaction is safe.
+func aggregateUsage(tx *sql.Tx, records []*UsageRecord) (safe bool, err error) {
+	if len(records) == 0 {
+		return true, nil
 	}
-	_, err := r.db.Exec(
-		`INSERT INTO usage_daily (date, api_key_id, request_model, prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens, requests, cost)
+	if _, err := tx.Exec(`SAVEPOINT usage_aggregate`); err != nil {
+		return true, err // No aggregate was attempted.
+	}
+	rollback := func(cause error) (bool, error) {
+		if _, err := tx.Exec(`ROLLBACK TO SAVEPOINT usage_aggregate`); err != nil {
+			return false, fmt.Errorf("%v; 回滚聚合保存点失败: %w", cause, err)
+		}
+		if _, err := tx.Exec(`RELEASE SAVEPOINT usage_aggregate`); err != nil {
+			return false, fmt.Errorf("%v; 释放聚合保存点失败: %w", cause, err)
+		}
+		return true, cause
+	}
+	stmt, err := tx.Prepare(`INSERT INTO usage_daily (date, api_key_id, request_model, prompt_tokens, completion_tokens, cache_hit_tokens, total_tokens, requests, cost)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
 		 ON CONFLICT(date, api_key_id, request_model) DO UPDATE SET
 			prompt_tokens = prompt_tokens + excluded.prompt_tokens,
@@ -253,12 +283,24 @@ func (r *UsageRepo) updateDailyAgg(u *UsageRecord) {
 			cache_hit_tokens = cache_hit_tokens + excluded.cache_hit_tokens,
 			total_tokens = total_tokens + excluded.total_tokens,
 			requests = requests + 1,
-			cost = cost + excluded.cost`,
-		date, apiKeyID, u.RequestModel, u.PromptTokens, u.CompletionTokens, u.CacheHitTokens, u.TotalTokens, u.Cost,
-	)
+			cost = cost + excluded.cost`)
 	if err != nil {
-		log.Printf("[Usage] 直接写入预聚合更新失败: %v", err)
+		return rollback(err)
 	}
+	defer stmt.Close()
+	for _, u := range records {
+		var apiKeyID interface{}
+		if u.APIKeyID != nil {
+			apiKeyID = *u.APIKeyID
+		}
+		if _, err := stmt.Exec(aggDate(u), apiKeyID, u.RequestModel, u.PromptTokens, u.CompletionTokens, u.CacheHitTokens, u.TotalTokens, u.Cost); err != nil {
+			return rollback(err)
+		}
+	}
+	if _, err := tx.Exec(`RELEASE SAVEPOINT usage_aggregate`); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // GetOverview 获取总览统计

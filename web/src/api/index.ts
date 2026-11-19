@@ -31,6 +31,24 @@ api.interceptors.response.use(
 export default api
 
 // ===== Channel API =====
+export interface ChannelSyncModel {
+  id: string
+  name: string
+  existing: boolean
+}
+
+export interface ChannelSyncStaleModel {
+  model_id: string
+  display_name: string
+  user_modified: boolean
+}
+
+export interface ChannelSyncPreview {
+  preview_id: string
+  models: ChannelSyncModel[]
+  stale_models: ChannelSyncStaleModel[]
+}
+
 export const channelApi = {
   list: () => api.get('/channels'),
   get: (id: number) => api.get(`/channels/${id}`),
@@ -39,6 +57,9 @@ export const channelApi = {
   delete: (id: number) => api.delete(`/channels/${id}`),
   test: (id: number) => api.post(`/channels/${id}/test`),
   syncModels: (id: number) => api.post(`/channels/${id}/sync`),
+  previewSyncModels: (id: number) => api.post<ChannelSyncPreview>(`/channels/${id}/sync/preview`),
+  confirmSyncModels: (id: number, previewId: string, selectedModelIds: string[]) =>
+    api.post<{ count: number; deleted_count: number }>(`/channels/${id}/sync/confirm`, { preview_id: previewId, selected_model_ids: selectedModelIds }),
 }
 
 // ===== Balance API（余额/订阅状态）=====

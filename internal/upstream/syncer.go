@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/never/zero-api/internal/adapter"
 	"github.com/never/zero-api/internal/config"
@@ -17,6 +18,8 @@ type Syncer struct {
 	channelRepo  *store.ChannelRepo
 	modelRepo    *store.ModelRepo
 	modelPresets *config.ModelPresets
+	previewMu    sync.Mutex
+	previews     map[string]*syncPreview
 }
 
 func NewSyncer(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo, presets *config.ModelPresets) *Syncer {

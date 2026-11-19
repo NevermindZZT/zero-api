@@ -95,6 +95,18 @@ func (r *ChannelRepo) GetByID(id int64) (*Channel, error) {
 	return c, nil
 }
 
+// GetByIDFresh bypasses the channel cache when validating a destructive preview.
+func (r *ChannelRepo) GetByIDFresh(id int64) (*Channel, error) {
+	c := &Channel{}
+	var protocolsJSON string
+	err := r.db.QueryRow(`SELECT id, name, type, protocols, base_url, api_key, status, priority, use_proxy, failover_enabled, test_model, balance_api, created_at, updated_at FROM channels WHERE id = ?`, id).Scan(&c.ID, &c.Name, &c.Type, &protocolsJSON, &c.BaseURL, &c.APIKey, &c.Status, &c.Priority, &c.UseProxy, &c.FailoverEnabled, &c.TestModel, &c.BalanceAPI, &c.CreatedAt, &c.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	c.Protocols = normalizeProtocols(protocolsJSON, c.Type)
+	return c, nil
+}
+
 func (r *ChannelRepo) Create(c *Channel) (int64, error) {
 	protocolsJSON := marshalProtocols(c.Protocols, c.Type)
 	result, err := r.db.Exec(

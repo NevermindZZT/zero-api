@@ -141,6 +141,7 @@ func main() {
 	// 代理配置更新后通知 ProxyHandler 刷新缓存
 	proxyConfigH.SetOnUpdate(proxyH.InvalidateProxyConfig)
 	syncH := handler.NewSyncHandler(syncer, svc.Model, presetsPath)
+	syncH.SetOnSynced(proxyH.InvalidateModelsCache)
 	authH := handler.NewAuthHandler(cfg.Auth.Username, cfg.Auth.Password, cfg.Auth.Secret, svc.Session, cfg.Auth.Enabled)
 	apiKeyH := handler.NewAPIKeyHandler(svc.APIKey)
 	dbH := handler.NewDatabaseHandler(db, cfg.Database.Path)
@@ -180,6 +181,8 @@ func main() {
 		api.DELETE("/channels/:id", channelH.DeleteChannel)
 		api.POST("/channels/:id/test", syncH.TestChannel)
 		api.POST("/channels/:id/sync", syncH.SyncModels)
+		api.POST("/channels/:id/sync/preview", syncH.PreviewModels)
+		api.POST("/channels/:id/sync/confirm", syncH.ConfirmModels)
 		api.POST("/channels/:id/toggle", channelH.ToggleChannel)
 		api.POST("/models/reload-presets", syncH.ReloadPresets)
 

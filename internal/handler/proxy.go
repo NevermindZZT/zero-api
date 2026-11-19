@@ -29,21 +29,22 @@ import (
 )
 
 type ProxyHandler struct {
-	channelRepo      *store.ChannelRepo
-	modelRepo        *store.ModelRepo
-	usageRepo        *store.UsageRepo
-	tpsMonitor       *metrics.TPSMonitor
-	apiKeyRepo       *store.APIKeyRepo
-	proxyConfigRepo  *store.ProxyConfigRepo
-	virtualModelRepo *store.VirtualModelRepo
-	breaker          *CircuitBreaker
-	proxyConfigMu    sync.RWMutex
-	recorder         diagnostics.Recorder
-	proxyConfigCache *store.ProxyConfigData
-	modelsCache      []byte    // /v1/models 响应缓存
-	modelsCacheTime  time.Time // 缓存时间
-	modelsCacheMu    sync.RWMutex
-	modelsCacheTTL   time.Duration // 缓存有效期
+	channelRepo           *store.ChannelRepo
+	modelRepo             *store.ModelRepo
+	usageRepo             *store.UsageRepo
+	tpsMonitor            *metrics.TPSMonitor
+	apiKeyRepo            *store.APIKeyRepo
+	proxyConfigRepo       *store.ProxyConfigRepo
+	virtualModelRepo      *store.VirtualModelRepo
+	breaker               *CircuitBreaker
+	proxyConfigMu         sync.RWMutex
+	recorder              diagnostics.Recorder
+	proxyConfigCache      *store.ProxyConfigData
+	modelsCache           []byte    // /v1/models 响应缓存
+	modelsCacheTime       time.Time // 缓存时间
+	modelsCacheMu         sync.RWMutex
+	modelsCacheTTL        time.Duration // 缓存有效期
+	modelsCacheGeneration uint64        // 失效时递增，阻止旧查询回填缓存
 	// routers 模型路由规则链（虚拟模型等，支持后续扩展新规则）
 	routers []router.Rule
 }
@@ -79,6 +80,7 @@ func NewProxyHandler(channelRepo *store.ChannelRepo, modelRepo *store.ModelRepo,
 func (h *ProxyHandler) InvalidateModelsCache() {
 	h.modelsCacheMu.Lock()
 	h.modelsCache = nil
+	h.modelsCacheGeneration++
 	h.modelsCacheMu.Unlock()
 }
 
@@ -115,6 +117,7 @@ func modalityFromModalities(input, output []string) string {
 func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 	// 尝试使用缓存（TTL 60s）
 	h.modelsCacheMu.RLock()
+	generation := h.modelsCacheGeneration
 	if h.modelsCache != nil && time.Since(h.modelsCacheTime) < h.modelsCacheTTL {
 		c.Header("Cache-Control", "public, max-age=60")
 		c.Data(http.StatusOK, "application/json", h.modelsCache)
@@ -316,8 +319,10 @@ func (h *ProxyHandler) ListLocalModels(c *gin.Context) {
 	})
 	// 写入缓存
 	h.modelsCacheMu.Lock()
-	h.modelsCache = body
-	h.modelsCacheTime = time.Now()
+	if generation == h.modelsCacheGeneration {
+		h.modelsCache = body
+		h.modelsCacheTime = time.Now()
+	}
 	h.modelsCacheMu.Unlock()
 	c.Data(http.StatusOK, "application/json", body)
 }

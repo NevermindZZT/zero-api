@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { h, onMounted, ref, computed } from 'vue'
+import { h, onMounted, onUnmounted, ref, computed } from 'vue'
 import {
   NButton, NCard, NDataTable, NModal, NForm, NFormItem,
-  NInput, NInputNumber, NSelect, NSpace, NTag, NPopconfirm, NMessageProvider,
+  NInput, NInputNumber, NSelect, NSpace, NTag, NPopconfirm, NMessageProvider, NCheckbox, NCheckboxGroup, NAlert,
   useMessage, NSpin, NIcon, NSwitch, NDescriptions, NDescriptionsItem, NPopover, NTooltip, NDivider,
 } from 'naive-ui'
 import { GlobeSharp, RefreshSharp, WalletSharp } from '@vicons/ionicons5'
 import api from '@/api'
-import { channelApi, balanceApi } from '@/api'
+import { channelApi, balanceApi, type ChannelSyncPreview } from '@/api'
 
 const message = useMessage()
 const loading = ref(true)
@@ -15,6 +15,19 @@ const channels = ref<any[]>([])
 const showModal = ref(false)
 const editing = ref<any>(null)
 const syncingId = ref<number | null>(null)
+const showSyncModal = ref(false)
+const syncChannel = ref<{ id: number; name: string } | null>(null)
+const syncPreview = ref<ChannelSyncPreview | null>(null)
+const syncPreviewLoading = ref(false)
+const syncConfirming = ref(false)
+const syncPreviewError = ref('')
+const selectedSyncModels = ref<string[]>([])
+const syncSearch = ref('')
+let syncGeneration = 0
+const filteredSyncModels = computed(() => {
+  const query = syncSearch.value.trim().toLocaleLowerCase()
+  return (syncPreview.value?.models || []).filter(model => !query || model.id.toLocaleLowerCase().includes(query) || (model.name || '').toLocaleLowerCase().includes(query))
+})
 const refreshingId = ref<number | null>(null)
 const refreshingAll = ref(false)
 const balances = ref<Record<number, any>>({}) // channel_id -> balance
@@ -341,17 +354,90 @@ async function deleteChannel(id: number) {
   }
 }
 
-async function syncModels(id: number) {
+function isValidSyncPreview(value: any): value is ChannelSyncPreview {
+  if (!value || typeof value.preview_id !== 'string' || !value.preview_id.trim() || !Array.isArray(value.models) || value.models.length === 0 || !Array.isArray(value.stale_models)) return false
+  const ids = new Set<string>()
+  for (const model of value.models) {
+    if (!model || typeof model.id !== 'string' || !model.id.trim() || ids.has(model.id)) return false
+    ids.add(model.id)
+  }
+  return value.stale_models.every((model: any) => model && typeof model.model_id === 'string' && !!model.model_id.trim())
+}
+
+function closeSyncModal() {
+  if (syncConfirming.value) return
+  syncGeneration++
+  showSyncModal.value = false
+  syncPreviewLoading.value = false
+  syncingId.value = null
+  syncPreview.value = null
+  syncPreviewError.value = ''
+  selectedSyncModels.value = []
+  syncChannel.value = null
+}
+
+function onSyncModalShow(value: boolean) {
+  if (!value) closeSyncModal()
+}
+
+onUnmounted(() => { syncGeneration++ })
+
+async function loadSyncPreview() {
+  const channel = syncChannel.value
+  if (!channel || syncConfirming.value) return
+  const generation = ++syncGeneration
+  syncPreview.value = null
+  selectedSyncModels.value = []
+  syncPreviewError.value = ''
+  syncPreviewLoading.value = true
+  syncingId.value = channel.id
   try {
-    syncingId.value = id
-    message.info('正在同步模型列表...')
-    const res = await channelApi.syncModels(id)
-    message.success(`同步完成，共 ${res.data.count} 个模型`)
-    loadChannels()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || '同步失败')
+    const res = await channelApi.previewSyncModels(channel.id)
+    if (generation !== syncGeneration) return
+    if (!isValidSyncPreview(res.data)) throw new Error('invalid preview')
+    syncPreview.value = res.data
+    selectedSyncModels.value = res.data.models.map(model => model.id)
+  } catch {
+    if (generation === syncGeneration) syncPreviewError.value = '获取上游模型列表失败、列表为空或预览不完整，无法安全同步或清理。请重试预览。'
   } finally {
-    syncingId.value = null
+    if (generation === syncGeneration) {
+      syncPreviewLoading.value = false
+      syncingId.value = null
+    }
+  }
+}
+
+async function syncModels(id: number) {
+  if (syncConfirming.value) return
+  syncGeneration++
+  syncChannel.value = { id, name: channels.value.find(channel => channel.id === id)?.name || `#${id}` }
+  syncSearch.value = ''
+  showSyncModal.value = true
+  await loadSyncPreview()
+}
+
+async function confirmSyncModels() {
+  const channel = syncChannel.value
+  const preview = syncPreview.value
+  if (!channel || !preview || syncPreviewLoading.value || syncConfirming.value) return
+  const generation = syncGeneration
+  syncConfirming.value = true
+  try {
+    const res = await channelApi.confirmSyncModels(channel.id, preview.preview_id, [...selectedSyncModels.value])
+    if (generation !== syncGeneration) return
+    message.success(`同步完成，处理 ${res.data.count ?? 0} 个模型，清理 ${res.data.deleted_count ?? 0} 个模型`)
+    syncConfirming.value = false
+    closeSyncModal()
+    await loadChannels()
+  } catch (e: any) {
+    if (generation !== syncGeneration) return
+    syncPreview.value = null
+    selectedSyncModels.value = []
+    syncPreviewError.value = e.response?.status === 409
+      ? '预览已过期或渠道状态已变化，无法安全同步或清理，请重新预览。'
+      : '同步结果未确认，无法继续使用当前预览；请先检查模型列表，再重新预览。'
+  } finally {
+    syncConfirming.value = false
   }
 }
 
@@ -386,6 +472,59 @@ async function toggleChannel(ch: any) {
       <NCard style="width:100%">
         <NDataTable :columns="columns" :data="channels" :bordered="false" :scroll-x="1000" />
       </NCard>
+
+      <NModal
+        :show="showSyncModal"
+        title="预览并同步渠道模型"
+        preset="card"
+        style="width:min(760px, calc(100vw - 32px));max-height:calc(100vh - 48px);overflow:auto"
+        :mask-closable="!syncConfirming"
+        :close-on-esc="!syncConfirming"
+        :closable="!syncConfirming"
+        @update:show="onSyncModalShow"
+      >
+        <p>渠道：{{ syncChannel?.name }}</p>
+        <NAlert v-if="syncPreviewError" type="error" title="无法安全同步" role="alert">
+          {{ syncPreviewError }}
+        </NAlert>
+        <NSpin :show="syncPreviewLoading">
+          <template v-if="syncPreview">
+            <p>选择要新增或更新的上游模型。未选择但上游仍存在的本地模型会保留。</p>
+            <NSpace align="center" style="margin-bottom:12px">
+              <NInput v-model:value="syncSearch" placeholder="搜索模型 ID 或名称" clearable aria-label="搜索模型" style="width:260px" />
+              <NButton size="small" :disabled="syncConfirming" @click="selectedSyncModels = syncPreview.models.map(model => model.id)">全选所有模型</NButton>
+              <NButton size="small" :disabled="syncConfirming" @click="selectedSyncModels = []">取消全选</NButton>
+              <span>已选 {{ selectedSyncModels.length }} / {{ syncPreview.models.length }}</span>
+            </NSpace>
+            <div style="max-height:250px;overflow:auto;border:1px solid var(--border-color);padding:8px">
+              <NCheckboxGroup v-model:value="selectedSyncModels" :disabled="syncConfirming">
+                <div v-for="model in filteredSyncModels" :key="model.id" style="padding:4px">
+                  <NCheckbox :value="model.id">{{ model.id }}<template v-if="model.name && model.name !== model.id"> · {{ model.name }}</template></NCheckbox>
+                  <NTag v-if="model.existing" size="small" style="margin-left:8px">已存在</NTag>
+                </div>
+              </NCheckboxGroup>
+              <p v-if="filteredSyncModels.length === 0" style="color:var(--text-muted)">没有匹配的上游模型</p>
+            </div>
+            <NAlert type="warning" title="确认后将清理上游已不存在的本渠道模型" style="margin-top:16px">
+              <p>将删除 {{ syncPreview.stale_models.length }} 个模型；这些模型的手动修改和配置也会丢失，包括本地定价和协议等设置；虚拟模型、路由及 API Key 的可用模型引用可能受到影响。历史用量记录会保留模型名称。未选择但上游仍存在的本地模型不会被删除。上游密钥权限或服务端过滤也可能使模型未出现在列表中，请确认下列清理项。</p>
+              <p v-if="selectedSyncModels.length === 0"><strong>当前未选择任何模型：确认后不会新增或更新模型，但仍会删除下列 {{ syncPreview.stale_models.length }} 个已失效模型。</strong></p>
+              <div v-if="syncPreview.stale_models.length" style="max-height:150px;overflow:auto">
+                <div v-for="model in syncPreview.stale_models" :key="model.model_id">
+                  {{ model.model_id }}<template v-if="model.display_name && model.display_name !== model.model_id"> · {{ model.display_name }}</template><strong v-if="model.user_modified">（含手动修改）</strong>
+                </div>
+              </div>
+              <p v-else>本次没有需要清理的旧模型。</p>
+            </NAlert>
+          </template>
+        </NSpin>
+        <template #footer>
+          <NSpace justify="end">
+            <NButton :disabled="syncConfirming" @click="closeSyncModal">取消</NButton>
+            <NButton v-if="syncPreviewError" :disabled="syncConfirming" :loading="syncPreviewLoading" @click="loadSyncPreview">重新预览</NButton>
+            <NButton type="primary" :loading="syncConfirming" :disabled="!syncPreview || syncPreviewLoading || !!syncPreviewError" @click="confirmSyncModels">确认同步并清理</NButton>
+          </NSpace>
+        </template>
+      </NModal>
 
       <NModal v-model:show="showModal" title="渠道" preset="card" style="width:520px">
         <NForm :model="form" label-placement="left" label-width="80">
