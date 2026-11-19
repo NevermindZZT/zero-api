@@ -4,8 +4,8 @@ import {
   NCard, NDataTable, NSpin, NSpace, NDatePicker, NButton, NStatistic, NGrid, NGi, NIcon, NSelect,
 } from 'naive-ui'
 import { TrendingUpSharp, RefreshSharp, KeySharp } from '@vicons/ionicons5'
-import { usageApi } from '@/api'
-import api from '@/api'
+import { usageApi, apiKeyOptionsApi, type APIKeyOption } from '@/api'
+import { apiKeyOptionLabel } from './dashboardData'
 import { formatDateTime } from '@/utils/format'
 
 const loading = ref(true)
@@ -14,7 +14,7 @@ const overview = ref<any>({})
 const dailyStats = ref<any[]>([])
 const records = ref<any[]>([])
 const dateRange = ref<[number, number]>([Date.now() - 7 * 86400000, Date.now()])
-const apiKeys = ref<any[]>([])
+const apiKeys = ref<APIKeyOption[]>([])
 const selectedApiKeyId = ref<number | null>(null)
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
@@ -36,10 +36,7 @@ onUnmounted(() => {
   window.removeEventListener('resize', updateCols)
 })
 
-const apiKeyOptions = computed(() => [
-  { label: '全部密钥', value: null },
-  ...apiKeys.value.map((k: any) => ({ label: `${k.name} (${k.key?.substring(0, 12)}...)`, value: k.id })),
-])
+const apiKeyOptions = computed(() => apiKeys.value.map(key => ({ label: apiKeyOptionLabel(key), value: key.id })))
 
 const dailyColumns = [
   { title: '日期', key: 'date' },
@@ -49,8 +46,8 @@ const dailyColumns = [
   { title: '缓存命中', key: 'cache_hit_tokens', render: (r: any) => r.cache_hit_tokens?.toLocaleString() || '-' },
   { title: '总 Tokens', key: 'total_tokens', render: (r: any) => r.total_tokens?.toLocaleString() },
   { title: '缓存命中率', key: 'cache_hit_rate', render: (r: any) => {
-    if (!r.total_tokens) return '-'
-    return ((r.cache_hit_tokens || 0) / r.total_tokens * 100).toFixed(1) + '%'
+    if (!r.prompt_tokens) return '-'
+    return ((r.cache_hit_tokens || 0) / r.prompt_tokens * 100).toFixed(1) + '%'
   }},
   { title: '费用 ($)', key: 'cost', render: (r: any) => r.cost?.toFixed(6) },
 ]
@@ -70,7 +67,7 @@ const recordColumns = [
 
 onMounted(async () => {
   try {
-    const keysRes = await api.get('/api-keys')
+    const keysRes = await apiKeyOptionsApi.list()
     apiKeys.value = keysRes.data
   } catch {}
   loadData()

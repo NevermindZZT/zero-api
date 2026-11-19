@@ -299,8 +299,8 @@ func (r *UsageRepo) GetOverview(apiKeyID, startDate, endDate string, tzOffsetMin
 		return nil, err
 	}
 
-	if stats.TotalTokens > 0 {
-		stats.CacheHitRate = float64(stats.TotalCacheHits) / float64(stats.TotalTokens) * 100
+	if stats.TotalPromptTokens > 0 {
+		stats.CacheHitRate = float64(stats.TotalCacheHits) / float64(stats.TotalPromptTokens) * 100
 	}
 
 	// 合并活跃渠道/模型数到一次查询
@@ -344,7 +344,7 @@ func (r *UsageRepo) GetOverview(apiKeyID, startDate, endDate string, tzOffsetMin
 // 不使用 usage_daily（其 date 为 UTC 日期，客户端非 UTC 时区时日期标签错位且边界多算一天）
 func (r *UsageRepo) GetDailyStats(start, end string, apiKeyID string, granularity string, tzOffsetMinutes int) ([]DailyStats, error) {
 	if granularity == "hour" {
-		return r.getHourlyStats(start, apiKeyID, tzOffsetMinutes)
+		return r.getHourlyStats(start, end, apiKeyID, tzOffsetMinutes)
 	}
 	return r.getDailyStatsFallback(start, end, granularity, apiKeyID, tzOffsetMinutes)
 }
@@ -445,13 +445,19 @@ func fillZeroStats(start, end string, dataMap map[string]DailyStats, granularity
 			}
 		}
 	case "hour":
-		// 生成 00~23 共 24 小时，key 格式 "2025-07-21 08"
-		for h := 23; h >= 0; h-- {
-			key := start + " " + fmt.Sprintf("%02d", h)
-			if s, ok := dataMap[key]; ok {
-				stats = append(stats, s)
-			} else {
-				stats = append(stats, DailyStats{Date: key})
+		startT, startErr := time.Parse("2006-01-02", start)
+		endT, endErr := time.Parse("2006-01-02", end)
+		if startErr != nil || endErr != nil || endT.Before(startT) {
+			break
+		}
+		for day := endT; !day.Before(startT); day = day.AddDate(0, 0, -1) {
+			for h := 23; h >= 0; h-- {
+				key := day.Format("2006-01-02") + " " + fmt.Sprintf("%02d", h)
+				if s, ok := dataMap[key]; ok {
+					stats = append(stats, s)
+				} else {
+					stats = append(stats, DailyStats{Date: key})
+				}
 			}
 		}
 	default: // "day"
@@ -470,8 +476,9 @@ func fillZeroStats(start, end string, dataMap map[string]DailyStats, granularity
 }
 
 // getHourlyStats 按小时统计（直接查 usage_records，不使用 usage_daily）
-func (r *UsageRepo) getHourlyStats(date string, apiKeyID string, tzOffsetMinutes int) ([]DailyStats, error) {
-	utcStart, utcEnd := localDateToUTCRange(date, tzOffsetMinutes)
+func (r *UsageRepo) getHourlyStats(start, end, apiKeyID string, tzOffsetMinutes int) ([]DailyStats, error) {
+	utcStart, _ := localDateToUTCRange(start, tzOffsetMinutes)
+	_, utcEnd := localDateToUTCRange(end, tzOffsetMinutes)
 	tzMod := sqlTz(tzOffsetMinutes)
 
 	whereDate := "WHERE created_at >= ? AND created_at < ?"
@@ -504,7 +511,7 @@ func (r *UsageRepo) getHourlyStats(date string, apiKeyID string, tzOffsetMinutes
 		dataMap[s.Date] = s
 	}
 
-	return fillZeroStats(date, "", dataMap, "hour"), nil
+	return fillZeroStats(start, end, dataMap, "hour"), nil
 }
 
 // getDailyStatsFallback 降级方案：从 usage_records 实时聚合
@@ -513,8 +520,8 @@ func (r *UsageRepo) getDailyStatsFallback(start, end, granularity, apiKeyID stri
 	var dateExpr, orderBy string
 	switch granularity {
 	case "month":
-		dateExpr = "substr(created_at, 1, 7)"
-		orderBy = "substr(created_at, 1, 7) DESC"
+		dateExpr = "strftime('%Y-%m', created_at, '" + tzMod + "')"
+		orderBy = dateExpr + " DESC"
 	case "hour":
 		dateExpr = "strftime('%Y-%m-%d %H', created_at, '" + tzMod + "')"
 		orderBy = "strftime('%Y-%m-%d %H', created_at, '" + tzMod + "') DESC"
@@ -717,8 +724,17 @@ type YearHeatmapItem struct {
 // GetYearHeatmapData 获取过去一年每日 Tokens 用量
 // 使用 usage_records 实时聚合，通过 tzMod 确保日期按浏览器本地时区显示
 func (r *UsageRepo) GetYearHeatmapData(tzOffsetMinutes int) ([]YearHeatmapItem, error) {
+	return r.GetYearHeatmapDataForKey(tzOffsetMinutes, "")
+}
+
+// GetYearHeatmapDataForKey applies an optional API key filter.
+func (r *UsageRepo) GetYearHeatmapDataForKey(tzOffsetMinutes int, apiKeyID string) ([]YearHeatmapItem, error) {
+	return r.getYearHeatmapDataAt(tzOffsetMinutes, apiKeyID, time.Now())
+}
+
+func (r *UsageRepo) getYearHeatmapDataAt(tzOffsetMinutes int, apiKeyID string, now time.Time) ([]YearHeatmapItem, error) {
 	tzMod := sqlTz(tzOffsetMinutes)
-	end := time.Now().In(tzLoc(tzOffsetMinutes))
+	end := now.In(tzLoc(tzOffsetMinutes))
 	start := end.AddDate(-1, 0, 0)
 	startStr := start.Format("2006-01-02")
 	endStr := end.Format("2006-01-02")
@@ -727,11 +743,16 @@ func (r *UsageRepo) GetYearHeatmapData(tzOffsetMinutes int) ([]YearHeatmapItem, 
 	todayUTCStart, _ := localDateToUTCRange(startStr, tzOffsetMinutes)
 	_, todayUTCEnd := localDateToUTCRange(endStr, tzOffsetMinutes)
 
+	where := " WHERE created_at >= ? AND created_at < ?"
+	args := []interface{}{todayUTCStart, todayUTCEnd}
+	if apiKeyID != "" {
+		where += " AND api_key_id = ?"
+		args = append(args, apiKeyID)
+	}
 	rows, err := r.db.Query(
 		`SELECT date(created_at, '`+tzMod+`') as local_date, COALESCE(SUM(total_tokens), 0)
-		 FROM usage_records
-		 WHERE created_at >= ? AND created_at <= ?
-		 GROUP BY local_date ORDER BY local_date`, todayUTCStart, todayUTCEnd)
+		 FROM usage_records`+where+`
+		 GROUP BY local_date ORDER BY local_date`, args...)
 	if err != nil {
 		return nil, err
 	}

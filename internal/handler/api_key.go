@@ -29,6 +29,15 @@ func (h *APIKeyHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, keys)
 }
 
+func (h *APIKeyHandler) ListOptions(c *gin.Context) {
+	options, err := h.apiKeyRepo.ListOptions()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, options)
+}
+
 func (h *APIKeyHandler) Create(c *gin.Context) {
 	var req struct {
 		Name string `json:"name"`

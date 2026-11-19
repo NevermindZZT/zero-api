@@ -83,6 +83,17 @@ export const chatTestApi = {
   chatStream: streamChatRequest,
 }
 
+export interface APIKeyOption {
+  id: number
+  name: string
+  enabled: boolean
+  deleted: boolean
+}
+
+export const apiKeyOptionsApi = {
+  list: () => api.get<APIKeyOption[]>('/api-keys/options'),
+}
+
 // ===== Usage API =====
 export const usageApi = {
   overview: (apiKeyId?: number, start?: string, end?: string, tzOffset?: number) =>
@@ -93,7 +104,7 @@ export const usageApi = {
     api.get('/stats/latency', { params: { start, end, api_key_id: apiKeyId || undefined, granularity, tz_offset: tzOffset } }),
   byModel: (start?: string, end?: string, apiKeyId?: number, tzOffset?: number) =>
     api.get('/stats/by-model', { params: { start, end, api_key_id: apiKeyId || undefined, tz_offset: tzOffset } }),
-  yearHeatmap: (tzOffset?: number) => api.get('/stats/year-heatmap', { params: { tz_offset: tzOffset } }),
+  yearHeatmap: (tzOffset?: number, apiKeyId?: number) => api.get('/stats/year-heatmap', { params: { tz_offset: tzOffset, api_key_id: apiKeyId ?? undefined } }),
   tps: (window: '1m' | '5m' | '10m' | '15m' = '5m', limit = 10) =>
     api.get('/stats/tps', { params: { window, limit } }),
   records: (apiKeyId?: number, start?: string, end?: string, limit?: number, tzOffset?: number) =>

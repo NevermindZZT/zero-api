@@ -43,12 +43,36 @@ func (h *UsageHandler) GetOverview(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
+// validateStatsRange protects hourly zero-filling from unbounded date ranges.
+// The endpoints use inclusive local calendar dates; 31 days means end <= start+30 days.
+func validateStatsRange(start, end, granularity string) string {
+	startDate, err := time.Parse("2006-01-02", start)
+	if err != nil {
+		return "start 必须是 YYYY-MM-DD 日期"
+	}
+	endDate, err := time.Parse("2006-01-02", end)
+	if err != nil || endDate.Before(startDate) {
+		return "end 必须是有效日期且不早于 start"
+	}
+	if granularity != "hour" && granularity != "day" && granularity != "month" {
+		return "granularity 仅支持 hour、day 或 month"
+	}
+	if granularity == "hour" && endDate.After(startDate.AddDate(0, 0, 30)) {
+		return "hour 粒度的日期范围最多为 31 个自然日"
+	}
+	return ""
+}
+
 // GetDailyStats 获取按日/月/小时统计（含补0）
 func (h *UsageHandler) GetDailyStats(c *gin.Context) {
 	start := c.DefaultQuery("start", time.Now().AddDate(0, -7, 0).Format("2006-01-02"))
 	end := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
 	apiKeyID := c.Query("api_key_id")
 	granularity := c.DefaultQuery("granularity", "day") // day | month | hour
+	if message := validateStatsRange(start, end, granularity); message != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": message})
+		return
+	}
 	tz := parseTzOffset(c)
 
 	stats, err := h.usageRepo.GetDailyStats(start, end, apiKeyID, granularity, tz)
@@ -66,17 +90,9 @@ func (h *UsageHandler) GetDailyStats(c *gin.Context) {
 func (h *UsageHandler) GetLatencyStats(c *gin.Context) {
 	start := c.DefaultQuery("start", time.Now().AddDate(0, 0, -6).Format("2006-01-02"))
 	end := c.DefaultQuery("end", time.Now().Format("2006-01-02"))
-	if _, err := time.Parse("2006-01-02", start); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "start 必须是 YYYY-MM-DD 日期"})
-		return
-	}
-	if _, err := time.Parse("2006-01-02", end); err != nil || start > end {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "end 必须是有效日期且不早于 start"})
-		return
-	}
 	granularity := c.DefaultQuery("granularity", "day")
-	if granularity != "hour" && granularity != "day" && granularity != "month" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "granularity 仅支持 hour、day 或 month"})
+	if message := validateStatsRange(start, end, granularity); message != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": message})
 		return
 	}
 
@@ -187,7 +203,7 @@ func (h *UsageHandler) GetByAPIKey(c *gin.Context) {
 // GetYearHeatmap 获取年度热力图数据（GitHub-style）
 func (h *UsageHandler) GetYearHeatmap(c *gin.Context) {
 	tz := parseTzOffset(c)
-	data, err := h.usageRepo.GetYearHeatmapData(tz)
+	data, err := h.usageRepo.GetYearHeatmapDataForKey(tz, c.Query("api_key_id"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

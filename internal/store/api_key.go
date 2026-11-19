@@ -27,10 +27,10 @@ func (r *APIKeyRepo) InvalidateAPIKeyCache() {
 
 // APIKey API 密钥
 type APIKey struct {
-	ID            int64     `json:"id"`
-	Key           string    `json:"key"`
-	Name          string    `json:"name"`
-	Enabled       bool      `json:"enabled"`
+	ID      int64  `json:"id"`
+	Key     string `json:"key"`
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
 	// 额度管理（余额制）
 	QuotaEnabled  bool      `json:"quota_enabled"`  // 是否启用额度限制
 	QuotaBalance  float64   `json:"quota_balance"`  // 剩余额度（$）
@@ -66,6 +66,38 @@ func (r *APIKeyRepo) List() ([]APIKey, error) {
 		keys = append(keys, k)
 	}
 	return keys, nil
+}
+
+// APIKeyOption contains only the metadata needed by usage filters.
+type APIKeyOption struct {
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+	Deleted bool   `json:"deleted"`
+}
+
+// ListOptions includes active and disabled keys plus IDs retained by usage records
+// after their keys were deleted. It never selects key material.
+func (r *APIKeyRepo) ListOptions() ([]APIKeyOption, error) {
+	rows, err := r.db.Query(`SELECT id, name, enabled, 0 AS deleted FROM api_keys
+		UNION ALL
+		SELECT DISTINCT u.api_key_id AS id, '' AS name, 0 AS enabled, 1 AS deleted
+		FROM usage_records u LEFT JOIN api_keys k ON k.id = u.api_key_id
+		WHERE u.api_key_id IS NOT NULL AND u.api_key_id > 0 AND k.id IS NULL
+		ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	options := []APIKeyOption{}
+	for rows.Next() {
+		var option APIKeyOption
+		if err := rows.Scan(&option.ID, &option.Name, &option.Enabled, &option.Deleted); err != nil {
+			return nil, err
+		}
+		options = append(options, option)
+	}
+	return options, rows.Err()
 }
 
 func (r *APIKeyRepo) GetByKey(key string) (*APIKey, error) {

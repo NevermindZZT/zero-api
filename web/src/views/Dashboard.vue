@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue'
-import { NCard, NGrid, NGi, NStatistic, NDataTable, NSpin, NSpace, NProgress, NIcon, NButton, NButtonGroup, NTag, NDatePicker } from 'naive-ui'
+import { NCard, NGrid, NGi, NStatistic, NDataTable, NSpin, NSpace, NProgress, NIcon, NButton, NButtonGroup, NTag, NDatePicker, NSelect } from 'naive-ui'
 import {
   StatsChartSharp,
   SendSharp,
@@ -13,7 +13,8 @@ import {
   RefreshSharp,
   GridSharp,
 } from '@vicons/ionicons5'
-import { usageApi } from '@/api'
+import { usageApi, apiKeyOptionsApi, type APIKeyOption } from '@/api'
+import { apiKeyOptionLabel, createLatestRequestGate, fetchDashboardData } from './dashboardData'
 import { formatDateTime } from '@/utils/format'
 import { isDarkTheme } from '@/utils/theme'
 import * as echarts from 'echarts'
@@ -22,6 +23,14 @@ import '@silverwind/vue3-calendar-heatmap/dist/style.css'
 
 const loading = ref(true)
 const refreshing = ref(false)
+const selectedApiKeyId = ref<number | null>(null)
+const apiKeys = ref<APIKeyOption[]>([])
+const apiKeyOptions = computed(() => apiKeys.value.map(key => ({ label: apiKeyOptionLabel(key), value: key.id })))
+const loadError = ref('')
+const keyOptionsError = ref('')
+const dataGate = createLatestRequestGate()
+const pollGate = createLatestRequestGate()
+let destroyed = false
 const overview = ref<any>({})
 const dailyStats = ref<any[]>([])
 const recentRecords = ref<any[]>([])
@@ -87,7 +96,7 @@ const statCards = [
   { label: '请求数', value: 'total_requests', icon: SendSharp, color: 'var(--accent-primary)', bg: 'var(--accent-soft)' },
   { label: 'Tokens', value: 'total_tokens', icon: DocumentTextSharp, color: '#22c55e', bg: 'rgba(34,197,94,0.15)', format: 'tokens', subLabel: '总 Tokens', subLeft: '入', subLeftKey: 'total_prompt_tokens', subRight: '出', subRightKey: 'total_output_tokens', subLeftColor: '#3b82f6', subRightColor: '#f97316' },
   { label: '费用', value: 'total_cost', icon: CashSharp, color: '#eab308', bg: 'rgba(250,204,21,0.15)', format: 'cost' },
-  { label: '活跃渠道', value: 'active_channels', icon: CubeSharp, color: '#a855f7', bg: 'rgba(168,85,247,0.15)' },
+  { label: '活跃渠道（全局）', value: 'active_channels', icon: CubeSharp, color: '#a855f7', bg: 'rgba(168,85,247,0.15)' },
 ]
 
 function formatLocalDate(date: Date) {
@@ -106,7 +115,7 @@ function now() {
 // 快捷按钮 + 自定义日期范围选择器（custom 时用 customRange 的起止日期）
 const timeRange = ref<'total' | 'month' | 'prevMonth' | 'week' | 'prevWeek' | 'today' | 'yesterday' | 'custom'>('month')
 const timeRangeOptions: { label: string; value: typeof timeRange.value }[] = [
-  { label: '全部', value: 'total' },
+  { label: '近12个月', value: 'total' },
   { label: '本月', value: 'month' },
   { label: '上月', value: 'prevMonth' },
   { label: '本周', value: 'week' },
@@ -126,10 +135,8 @@ function setTimeRange(val: typeof timeRange.value) {
 
 // 自定义范围变更：切换到 custom 模式
 function onCustomRangeChange(value: [number, number] | null) {
-  if (value) {
-    customRange.value = value
-    timeRange.value = 'custom'
-  }
+  customRange.value = value
+  timeRange.value = value ? 'custom' : 'month'
 }
 
 // 根据起止日期推断图表粒度
@@ -214,10 +221,22 @@ const rangeLabel = computed(() => {
   return opt?.label || '全部'
 })
 
-// 时间范围切换时重新加载数据
-watch(timeRange, async () => {
-  await loadData()
-  nextTick(renderCharts)
+// Keep obsolete responses from overwriting a newly selected filter.
+function filterSignature() {
+  return JSON.stringify([timeRange.value, selectedApiKeyId.value, timeRange.value === 'custom' ? customRange.value : null])
+}
+
+watch([timeRange, selectedApiKeyId, () => timeRange.value === 'custom' ? customRange.value : null], () => {
+  dataGate.invalidate()
+  overview.value = {}
+  dailyStats.value = []
+  recentRecords.value = []
+  modelStats.value = []
+  latencyStats.value = []
+  yearHeatmap.value = []
+  lastUpdated.value = ''
+  void nextTick(renderCharts)
+  void loadData()
 })
 
 watch([isDarkTheme, trendMetric, modelMetric, latencyMetric], () => nextTick(renderCharts))
@@ -228,23 +247,28 @@ watch(tpsWindow, () => {
 })
 
 async function loadData() {
+  const isLatest = dataGate.issue()
+  const signature = filterSignature()
+  const { start, end, granularity } = getRangeParams(timeRange.value)
+  const apiKeyId = selectedApiKeyId.value ?? undefined
+  const isCurrent = () => !destroyed && isLatest() && signature === filterSignature()
+  loadError.value = ''
   try {
-    const { start, end, granularity } = getRangeParams(timeRange.value)
-    const [overviewRes, dailyRes, recordsRes, modelRes, latencyRes] = await Promise.all([
-      usageApi.overview(undefined, start, end, tzOffset),
-      usageApi.daily(start, end, undefined, granularity, tzOffset),
-      usageApi.records(undefined, start, end, 200, tzOffset),
-      usageApi.byModel(start, end, undefined, tzOffset),
-      usageApi.latency(start, end, undefined, granularity, tzOffset),
-    ])
-    overview.value = overviewRes.data
-    dailyStats.value = dailyRes.data
-    recentRecords.value = recordsRes.data
-    modelStats.value = modelRes.data
-    latencyStats.value = latencyRes.data
+    const data = await fetchDashboardData(usageApi, { start, end, granularity, apiKeyId, tzOffset })
+    if (!isCurrent()) return
+    overview.value = data.overview
+    dailyStats.value = data.daily
+    recentRecords.value = data.records
+    modelStats.value = data.models
+    latencyStats.value = data.latency
+    yearHeatmap.value = data.heatmap
     lastUpdated.value = now()
+    await nextTick(renderCharts)
   } catch (e) {
-    console.error(e)
+    if (isCurrent()) {
+      loadError.value = '统计数据加载失败，请重试。'
+      console.error(e)
+    }
   }
 }
 
@@ -262,32 +286,54 @@ async function loadTPS() {
 
 // 智能轮询：每 15s 检查用量变化，并同步刷新 TPS 快照
 async function smartPoll() {
+  const signature = filterSignature()
+  const revision = dataGate.current()
+  const isLatestPoll = pollGate.issue()
+  const { start, end } = getRangeParams(timeRange.value)
+  const apiKeyId = selectedApiKeyId.value ?? undefined
   try {
-    const { start, end } = getRangeParams(timeRange.value)
     const [res] = await Promise.all([
-      usageApi.overview(undefined, start, end, tzOffset),
+      usageApi.overview(apiKeyId, start, end, tzOffset),
       loadTPS(),
     ])
+    if (destroyed || !isLatestPoll() || revision !== dataGate.current() || signature !== filterSignature()) return
     const newTotal = res.data?.total_requests || 0
     const oldTotal = overview.value?.total_requests
-    if (oldTotal === undefined || newTotal !== oldTotal) {
+    const newToday = res.data?.today_requests || 0
+    const oldToday = overview.value?.today_requests
+    if (oldTotal === undefined || oldToday === undefined || newTotal !== oldTotal || newToday !== oldToday || loadError.value) {
       await loadData()
-      nextTick(renderCharts)
+    } else {
+      overview.value = res.data
       lastUpdated.value = now()
     }
   } catch (e) {
-    console.error(e)
+    if (!destroyed && revision === dataGate.current() && signature === filterSignature()) console.error(e)
+  }
+}
+
+async function loadKeyOptions() {
+  try {
+    const response = await apiKeyOptionsApi.list()
+    if (destroyed) return
+    apiKeys.value = response.data
+    keyOptionsError.value = ''
+  } catch (e) {
+    if (!destroyed) {
+      keyOptionsError.value = '密钥列表加载失败，请刷新重试。'
+      console.error(e)
+    }
   }
 }
 
 async function refresh() {
   if (refreshing.value) return
   refreshing.value = true
-  await Promise.all([loadData(), loadTPS()])
-  nextTick(() => {
-    renderCharts()
+  try {
+    await Promise.all([loadData(), loadTPS(), loadKeyOptions()])
+  } finally {
     refreshing.value = false
-  })
+  }
 }
 
 onMounted(async () => {
@@ -309,12 +355,8 @@ onMounted(async () => {
   window.addEventListener('resize', updateCols)
   mqListener = () => window.removeEventListener('resize', updateCols)
 
-  await Promise.all([loadData(), loadTPS()])
-  // 加载年度热力图（不跟随时间范围）
-  try {
-    const res = await usageApi.yearHeatmap(tzOffset)
-    yearHeatmap.value = res.data
-  } catch (e) { console.error(e) }
+  await Promise.all([loadData(), loadTPS(), loadKeyOptions()])
+  if (destroyed) return
   loading.value = false
   nextTick(renderCharts)
   // 智能轮询：每 15s 检查用量变化，并同步刷新 TPS
@@ -322,6 +364,10 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  destroyed = true
+  dataGate.invalidate()
+  pollGate.invalidate()
+  tpsRequestId++
   if (refreshTimer) {
     clearInterval(refreshTimer)
     refreshTimer = null
@@ -531,9 +577,19 @@ function formatTokens(n: number) {
             <NIcon size="22" color="var(--accent-primary)" style="vertical-align:-3px;margin-right:6px"><StatsChartSharp /></NIcon>
             仪表盘
           </h2>
-          <p class="page-subtitle">zero-api 全局概览</p>
+          <p class="page-subtitle">{{ selectedApiKeyId === null ? 'zero-api 全局概览' : '按 API Key 查看用量' }}</p>
         </div>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <NSelect
+          v-model:value="selectedApiKeyId"
+          :options="apiKeyOptions"
+          placeholder="全部密钥"
+          aria-label="按 API Key 筛选"
+          size="small"
+          filterable
+          clearable
+          style="width: 200px"
+        />
         <NButtonGroup size="tiny">
           <NButton v-for="opt in timeRangeOptions" :key="opt.value" :type="timeRange === opt.value ? 'primary' : 'default'" @click="setTimeRange(opt.value)">{{ opt.label }}</NButton>
         </NButtonGroup>
@@ -556,6 +612,8 @@ function formatTokens(n: number) {
         </NButton>
       </div>
       </div>
+
+      <p v-if="keyOptionsError || loadError" role="alert" style="color:#ef4444;margin:0">{{ keyOptionsError }} {{ loadError }}</p>
 
       <NGrid :x-gap="16" :y-gap="16" :cols="statCols">
         <NGi v-for="card in statCards" :key="card.label">
@@ -603,7 +661,7 @@ function formatTokens(n: number) {
                     <span class="cache-stat-label">今日请求</span>
                     <span class="cache-stat-value">{{ overview.today_requests || 0 }}</span>
                   </div>
-                  <p style="color:var(--text-muted);font-size:12px;margin-top:12px">缓存命中率 = 缓存命中 Tokens / 总 Tokens</p>
+                  <p style="color:var(--text-muted);font-size:12px;margin-top:12px">缓存命中率 = 缓存命中 Tokens / 输入 Tokens</p>
                 </div>
               </div>
             </div>
@@ -667,7 +725,7 @@ function formatTokens(n: number) {
         <template #header>
           <div class="card-header-with-icon">
             <NIcon size="18" color="var(--accent-primary)"><TrendingUpSharp /></NIcon>
-            <span>最近 {{ tpsWindow.slice(0, -1) }} 分钟模型生成速度</span>
+            <span>最近 {{ tpsWindow.slice(0, -1) }} 分钟模型生成速度（全局，不受 API Key 筛选影响）</span>
           </div>
         </template>
         <template #header-extra>
@@ -686,7 +744,7 @@ function formatTokens(n: number) {
         <template #header>
           <div class="card-header-with-icon">
             <NIcon size="18" color="#26a641"><GridSharp /></NIcon>
-            <span>年度 Token 热力图 <span style="font-size:12px;color:var(--text-muted);font-weight:400">(过去一年每日 Tokens 用量)</span></span>
+            <span>年度 Token 热力图 <span style="font-size:12px;color:var(--text-muted);font-weight:400">(过去一年每日 Tokens 用量，不受时间范围影响)</span></span>
           </div>
         </template>
         <div style="padding:12px 0">

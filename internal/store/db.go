@@ -338,6 +338,7 @@ func (d *DB) migrate() error {
 	migrate(`CREATE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(key)`)
 	// 索引：加速按 API Key 过滤的统计查询
 	migrate(`CREATE INDEX IF NOT EXISTS idx_usage_api_key ON usage_records(api_key_id)`)
+	migrate(`CREATE INDEX IF NOT EXISTS idx_usage_api_key_created_at ON usage_records(api_key_id, created_at)`)
 	// 迁移：添加 github_token 字段到 proxy_config（用于 MCP GitHub 导入认证）
 	migrate(`ALTER TABLE proxy_config ADD COLUMN github_token TEXT DEFAULT ''`)
 	// 迁移：添加 CLIProxyAPI Management Key
